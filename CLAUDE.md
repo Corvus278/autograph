@@ -54,7 +54,7 @@ src/
     lib/styles/   cx, twMerge
     lib/random/   mulberry32, randomInt, pickRandomItems
     lib/files/    чтение файла как data URL, скачивание data URL
-public/           копируется в dist/ как есть: fonts/*.ttf, фоны листа и сцен, favicon, robots.txt
+public/           копируется в dist/ как есть: fonts/*.ttf, фоны листа и сцен, favicon
 tests/            юнит- и компонентные тесты, helpers/
 ```
 
