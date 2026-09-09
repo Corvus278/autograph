@@ -1,0 +1,128 @@
+@import 'tailwindcss';
+
+/**
+ * Фон страницы — недостающая ступень палитры `neutral`: цвет нейтрально-серый
+ * (насыщенность и тон нулевые, как во всей этой палитре), а по светлоте
+ * ложится ровно между `neutral-800` (26.9%) и `neutral-900` (20.5%). Отсюда и
+ * имя по общей сетке, а не собственное.
+ *
+ * Кроме цвета здесь ширина рабочей области: вёрстка десктопная, ниже 1280
+ * пикселей раскладка не перестраивается.
+ */
+@theme {
+  --color-neutral-850: oklch(24.776% 0 0deg);
+  --spacing-desktop: 80rem;
+}
+
+html,
+body {
+  min-width: var(--spacing-desktop);
+
+  color: var(--color-zinc-100);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  background-color: var(--color-neutral-850);
+}
+
+/**
+ * Встроенные рукописные шрифты. Список правится вместе с
+ * `pages/Generator/config/fonts.ts`: там те же семейства.
+ */
+@font-face {
+  font-family: Abram;
+  src: url('/fonts/Abram.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Lexa;
+  src: url('/fonts/Lexa.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Eskal;
+  src: url('/fonts/Eskal.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Stefano;
+  src: url('/fonts/Stefano.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Pacifico;
+  src: url('/fonts/Pacifico.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Lorenco;
+  src: url('/fonts/Lorenco.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Benvolio;
+  src: url('/fonts/Benvolio.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Anselmo;
+  src: url('/fonts/Anselmo.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Capuletty;
+  src: url('/fonts/Capuletty.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Djiovanni;
+  src: url('/fonts/Djiovanni.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Gregory;
+  src: url('/fonts/Gregory.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Montekky;
+  src: url('/fonts/Montekky.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Pag;
+  src: url('/fonts/Pag.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Paris;
+  src: url('/fonts/Paris.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Salavat;
+  src: url('/fonts/Salavat.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Samson;
+  src: url('/fonts/Samson.ttf') format('truetype');
+  font-display: swap;
+}

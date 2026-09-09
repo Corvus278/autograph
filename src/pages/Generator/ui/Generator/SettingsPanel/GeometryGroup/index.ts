@@ -1,0 +1,1 @@
+export { GeometryGroup } from './GeometryGroup';

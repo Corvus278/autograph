@@ -1,0 +1,5 @@
+# Гейт коммита: параллельная проверка staged-файлов (lint-staged),
+# типов (tsc) и тестов по изменённым файлам — шаги независимы.
+# Тесты только из проекта `unit`: браузерные прогоны требуют Playwright, а
+# скриншотные — ещё и docker-образа, в гейте коммита им не место.
+npx concurrently --kill-others-on-fail "npx lint-staged" "npm run typecheck" "npx vitest --project=unit --changed --run --passWithNoTests" || exit 1

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+.eslintcache
+.idea/
+storybook-static/
+
+# Снимки упавших скриншотных тестов: actual и diff, пересоздаются прогоном.
+tests/visual/.attachments/

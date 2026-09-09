@@ -1,0 +1,7 @@
+node_modules
+dist
+package-lock.json
+storybook-static
+
+# Документация свёрстана руками, Prettier ломает выравнивание таблиц.
+*.md

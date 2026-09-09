@@ -1,0 +1,25 @@
+/**
+ * Родного оформления у `input[type="color"]` нет: браузер рисует свотч
+ * псевдоэлементом, а заливка самого поля его перекрывает — контрол выглядит
+ * пустым, и по нему не видно выбранного цвета. Классами Tailwind до
+ * псевдоэлементов не дотянуться, поэтому обычный CSS.
+ */
+.color-input {
+  padding: 2px;
+
+  background-color: transparent;
+}
+
+.color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
+.color-input::-moz-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
