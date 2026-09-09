@@ -40,7 +40,6 @@ npm run storybook          # Storybook на http://localhost:6006
 index.html vite.config.ts vitest.config.ts tsconfig.json steiger.config.ts package.json
 eslint.config.mjs stylelint.config.mjs .prettierrc .editorconfig    # линтеры
 .lintstagedrc.mjs .husky/pre-commit                                  # гейт коммита
-eslint/plugins/stylelint/                                            # вендорный плагин группировки CSS-свойств
 .storybook/                                                          # main, preview
 src/
   app/            main.tsx, App.tsx (маршруты), styles/app.css (Tailwind-тема и @font-face)
@@ -119,7 +118,7 @@ tests/            юнит- и компонентные тесты, helpers/
 ```
 eslint.config.mjs        # flat config: typescript-eslint + prettier + jsdoc + simple-import-sort + unicorn +
                          # react-hooks и jsx-a11y на **/*.tsx
-stylelint.config.mjs     # stylelint-config-standard + группировка свойств из eslint/plugins/stylelint/
+stylelint.config.mjs     # stylelint-config-standard + послабления под Tailwind 4
 steiger.config.ts        # границы слоёв FSD
 .lintstagedrc.mjs        # eslint --fix / stylelint --fix / prettier --write по staged-файлам
 .husky/pre-commit        # lint-staged + tsc + vitest --changed параллельно
@@ -146,7 +145,7 @@ steiger.config.ts        # границы слоёв FSD
 | `typescript.md` | типы, `as`, jsdoc на полях, где лежат тесты |
 | `code-style.md` | стиль кода: экспорты, `switch`, `||`, `reduce`, jsdoc |
 | `naming.md` | именование, префиксы булевых |
-| `styles.md` | CSS: группировка свойств, Tailwind-токены |
+| `styles.md` | CSS: локальные стили, Tailwind-токены |
 | `linting.md` | конфиги линтеров, поток проверки, что нельзя отключать |
 | `comments.md` | комментарии: «почему», а не «что» |
 | `testing.md` | vitest, слои тестов, окружение jsdom |

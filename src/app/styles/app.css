@@ -17,7 +17,6 @@
 html,
 body {
   min-width: var(--spacing-desktop);
-
   color: var(--color-zinc-100);
   font-family:
     system-ui,

@@ -8,7 +8,7 @@ paths:
 Правила стиля и синтаксиса живут в конфигах, а не в голове:
 
 - `/eslint.config.mjs` — JS/TS (typescript-eslint + prettier + jsdoc + simple-import-sort + unicorn);
-- `/stylelint.config.mjs` — CSS (stylelint-config-standard + группировка свойств из `/eslint/plugins/stylelint/`);
+- `/stylelint.config.mjs` — CSS (stylelint-config-standard + послабления под Tailwind 4);
 - `/.prettierrc` + `/.prettierignore` — форматирование;
 - `/tsconfig.json` — строгий TS (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`).
 
