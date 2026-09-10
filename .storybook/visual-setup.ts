@@ -17,11 +17,15 @@ style.textContent = `*, *::before, *::after {
 document.head.append(style);
 
 /**
- * Stories, снимать которые незачем: это функциональные пробы разбивки на
- * настоящем измерителе, а не витрина — оформления в них нет, и эталон ничего
- * не сторожит.
+ * Stories, снимать которые незачем: это функциональные пробы на настоящем
+ * измерителе — разбивка по строкам и попадание базовых линий на разлиновку, —
+ * а не витрина. Оформления в них нет, и эталон ничего не сторожит.
  */
-const SKIPPED_STORY_FILES = ['RealLayout.stories.tsx'];
+const SKIPPED_STORY_FILES = [
+  'RealLayout.stories.tsx',
+  'BaselineFit.stories.tsx',
+  'RasterRuling.stories.tsx',
+];
 
 /**
  * Снимок после каждой story. Снимается всё окно предпросмотра: у панели и
