@@ -1,5 +1,6 @@
 import type { SceneComposeParams } from './export.types';
 import { fitPageIntoScene } from './fitPageIntoScene';
+import { PAGE_IMAGE_MIME } from './pageImageFormat';
 
 /**
  * Тень под страницей: мягкая и почти без сдвига — задача не нарисовать
@@ -24,7 +25,7 @@ const loadImage = (src: string): Promise<HTMLImageElement> => {
 };
 
 /**
- * Вкладывает снимок страницы в сцену и отдаёт PNG композиции как data URL.
+ * Вкладывает снимок страницы в сцену и отдаёт композицию как data URL.
  * Размер результата — размер сцены: сцена задаёт кадр, страница в него
  * вписывается.
  */
@@ -86,5 +87,5 @@ export const composeWithScene = async (
   );
   context.restore();
 
-  return canvas.toDataURL('image/png');
+  return canvas.toDataURL(PAGE_IMAGE_MIME);
 };
