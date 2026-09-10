@@ -2,7 +2,10 @@ export { PAGE_BACKGROUNDS, SCENES } from './backgrounds';
 export type {
   HandwritingFont,
   PageBackground,
+  PaperProfilesArtifact,
+  PaperSheetProfiles,
   ParameterRange,
+  PhotoSize,
   Scene,
 } from './config.types';
 export {
@@ -12,12 +15,13 @@ export {
   DEFAULT_BLOCK_ROTATE,
   DEFAULT_BLOCK_WIDTH,
   DEFAULT_BOTTOM_MARGIN,
-  DEFAULT_EVEN_PAGE_LEFT_PADDING,
   DEFAULT_FONT_SIZE,
+  DEFAULT_GEOMETRY_CORRECTION,
   DEFAULT_INK_COLOR,
   DEFAULT_LEFT_PADDING,
   DEFAULT_LETTER_FREQUENCY,
   DEFAULT_LINE_SPACING,
+  DEFAULT_RUN_SEED,
   DEFAULT_SCENE_DARKEN,
   DEFAULT_SCENE_ROTATE,
   DEFAULT_SCENE_SCALE,
@@ -37,3 +41,12 @@ export {
   TOP_OFFSET_RANGE,
 } from './defaults';
 export { CUSTOM_FONT_FAMILY, HANDWRITING_FONTS, SUBSTITUTE_FONTS } from './fonts';
+export {
+  buildPaperFamilies,
+  CANONICAL_PX_PER_MM,
+  GRID_FAMILY_ID,
+  GRID_RULING,
+  LINED_FAMILY_ID,
+  LINED_RULING,
+  PRESET_PAPER_FAMILIES,
+} from './paperFamilies';

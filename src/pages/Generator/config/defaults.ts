@@ -1,3 +1,5 @@
+import type { GeometryCorrection } from '../lib/calibrate/calibrate.types';
+
 import type { ParameterRange } from './config.types';
 
 /**
@@ -15,7 +17,6 @@ export const DEFAULT_BLOCK_WIDTH = 446;
 export const DEFAULT_LINE_SPACING = -2;
 export const DEFAULT_TOP_OFFSET = 5;
 export const DEFAULT_LEFT_PADDING = 5;
-export const DEFAULT_EVEN_PAGE_LEFT_PADDING = 80;
 export const DEFAULT_BLOCK_ROTATE = 0;
 export const DEFAULT_BOTTOM_MARGIN = 0;
 export const DEFAULT_INK_COLOR = '#1f3a93';
@@ -42,3 +43,23 @@ export const SCENE_ROTATE_RANGE: ParameterRange = { min: -10, max: 10, step: 1 }
 export const SCENE_SHIFT_RANGE: ParameterRange = { min: 0, max: 50, step: 1 };
 export const SCENE_SCALE_RANGE: ParameterRange = { min: -150, max: 150, step: 1 };
 export const SCENE_DARKEN_RANGE: ParameterRange = { min: 0, max: 0.1, step: 0.01 };
+
+/**
+ * Пустая поправка геометрии: все дельты по нулям — текст стоит ровно там, где
+ * его посчитала автокалибровка. Нули, а не пропущенные поля: поправка
+ * складывается с вычисленным на каждом пересчёте, и отсутствующая дельта
+ * ничем не отличалась бы от нулевой, зато усложняла бы слияние правок.
+ */
+export const DEFAULT_GEOMETRY_CORRECTION: Required<GeometryCorrection> = {
+  fontSizePx: 0,
+  lineSpacing: 0,
+  topOffset: 0,
+  leftPadding: 0,
+  blockWidth: 0,
+};
+
+/**
+ * Seed первого прогона. Единица, а не случайное число: генератор открывается
+ * одинаковым у всех, а рецепт всё равно меняется по явному действию.
+ */
+export const DEFAULT_RUN_SEED = 1;

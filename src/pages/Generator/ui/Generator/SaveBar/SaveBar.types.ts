@@ -1,8 +1,8 @@
-import type { RefObject } from 'react';
+import type { RunRenderPlan } from '../../../model/pageTask.types';
 
 export type SaveBarProps = {
   /**
-   * Узел страницы, с которого снимается PNG.
+   * План отрисовки прогона. `null` — сохранять пока нечего.
    */
-  pageRef: RefObject<HTMLDivElement | null>;
+  plan: RunRenderPlan | null;
 };

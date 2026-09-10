@@ -1,9 +1,9 @@
 import { Accordion, AccordionSection } from '@shared/ui/Accordion';
 import type { FC } from 'react';
 
-import { BackgroundGroup } from './BackgroundGroup';
 import { DistortionGroup } from './DistortionGroup';
 import { GeometryGroup } from './GeometryGroup';
+import { PaperGroup } from './PaperGroup';
 import { SceneGroup } from './SceneGroup';
 import type { SettingsPanelProps } from './SettingsPanel.types';
 import { TextGroup } from './TextGroup';
@@ -32,8 +32,8 @@ export const SettingsPanel: FC<SettingsPanelProps> = (props) => {
           <GeometryGroup />
         </AccordionSection>
 
-        <AccordionSection value="background" title="Фон">
-          <BackgroundGroup />
+        <AccordionSection value="paper" title="Бумага">
+          <PaperGroup />
         </AccordionSection>
 
         <AccordionSection value="distortions" title="Модификации почерка">

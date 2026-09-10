@@ -23,7 +23,6 @@ describe('значения по умолчанию', () => {
     expect(store().lineSpacing).toBe(-2);
     expect(store().topOffset).toBe(5);
     expect(store().leftPadding).toBe(5);
-    expect(store().evenPageLeftPadding).toBe(80);
     expect(store().blockRotate).toBe(0);
     expect(store().bottomMargin).toBe(0);
     expect(store().wordFrequency).toBe(1);
@@ -93,6 +92,18 @@ describe('действия стора', () => {
     store().toggleDistortion('isWordRotated');
 
     expect(store().flags.isWordRotated).toBe(false);
+  });
+
+  it('переключает вариативность контуров букв', () => {
+    expect(useGeneratorStore.getState().hasContourVariance).toBe(true);
+
+    useGeneratorStore.getState().setContourVariance(false);
+
+    expect(useGeneratorStore.getState().hasContourVariance).toBe(false);
+
+    useGeneratorStore.getState().setContourVariance(true);
+
+    expect(useGeneratorStore.getState().hasContourVariance).toBe(true);
   });
 
   it('меняет частоты побуквенных искажений', () => {

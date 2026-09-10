@@ -1,1 +1,0 @@
-export { BackgroundGroup } from './BackgroundGroup';

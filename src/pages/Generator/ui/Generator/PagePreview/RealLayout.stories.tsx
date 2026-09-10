@@ -7,35 +7,35 @@ import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
 } from '../../../model/useGeneratorStore';
+import { usePageGeometry } from '../../../model/usePageGeometry';
 import { usePageLayout } from '../../../model/usePageLayout';
 
 /**
  * Проверки разбивки на настоящем измерителе. В jsdom их не поставить: layout
  * там не считается, а переносы у рукописного шрифта зависят от его метрик.
  */
-type RealLayoutProbeProps = {
-  /**
-   * Высота листа в пикселях; `null` — предела нет.
-   */
-  backgroundHeight: number | null;
-};
-
-const RealLayoutProbe: FC<RealLayoutProbeProps> = (props) => {
-  const { backgroundHeight } = props;
-  const pages = usePageLayout(backgroundHeight);
+const RealLayoutProbe: FC = () => {
+  const pages = usePageLayout();
+  const { geometry, fontFamily } = usePageGeometry();
 
   return (
     <div>
       <p data-testid="page-count">{pages.length}</p>
 
-      <div style={{ width: '446px', fontFamily: 'Abram', fontSize: '1.6em' }}>
+      <div
+        style={{
+          width: `${geometry?.blockWidth || 0}px`,
+          fontFamily,
+          fontSize: `${geometry?.fontSizePx || 0}px`,
+        }}
+      >
         {pages.map((page, pageIndex) => {
           return (
             <div key={pageIndex} data-testid="page-block">
               {page.lines.map((line, lineIndex) => {
                 return (
                   <div key={lineIndex} data-testid="line">
-                    {line.text || ' '}
+                    {line.text || ' '}
                   </div>
                 );
               })}
@@ -52,18 +52,29 @@ const LONG_TEXT = [
   'поэтому длинный абзац разъезжается на несколько строк подряд.',
 ].join(' ');
 
+/**
+ * Слово, которое не влезет ни в одну строку. Нарочно длиннее любой мыслимой
+ * строки: кегль и ширину блока выводит автокалибровка из разлиновки семьи, и
+ * слово в шесть десятков букв на иных метриках шрифта в строку помещается —
+ * проверять перенос на нём значило бы гадать.
+ */
+const UNBREAKABLE_WORD =
+  'сверхдлинноенеразрывноесловокотороенепомещаетсяниводнустрокукакойбыкеглькакуюбыширинублокаикакойбышрифтдлянегониподобрали';
+
+/**
+ * Ставит стор в известное состояние: текст задаётся story, остальное — значения
+ * по умолчанию. Ширина блока и кегль выводятся из разлиновки семьи, поэтому
+ * руками не задаются.
+ */
+const applyText = (text: string, bottomMargin = 0) => {
+  clearLayoutCache();
+  useGeneratorStore.setState({ ...DEFAULT_GENERATOR_STATE, text, bottomMargin });
+};
+
 const meta = {
   component: RealLayoutProbe,
-  args: { backgroundHeight: 896 },
   beforeEach: () => {
-    clearLayoutCache();
-    useGeneratorStore.setState({
-      ...DEFAULT_GENERATOR_STATE,
-      text: LONG_TEXT,
-      blockWidth: 446,
-      topOffset: 0,
-      bottomMargin: 0,
-    });
+    applyText(LONG_TEXT);
   },
 } satisfies Meta<typeof RealLayoutProbe>;
 
@@ -91,14 +102,7 @@ export const WordWrap: Story = {
 
 export const LongWordKeepsWhole: Story = {
   beforeEach: () => {
-    clearLayoutCache();
-    useGeneratorStore.setState({
-      ...DEFAULT_GENERATOR_STATE,
-      text: 'короткое сверхдлинноенеразрывноесловокотороенепомещается хвост',
-      blockWidth: 200,
-      topOffset: 0,
-      bottomMargin: 0,
-    });
+    applyText(`короткое ${UNBREAKABLE_WORD} хвост`);
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -108,20 +112,13 @@ export const LongWordKeepsWhole: Story = {
       return line.textContent ?? '';
     });
 
-    await expect(texts).toContain('сверхдлинноенеразрывноесловокотороенепомещается');
+    await expect(texts).toContain(UNBREAKABLE_WORD);
   },
 };
 
 export const EmptyParagraphKept: Story = {
   beforeEach: () => {
-    clearLayoutCache();
-    useGeneratorStore.setState({
-      ...DEFAULT_GENERATOR_STATE,
-      text: 'первый абзац\n\nвторой абзац',
-      blockWidth: 446,
-      topOffset: 0,
-      bottomMargin: 0,
-    });
+    applyText('первый абзац\n\nвторой абзац');
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -129,16 +126,18 @@ export const EmptyParagraphKept: Story = {
     const lines = await canvas.findAllByTestId('line');
 
     await expect(lines).toHaveLength(3);
-    await expect(lines[1]?.textContent).toBe(' ');
+    await expect(lines[1]?.textContent).toBe(' ');
   },
 };
 
 export const Pagination: Story = {
   /**
-   * Высота под текст — примерно на две строки: при межстрочном интервале по
-   * умолчанию строка занимает около тридцати пикселей.
+   * Нижнее поле съедает почти весь лист: под текст остаётся пара строк, и
+   * длинный абзац наверняка разъезжается на несколько страниц.
    */
-  args: { backgroundHeight: 60 },
+  beforeEach: () => {
+    applyText(LONG_TEXT, 1800);
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 

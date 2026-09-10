@@ -8,7 +8,7 @@ import {
 
 import { SettingsPanel } from './SettingsPanel';
 
-const ALL_SECTIONS = ['text', 'geometry', 'background', 'distortions', 'scene'];
+const ALL_SECTIONS = ['text', 'geometry', 'paper', 'distortions', 'scene'];
 
 const meta = {
   component: SettingsPanel,

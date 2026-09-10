@@ -1,10 +1,11 @@
 import type { FC } from 'react';
-import { useRef } from 'react';
 import { Link } from 'react-router';
 
-import { useGeneratorStore } from '../../model/useGeneratorStore';
-import { usePageBackground } from '../../model/usePageBackground';
 import { usePageLayout } from '../../model/usePageLayout';
+import { usePageRender } from '../../model/usePageRender';
+import { usePaperProfiles } from '../../model/usePaperProfiles';
+import { useRunRender } from '../../model/useRunRender';
+import { useStoredUserSheets } from '../../model/useStoredUserSheets';
 
 import { PageNav } from './PageNav';
 import { PagePreview } from './PagePreview';
@@ -15,13 +16,12 @@ import { SettingsPanel } from './SettingsPanel';
  * Экран генератора: слева предпросмотр страницы, справа панель настроек.
  */
 export const Generator: FC = () => {
-  const pageRef = useRef<HTMLDivElement>(null);
-  const background = usePageBackground();
-  const pages = usePageLayout(background.height);
-  const pageIndex = useGeneratorStore((state) => {
-    return state.pageIndex;
-  });
-  const page = pages[pageIndex] ?? pages[0] ?? { lines: [] };
+  usePaperProfiles();
+  useStoredUserSheets();
+
+  const pages = usePageLayout();
+  const source = usePageRender(pages);
+  const plan = useRunRender(pages);
 
   return (
     <main className="w-desktop mx-auto flex items-start gap-6 p-6">
@@ -33,11 +33,11 @@ export const Generator: FC = () => {
           Как создать свой шрифт
         </Link>
 
-        <PagePreview pageRef={pageRef} page={page} background={background} />
+        <PagePreview source={source} />
 
         <PageNav pageCount={pages.length} />
 
-        <SaveBar pageRef={pageRef} />
+        <SaveBar plan={plan} />
       </section>
 
       <SettingsPanel />

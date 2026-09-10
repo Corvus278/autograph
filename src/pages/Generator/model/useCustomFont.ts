@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { CUSTOM_FONT_FAMILY } from '../config';
+import { clearFontMetricsCache } from '../lib/measure/measureFontMetrics';
 
 import { clearLayoutCache } from './measureLayout';
 import type { CustomFontControl } from './useCustomFont.types';
@@ -26,9 +27,12 @@ export const useCustomFont = (): CustomFontControl => {
       document.fonts.add(face);
       /**
        * Имя семейства у своего шрифта всегда одно, поэтому ключ кэша от смены
-       * файла не меняется — сбрасываем кэш руками.
+       * файла не меняется — сбрасываем кэши руками. Метрики наравне с
+       * раскладкой: по ним считается кегль, и метрики прошлого файла посадили
+       * бы новый шрифт мимо разлиновки.
        */
       clearLayoutCache();
+      clearFontMetricsCache();
       setCustomFontFamily(CUSTOM_FONT_FAMILY);
       setError(null);
     } catch {

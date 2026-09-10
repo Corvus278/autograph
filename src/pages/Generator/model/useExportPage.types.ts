@@ -1,14 +1,17 @@
 import type { SceneComposeParams } from '../lib/export/export.types';
 
+import type { PageRenderTask } from './pageTask.types';
+
 /**
- * Чем снимать страницу, как собирать композицию и как отдавать файл. Всё —
- * отдельными зависимостями: так проверяется поведение при отказе рендера.
+ * Чем растеризовать страницу, как собирать композицию и как отдавать файл.
+ * Всё — отдельными зависимостями: так проверяется поведение при отказе
+ * отрисовки.
  */
 export type ExportDeps = {
   /**
-   * Снимает PNG с узла страницы и отдаёт data URL.
+   * Растеризует страницу в повышенном разрешении и отдаёт data URL.
    */
-  renderPage: (node: HTMLElement) => Promise<string>;
+  renderPage: (task: PageRenderTask) => Promise<string>;
 
   /**
    * Вкладывает снимок страницы в сцену.

@@ -27,10 +27,11 @@ const DISTORTION_LABELS: DistortionOption[] = [
  * Группа «Модификации почерка»: что именно делает набор неровным.
  */
 export const DistortionGroup: FC = () => {
-  const { flags, wordFrequency, letterFrequency } = useGeneratorStore(
+  const { flags, hasContourVariance, wordFrequency, letterFrequency } = useGeneratorStore(
     useShallow((state) => {
       return {
         flags: state.flags,
+        hasContourVariance: state.hasContourVariance,
         wordFrequency: state.wordFrequency,
         letterFrequency: state.letterFrequency,
       };
@@ -38,6 +39,9 @@ export const DistortionGroup: FC = () => {
   );
   const toggleDistortion = useGeneratorStore((state) => {
     return state.toggleDistortion;
+  });
+  const setContourVariance = useGeneratorStore((state) => {
+    return state.setContourVariance;
   });
   const setWordFrequency = useGeneratorStore((state) => {
     return state.setWordFrequency;
@@ -48,6 +52,10 @@ export const DistortionGroup: FC = () => {
   const regenerate = useGeneratorStore((state) => {
     return state.regenerate;
   });
+
+  const handleContourVarianceChange = (isChecked: boolean) => {
+    setContourVariance(isChecked);
+  };
 
   const handleWordFrequencyChange = (value: number) => {
     setWordFrequency(value);
@@ -79,6 +87,12 @@ export const DistortionGroup: FC = () => {
           );
         })}
       </div>
+
+      <Checkbox
+        label="Вариативность контуров букв"
+        isChecked={hasContourVariance}
+        onChange={handleContourVarianceChange}
+      />
 
       <Slider
         label="Как часто искажать слово"

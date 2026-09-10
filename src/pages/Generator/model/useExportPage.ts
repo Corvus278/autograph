@@ -1,31 +1,50 @@
-import { downloadDataUrl } from '@shared/lib/files';
-import type { RefObject } from 'react';
+import { downloadDataUrl, readBlobAsDataUrl } from '@shared/lib/files';
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { SCENES } from '../config';
 import { composeWithScene } from '../lib/export/composeWithScene';
-import { renderPagePng } from '../lib/export/renderPagePng';
+import { PAGE_IMAGE_EXTENSION } from '../lib/export/pageImageFormat';
 
+import { renderPageInWorker } from './createPageRenderClient';
+import type { PageRenderTask, RunRenderPlan } from './pageTask.types';
 import type { ExportControl, ExportDeps } from './useExportPage.types';
 import { useGeneratorStore } from './useGeneratorStore';
 
+/**
+ * Растеризация страницы по умолчанию: та же отрисовка, что и в предпросмотре,
+ * но в разрешении из рецепта прогона и в воркере.
+ *
+ * Снимок приходит блобом и превращается в data URL: сцена собирается на canvas
+ * документа и принимает страницу картинкой, а адрес объекта протухает раньше,
+ * чем пользователь дожмёт «Сохранить».
+ *
+ * @param task — задание на отрисовку текущей страницы
+ * @returns data URL снимка страницы
+ */
+const renderPageDataUrl = async (task: PageRenderTask): Promise<string> => {
+  const page = await renderPageInWorker(task);
+
+  return readBlobAsDataUrl(page);
+};
+
 const DEFAULT_DEPS: ExportDeps = {
-  renderPage: renderPagePng,
+  renderPage: renderPageDataUrl,
   composeScene: composeWithScene,
   download: downloadDataUrl,
 };
 
 /**
- * Сохранение результата в PNG. Снимок делается с узла страницы, поэтому в файл
- * попадает ровно то, что видно на листе, — панель настроек и навигация лежат
- * вне этого узла.
+ * Сохранение текущей страницы в файл — отдельное действие, не связанное с
+ * выгрузкой пачки. Рисуется только лист: отрисовке передаётся страница, а не
+ * узел документа, поэтому интерфейсу в снимок попасть неоткуда.
  *
- * @param pageRef — узел страницы, с которого снимается PNG
- * @param deps — чем снимать и как отдавать файл; подменяется в тестах
+ * @param plan — план отрисовки прогона; `null` — страница ещё не готова
+ * @param deps — чем рисовать и как отдавать файл; подменяется в тестах
+ * @returns состояние сохранения и метод сохранения
  */
 export const useExportPage = (
-  pageRef: RefObject<HTMLDivElement | null>,
+  plan: RunRenderPlan | null,
   deps: Partial<ExportDeps> = {}
 ): ExportControl => {
   const { renderPage, composeScene, download } = { ...DEFAULT_DEPS, ...deps };
@@ -58,9 +77,7 @@ export const useExportPage = (
   );
 
   const save = async (): Promise<void> => {
-    const node = pageRef.current;
-
-    if (!node) {
+    if (!plan) {
       setError('Страница ещё не отрисована');
 
       return;
@@ -69,7 +86,7 @@ export const useExportPage = (
     setSaving(true);
 
     try {
-      const pageDataUrl = await renderPage(node);
+      const pageDataUrl = await renderPage(plan.buildTask(plan.pageIndex));
       const sceneSrc =
         customSceneSrc ??
         SCENES.find(({ id }) => {
@@ -87,9 +104,9 @@ export const useExportPage = (
           hasShadow: hasSceneShadow,
         });
 
-        download(composed, 'handwriting_with_bg.png');
+        download(composed, `handwriting_with_bg.${PAGE_IMAGE_EXTENSION}`);
       } else {
-        download(pageDataUrl, 'handwriting_page.png');
+        download(pageDataUrl, `handwriting_page.${PAGE_IMAGE_EXTENSION}`);
       }
 
       setError(null);

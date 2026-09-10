@@ -6,21 +6,23 @@ import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
 } from '@pages/Generator/model/useGeneratorStore';
-import { usePageBackground } from '@pages/Generator/model/usePageBackground';
 import { usePageLayout } from '@pages/Generator/model/usePageLayout';
+import { usePageRender } from '@pages/Generator/model/usePageRender';
 import { PageNav } from '@pages/Generator/ui/Generator/PageNav';
 import { PagePreview } from '@pages/Generator/ui/Generator/PagePreview';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { FC } from 'react';
-import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { findCalls, getCanvasFrame } from './helpers/canvas-recorder';
 import type { MonospaceMeasurerFactory } from './helpers/monospace-measurer';
 import { createMonospaceMeasurerFactory } from './helpers/monospace-measurer';
+import { buildRenderFamily } from './helpers/paper-family';
 
 /**
  * Повторяет сборку экрана генератора, но с измерителем-моделью: настоящих
- * размеров jsdom не считает, а проверяем мы разбивку и разметку, а не вёрстку.
+ * размеров jsdom не считает, а проверяем мы разбивку и состав отрисованного, а
+ * не вёрстку.
  */
 type HarnessProps = {
   /**
@@ -31,32 +33,70 @@ type HarnessProps = {
 
 const Harness: FC<HarnessProps> = (props) => {
   const { factory } = props;
-  const pageRef = useRef<HTMLDivElement>(null);
-  const background = usePageBackground();
-  const pages = usePageLayout(background.height, factory.create);
-  const pageIndex = useGeneratorStore((state) => {
-    return state.pageIndex;
-  });
-  const page = pages[pageIndex] ?? pages[0] ?? { lines: [] };
+  const pages = usePageLayout(factory.create);
+  const source = usePageRender(pages);
 
   return (
     <>
-      <PagePreview pageRef={pageRef} page={page} background={background} />
+      <PagePreview source={source} />
 
       <PageNav pageCount={pages.length} />
     </>
   );
 };
 
+const FAMILY = buildRenderFamily();
+
 /**
- * Ширина символа 10 при ширине блока 100 даёт ровно десять символов в строке,
- * высота строки 20 — ровно две строки на страницу при доступной высоте 40.
+ * Нижнее поле, оставляющее под текст ровно две строки измерителя-модели:
+ * верхний отступ блока у семьи-модели нулевой, высота листа — четыреста
+ * пикселей, высота строки — двадцать.
  */
+const TWO_LINE_BOTTOM_MARGIN = 350;
+
+/**
+ * Узел canvas страницы: на нём рисует предпросмотр.
+ *
+ * @returns узел предпросмотра
+ */
+const getPageCanvas = (): HTMLCanvasElement => {
+  const canvas = screen.getByTestId('page-canvas');
+
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    throw new Error('Предпросмотр рисует не на canvas');
+  }
+
+  return canvas;
+};
+
+/**
+ * Слова, отрисованные на странице, в порядке отрисовки.
+ *
+ * @returns тексты, попавшие в снимок
+ */
+const getDrawnWords = (): unknown[] => {
+  return findCalls(getCanvasFrame(getPageCanvas()), 'fillText').map(([text]) => {
+    return text;
+  });
+};
+
+/**
+ * Отступ блока текста от левого края листа: рендерер сдвигает на него начало
+ * координат перед отрисовкой строк.
+ *
+ * @returns отступ в канонических пикселях семьи
+ */
+const getBlockLeftPadding = (): unknown => {
+  const [translate] = findCalls(getCanvasFrame(getPageCanvas()), 'translate');
+
+  return translate?.[0];
+};
+
 const renderHarness = async (factory: MonospaceMeasurerFactory) => {
   render(<Harness factory={factory} />);
 
   await waitFor(() => {
-    expect(screen.getAllByTestId('line').length).toBeGreaterThan(0);
+    expect(getDrawnWords().length).toBeGreaterThan(0);
   });
 };
 
@@ -65,8 +105,9 @@ beforeEach(() => {
   useGeneratorStore.setState({
     ...DEFAULT_GENERATOR_STATE,
     text: 'раз два три четыре пять шесть',
-    blockWidth: 100,
-    topOffset: 0,
+    presetFamilies: [FAMILY],
+    familyId: FAMILY.id,
+    sheetId: FAMILY.sheets[0]?.id || '',
   });
 });
 
@@ -74,67 +115,30 @@ afterEach(() => {
   cleanup();
 });
 
-describe('фон страницы', () => {
-  it('меняет картинку при выборе другого встроенного фона', async () => {
-    const factory = createMonospaceMeasurerFactory();
-
-    await renderHarness(factory);
-
-    expect(document.querySelector('img')?.getAttribute('src')).toBe('/33.jpg');
-
-    act(() => {
-      useGeneratorStore.getState().selectBackground('lined');
-    });
-
-    await waitFor(() => {
-      expect(document.querySelector('img')?.getAttribute('src')).toBe('/line.jpg');
-    });
-  });
-
-  it('скрывает лист в режиме «убрать фон»', async () => {
-    const factory = createMonospaceMeasurerFactory();
-
-    await renderHarness(factory);
-
-    act(() => {
-      useGeneratorStore.getState().setBackgroundHidden(true);
-    });
-
-    await waitFor(() => {
-      expect(document.querySelector('img')).toBeNull();
-    });
-  });
-});
-
 describe('разбивка на строки и страницы', () => {
   it('переносит текст по ширине блока', async () => {
     const factory = createMonospaceMeasurerFactory();
 
-    useGeneratorStore.setState({ bottomMargin: 0 });
     await renderHarness(factory);
 
-    expect(screen.getAllByTestId('line')).toHaveLength(3);
+    expect(getDrawnWords()).toEqual(['раз', 'два', 'три', 'четыре', 'пять', 'шесть']);
     expect(screen.queryByRole('navigation', { name: 'Страницы' })).toBeNull();
   });
 
   it('разбивает на страницы по доступной высоте', async () => {
     const factory = createMonospaceMeasurerFactory();
 
-    /**
-     * Лист «в клетку» в предпросмотре — 896 пикселей высотой; оставляем под
-     * текст 40, то есть ровно две строки.
-     */
-    useGeneratorStore.setState({ bottomMargin: 856 });
+    useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
 
-    expect(screen.getAllByTestId('line')).toHaveLength(2);
+    expect(getDrawnWords()).toEqual(['раз', 'два', 'три', 'четыре']);
     expect(screen.getAllByRole('button')).toHaveLength(2);
   });
 
   it('показывает выбранную страницу', async () => {
     const factory = createMonospaceMeasurerFactory();
 
-    useGeneratorStore.setState({ bottomMargin: 856 });
+    useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
 
     act(() => {
@@ -142,38 +146,36 @@ describe('разбивка на строки и страницы', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('line')).toHaveLength(1);
+      expect(getDrawnWords()).toEqual(['пять', 'шесть']);
     });
   });
 });
 
 describe('разворот чётных страниц', () => {
-  it('зеркалит фон и берёт отступ чётных страниц', async () => {
+  it('отодвигает блок от отражённой линии поля', async () => {
     const factory = createMonospaceMeasurerFactory();
 
-    useGeneratorStore.setState({ bottomMargin: 856, evenPageLeftPadding: 80 });
+    useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
 
-    const image = document.querySelector('img');
-
-    expect(image?.style.transform).toBe('');
+    expect(getBlockLeftPadding()).toBeCloseTo(FAMILY.ruling.margins.left);
 
     act(() => {
       useGeneratorStore.getState().goToPage(1);
     });
 
+    /**
+     * Блок отражается вместе с листом: слева от него остаётся столько же,
+     * сколько на нечётной странице оставалось справа.
+     */
     await waitFor(() => {
-      expect(document.querySelector('img')?.style.transform).toBe('scaleX(-1)');
+      expect(getBlockLeftPadding()).toBeCloseTo(FAMILY.ruling.margins.right);
     });
-
-    const textBlock = screen.getByTestId('line').parentElement;
-
-    expect(textBlock?.style.paddingLeft).toBe('80px');
   });
 });
 
 describe('кэш разбивки', () => {
-  it('не измеряет заново при изменении поворота блока', async () => {
+  it('не измеряет заново при изменении цвета чернил', async () => {
     const factory = createMonospaceMeasurerFactory();
 
     await renderHarness(factory);
@@ -181,17 +183,17 @@ describe('кэш разбивки', () => {
     const measuresBefore = factory.createCalls();
 
     act(() => {
-      useGeneratorStore.getState().setGeometry({ blockRotate: 15 });
+      useGeneratorStore.getState().setInkColor('#ff0000');
     });
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('line').length).toBeGreaterThan(0);
+      expect(getDrawnWords().length).toBeGreaterThan(0);
     });
 
     expect(factory.createCalls()).toBe(measuresBefore);
   });
 
-  it('измеряет заново при изменении размера шрифта', async () => {
+  it('измеряет заново при изменении поправки кегля', async () => {
     const factory = createMonospaceMeasurerFactory();
 
     await renderHarness(factory);
@@ -199,7 +201,7 @@ describe('кэш разбивки', () => {
     const measuresBefore = factory.createCalls();
 
     act(() => {
-      useGeneratorStore.getState().setGeometry({ fontSize: 3 });
+      useGeneratorStore.getState().setGeometryCorrection({ fontSizePx: 10 });
     });
 
     await waitFor(() => {
@@ -213,7 +215,7 @@ describe('кэш разбивки', () => {
     await renderHarness(factory);
 
     act(() => {
-      useGeneratorStore.getState().setGeometry({ fontSize: 3 });
+      useGeneratorStore.getState().setGeometryCorrection({ fontSizePx: 10 });
     });
 
     await waitFor(() => {
@@ -221,13 +223,11 @@ describe('кэш разбивки', () => {
     });
 
     act(() => {
-      useGeneratorStore
-        .getState()
-        .setGeometry({ fontSize: DEFAULT_GENERATOR_STATE.fontSize });
+      useGeneratorStore.getState().setGeometryCorrection({ fontSizePx: 0 });
     });
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('line').length).toBeGreaterThan(0);
+      expect(getDrawnWords().length).toBeGreaterThan(0);
     });
 
     expect(factory.createCalls()).toBe(2);
@@ -238,7 +238,7 @@ describe('снимок страницы', () => {
   it('не содержит элементов интерфейса', async () => {
     const factory = createMonospaceMeasurerFactory();
 
-    useGeneratorStore.setState({ bottomMargin: 856 });
+    useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
 
     const pageNode = screen.getByTestId('page');
@@ -246,5 +246,28 @@ describe('снимок страницы', () => {
     expect(pageNode.querySelectorAll('button')).toHaveLength(0);
     expect(pageNode.querySelectorAll('nav')).toHaveLength(0);
     expect(pageNode.querySelectorAll('input')).toHaveLength(0);
+    expect(pageNode.querySelectorAll('canvas')).toHaveLength(1);
+  });
+
+  it('рисует лист и текст, и ничего кроме', async () => {
+    const factory = createMonospaceMeasurerFactory();
+
+    await renderHarness(factory);
+
+    const drawn = new Set(
+      getCanvasFrame(getPageCanvas()).map((call) => {
+        return call.name;
+      })
+    );
+
+    expect([...drawn].sort()).toEqual([
+      'fillStyle',
+      'fillText',
+      'font',
+      'restore',
+      'save',
+      'scale',
+      'translate',
+    ]);
   });
 });

@@ -1,22 +1,8 @@
-import type { RefObject } from 'react';
-
-import type { Page } from '../../../lib/paginate/paginate.types';
-import type { PageBackgroundView } from '../../../model/usePageBackground.types';
+import type { PageRenderSource } from '../../../model/pageRender.types';
 
 export type PagePreviewProps = {
   /**
-   * Ссылка на узел страницы. По нему снимается PNG при сохранении, поэтому в
-   * узел не попадает ничего из интерфейса.
+   * Источник отрисовки текущей страницы. `null` — рисовать пока нечего.
    */
-  pageRef: RefObject<HTMLDivElement | null>;
-
-  /**
-   * Страница, которую нужно отрисовать.
-   */
-  page: Page;
-
-  /**
-   * Фон листа и его размеры.
-   */
-  background: PageBackgroundView;
+  source: PageRenderSource | null;
 };
