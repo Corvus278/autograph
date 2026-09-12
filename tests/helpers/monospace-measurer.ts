@@ -3,20 +3,16 @@ import type { MeasurerFactory } from '@pages/Generator/model/measureLayout.types
 
 type MonospaceMeasurerParams = {
   /**
-   * Ширина одного символа в пикселях.
+   * Ширина одного символа в долях кегля: в пиксели её переводит разбивка по
+   * кеглю своей страницы.
    */
   charWidth?: number;
-
-  /**
-   * Высота строки в пикселях.
-   */
-  lineHeight?: number;
 };
 
 /**
  * Измеритель-модель: ширина фрагмента — число символов на фиксированную ширину
- * символа. Настоящих размеров jsdom не считает, а ядру они и не нужны — оно
- * работает через интерфейс `TextMeasurer`.
+ * символа в долях кегля. Настоящих размеров jsdom не считает, а ядру они и не
+ * нужны — оно работает через интерфейс `TextMeasurer`.
  *
  * Считает обращения к себе: по ним проверяется, что кэш разбивки не измеряет
  * заново на параметрах, которые переносы не меняют.
@@ -26,19 +22,13 @@ export type MonospaceMeasurer = TextMeasurer & {
    * Сколько раз спросили ширину фрагмента.
    */
   widthCalls: () => number;
-
-  /**
-   * Сколько раз спросили высоту строки.
-   */
-  lineHeightCalls: () => number;
 };
 
 export const createMonospaceMeasurer = (
   params: MonospaceMeasurerParams = {}
 ): MonospaceMeasurer => {
-  const { charWidth = 10, lineHeight = 20 } = params;
+  const { charWidth = 0.5 } = params;
   let widthCallsCount = 0;
-  let lineHeightCallsCount = 0;
 
   return {
     measureWidth: (text) => {
@@ -46,16 +36,8 @@ export const createMonospaceMeasurer = (
 
       return text.length * charWidth;
     },
-    measureLineHeight: () => {
-      lineHeightCallsCount += 1;
-
-      return lineHeight;
-    },
     widthCalls: () => {
       return widthCallsCount;
-    },
-    lineHeightCalls: () => {
-      return lineHeightCallsCount;
     },
   };
 };

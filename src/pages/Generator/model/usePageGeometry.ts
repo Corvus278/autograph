@@ -7,7 +7,7 @@ import { buildBlockGeometry } from './buildPageRenderParams';
 import { getPageCalibration } from './geometrySelectors';
 import type { PageGeometryView } from './pageRender.types';
 import { findFamily, findSheet, mergeFamilySheets } from './paperSelectors';
-import { selectPageSheetId } from './recipeSelectors';
+import { buildPageSheetSequence } from './recipeSelectors';
 import { useFontMetrics } from './useFontMetrics';
 import { useGeneratorStore } from './useGeneratorStore';
 
@@ -18,9 +18,9 @@ import { useGeneratorStore } from './useGeneratorStore';
  * Один хук на раскладку и на отрисовку: считай они геометрию порознь, переносы
  * посчитались бы по одной ширине блока, а отрисовались по другой.
  *
- * Лист страницы берётся из рецепта прогона (`selectPageSheetId`), а не из
- * выбора в панели: у каждой страницы своя фотография со своим шагом, и
- * геометрия идёт за ней.
+ * Лист страницы берётся из раздачи прогона (`buildPageSheetSequence`, та же,
+ * что у `selectPageSheetId`), а не из выбора в панели: у каждой страницы своя
+ * фотография со своим шагом, и геометрия идёт за ней.
  *
  * @param pageIndex — номер страницы, считая с нуля; не задан — текущая страница
  * @returns семья, лист, разлиновка, метрики и геометрия блока
@@ -34,19 +34,21 @@ export const usePageGeometry = (pageIndex?: number): PageGeometryView => {
     correction,
     activeFontFamily,
     resolvedPageIndex,
+    runSeed,
     sheetId,
+    isSheetPinned,
   } = useGeneratorStore(
     useShallow((state) => {
-      const index = pageIndex === undefined ? state.pageIndex : pageIndex;
-
       return {
         presetFamilies: state.presetFamilies,
         userSheets: state.userSheets,
         familyId: state.familyId,
         correction: state.geometryCorrection,
         activeFontFamily: state.customFontFamily ?? state.fontFamily,
-        resolvedPageIndex: index,
-        sheetId: selectPageSheetId(state, index),
+        resolvedPageIndex: pageIndex === undefined ? state.pageIndex : pageIndex,
+        runSeed: state.runSeed,
+        sheetId: state.sheetId,
+        isSheetPinned: state.isSheetPinned,
       };
     })
   );
@@ -54,7 +56,18 @@ export const usePageGeometry = (pageIndex?: number): PageGeometryView => {
     return mergeFamilySheets(presetFamilies, userSheets);
   }, [presetFamilies, userSheets]);
   const family = findFamily(families, familyId) || null;
-  const sheet = family ? findSheet(family, sheetId) || null : null;
+  /**
+   * Раздача листов живёт между отрисовками и собирается заново только со
+   * сменой прогона, выбора листа или семьи: посчитанная в селекторе стора, она
+   * пересобирала бы рецепт на каждое изменение стора.
+   */
+  const sheetIdAt = useMemo(() => {
+    return buildPageSheetSequence({ runSeed, sheetId, isSheetPinned }, family);
+  }, [runSeed, sheetId, isSheetPinned, family]);
+  const sheet =
+    family && family.sheets.length > 0
+      ? findSheet(family, sheetIdAt(resolvedPageIndex)) || null
+      : null;
   const calibration =
     family && sheet ? getPageCalibration(family, sheet, resolvedPageIndex) : null;
 

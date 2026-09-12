@@ -1,16 +1,30 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { createDomMeasurer } from '@pages/Generator/lib/measure/createDomMeasurer';
 import type { FontsReadySource } from '@pages/Generator/lib/measure/measure.types';
 import { waitForFont } from '@pages/Generator/lib/measure/waitForFont';
-import { paginate } from '@pages/Generator/lib/paginate/paginate';
 import { splitParagraphs } from '@pages/Generator/lib/split/splitParagraphs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMonospaceMeasurer } from './helpers/monospace-measurer';
 
 /**
- * Параметры отрисовки для `waitForFont`: конкретные значения не важны, важно,
- * что они доезжают до запроса шрифта.
+ * Параметры измерителя для `waitForFont`: важно, что семейство доезжает до
+ * запроса шрифта.
  */
-const measurerParams = { fontFamily: 'Abram', fontSize: 1.6, lineSpacing: -2 };
+const measurerParams = { fontFamily: 'Abram' };
+
+/**
+ * Ширина символа в заглушке раскладки в долях кегля контейнера.
+ */
+const STUB_CHAR_SHARE = 0.5;
+
+/**
+ * Кегли двух страниц с разными листами.
+ */
+const SMALL_FONT_SIZE_PX = 30;
+const LARGE_FONT_SIZE_PX = 45;
 
 describe('TextMeasurer', () => {
   it('отдаёт ширину пропорционально длине фрагмента', () => {
@@ -23,20 +37,74 @@ describe('TextMeasurer', () => {
   it('используется разбивкой на строки', () => {
     const measure = createMonospaceMeasurer();
 
-    splitParagraphs('раз два три', { width: 100, measure });
+    splitParagraphs('раз два три', { width: 100, fontSizePx: 20, measure });
 
     expect(measure.widthCalls()).toBeGreaterThan(0);
   });
+});
 
-  it('используется разбивкой на страницы', () => {
-    const measure = createMonospaceMeasurer();
+describe('createDomMeasurer', () => {
+  let rectCallsCount = 0;
 
-    paginate([{ text: 'раз', paragraphIndex: 0 }], {
-      availableHeight: 100,
-      measure,
+  /**
+   * Заглушка раскладки: ширина фрагмента — доля кегля того контейнера, в
+   * котором он лежит. По ней видно, при каком кегле мерили.
+   */
+  beforeEach(() => {
+    rectCallsCount = 0;
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(() => {
+      rectCallsCount += 1;
+
+      const container = document.body.lastElementChild;
+      const fontSize =
+        container instanceof HTMLElement
+          ? Number.parseFloat(container.style.fontSize)
+          : 0;
+      const width = (container?.textContent || '').length * STUB_CHAR_SHARE * fontSize;
+      const rect: DOMRect = {
+        x: 0,
+        y: 0,
+        width,
+        height: 0,
+        top: 0,
+        right: width,
+        bottom: 0,
+        left: 0,
+        toJSON: () => {
+          return {};
+        },
+      };
+
+      return Object.assign([rect], {
+        item: () => {
+          return rect;
+        },
+      });
     });
+  });
 
-    expect(measure.lineHeightCalls()).toBe(1);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('отдаёт ширину в долях кегля, одним замером на страницы с разным кеглем', () => {
+    const measurer = createDomMeasurer(measurerParams);
+    const text = 'раз два';
+    const smallWidthPx = measurer.measureWidth(text) * SMALL_FONT_SIZE_PX;
+    const largeWidthPx = measurer.measureWidth(text) * LARGE_FONT_SIZE_PX;
+
+    measurer.destroy();
+
+    expect(measurer.measureWidth).toBeTypeOf('function');
+    expect(rectCallsCount).toBe(1);
+    expect(largeWidthPx / smallWidthPx).toBeCloseTo(
+      LARGE_FONT_SIZE_PX / SMALL_FONT_SIZE_PX,
+      9
+    );
+    expect(smallWidthPx).toBeCloseTo(
+      text.length * STUB_CHAR_SHARE * SMALL_FONT_SIZE_PX,
+      9
+    );
   });
 });
 
@@ -87,6 +155,6 @@ describe('waitForFont', () => {
 
     await waitForFont(measurerParams, fonts);
 
-    expect(requested).toEqual(['1.6em "Abram"']);
+    expect(requested).toEqual(['1em "Abram"']);
   });
 });

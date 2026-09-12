@@ -1,7 +1,9 @@
 /**
  * @vitest-environment jsdom
  */
+import type { PaperFamily } from '@pages/Generator/lib/paper';
 import { clearLayoutCache } from '@pages/Generator/model/measureLayout';
+import { selectPageSheetId } from '@pages/Generator/model/recipeSelectors';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -10,14 +12,21 @@ import { usePageLayout } from '@pages/Generator/model/usePageLayout';
 import { usePageRender } from '@pages/Generator/model/usePageRender';
 import { PageNav } from '@pages/Generator/ui/Generator/PageNav';
 import { PagePreview } from '@pages/Generator/ui/Generator/PagePreview';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import type { FC } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { findCalls, getCanvasFrame } from './helpers/canvas-recorder';
 import type { MonospaceMeasurerFactory } from './helpers/monospace-measurer';
 import { createMonospaceMeasurerFactory } from './helpers/monospace-measurer';
-import { buildRenderFamily } from './helpers/paper-family';
+import { buildRenderFamily, buildSheet } from './helpers/paper-family';
 
 /**
  * Повторяет сборку экрана генератора, но с измерителем-моделью: настоящих
@@ -48,18 +57,28 @@ const Harness: FC<HarnessProps> = (props) => {
 const FAMILY = buildRenderFamily();
 
 /**
- * Запас снизу в шагах разлиновки, оставляющий под текст ровно две строки
- * измерителя-модели: верхний отступ блока у семьи-модели нулевой, высота
- * листа — четыреста пикселей, шаг — сорок, высота строки — двадцать. Восемь
- * и три четверти шага — триста пятьдесят пикселей, под текст остаётся
- * пятьдесят.
+ * Ширина символа измерителя-модели в долях кегля. Кегль семьи-модели на
+ * запасных метриках jsdom — 40 · 0,55 / 0,48 ≈ 45,8 пикселя, символ — около
+ * 9,2 пикселя: блок в сто пикселей держит десять символов и не держит
+ * одиннадцать.
  */
-const TWO_LINE_BOTTOM_MARGIN = 8.75;
+const CHAR_WIDTH = 0.2;
+
+/**
+ * Запас снизу в шагах разлиновки, оставляющий на странице ровно две строки:
+ * верхний отступ блока у семьи-модели нулевой, нижнего поля нет, шаг строк на
+ * линейке равен шагу разлиновки — (400 − 0 − 0 − 8 · 40) / 40 = 2.
+ */
+const TWO_LINE_BOTTOM_MARGIN = 8;
 
 /**
  * Поправка кегля в долях шага: четверть шага семьи-модели — десять пикселей.
  */
 const FONT_SIZE_CORRECTION = 0.25;
+
+const createFactory = (): MonospaceMeasurerFactory => {
+  return createMonospaceMeasurerFactory({ charWidth: CHAR_WIDTH });
+};
 
 /**
  * Узел canvas страницы: на нём рисует предпросмотр.
@@ -107,6 +126,25 @@ const renderHarness = async (factory: MonospaceMeasurerFactory) => {
   });
 };
 
+/**
+ * Семья-модель с теми же идентификаторами листов, но с другим нижним полем у
+ * их разлиновки: правка листа, при которой идентификатор остаётся прежним.
+ *
+ * @returns семья с изменённой разлиновкой листов
+ */
+const buildFamilyWithEditedRuling = (): PaperFamily => {
+  return {
+    ...FAMILY,
+    sheets: FAMILY.sheets.map((sheet) => {
+      return buildSheet(
+        sheet.id,
+        { ...sheet.ruling, margins: { ...sheet.ruling.margins, bottom: 80 } },
+        { width: sheet.width, height: sheet.height }
+      );
+    }),
+  };
+};
+
 beforeEach(() => {
   clearLayoutCache();
   useGeneratorStore.setState({
@@ -124,7 +162,7 @@ afterEach(() => {
 
 describe('разбивка на строки и страницы', () => {
   it('переносит текст по ширине блока', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     await renderHarness(factory);
 
@@ -132,8 +170,8 @@ describe('разбивка на строки и страницы', () => {
     expect(screen.queryByRole('navigation', { name: 'Страницы' })).toBeNull();
   });
 
-  it('разбивает на страницы по доступной высоте', async () => {
-    const factory = createMonospaceMeasurerFactory();
+  it('разбивает на страницы по вместимости листа', async () => {
+    const factory = createFactory();
 
     useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
@@ -143,7 +181,7 @@ describe('разбивка на строки и страницы', () => {
   });
 
   it('показывает выбранную страницу', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
@@ -156,11 +194,33 @@ describe('разбивка на строки и страницы', () => {
       expect(getDrawnWords()).toEqual(['пять', 'шесть']);
     });
   });
+
+  it('страница раскладки несёт лист, доставшийся ей в прогоне', async () => {
+    const factory = createFactory();
+
+    useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
+
+    const { result } = renderHook(() => {
+      return usePageLayout(factory.create);
+    });
+
+    await waitFor(() => {
+      expect(result.current).toHaveLength(2);
+    });
+
+    const state = useGeneratorStore.getState();
+
+    expect(
+      result.current.map(({ sheetId }) => {
+        return sheetId;
+      })
+    ).toEqual([selectPageSheetId(state, 0), selectPageSheetId(state, 1)]);
+  });
 });
 
 describe('разворот чётных страниц', () => {
   it('отодвигает блок от отражённой линии поля', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
@@ -183,7 +243,7 @@ describe('разворот чётных страниц', () => {
 
 describe('кэш разбивки', () => {
   it('не измеряет заново при изменении цвета чернил', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     await renderHarness(factory);
 
@@ -200,8 +260,21 @@ describe('кэш разбивки', () => {
     expect(factory.createCalls()).toBe(measuresBefore);
   });
 
+  it('не измеряет заново при повторной раскладке с теми же параметрами', async () => {
+    const factory = createFactory();
+
+    await renderHarness(factory);
+
+    const measuresBefore = factory.createCalls();
+
+    cleanup();
+    await renderHarness(factory);
+
+    expect(factory.createCalls()).toBe(measuresBefore);
+  });
+
   it('измеряет заново при изменении поправки кегля', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     await renderHarness(factory);
 
@@ -219,7 +292,7 @@ describe('кэш разбивки', () => {
   });
 
   it('берёт готовую разбивку из кэша при возврате к прежним параметрам', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     await renderHarness(factory);
 
@@ -243,11 +316,51 @@ describe('кэш разбивки', () => {
 
     expect(factory.createCalls()).toBe(2);
   });
+
+  it('раскладывает заново, когда в семью добавлен свой лист', async () => {
+    const factory = createFactory();
+
+    await renderHarness(factory);
+
+    const measuresBefore = factory.createCalls();
+
+    /**
+     * Лист подмешивается в семью без закрепления: сдвигается раздача листов
+     * по страницам, а выбор пользователя остаётся прежним.
+     */
+    act(() => {
+      useGeneratorStore.setState({
+        userSheets: [
+          { familyId: FAMILY.id, sheet: buildSheet('user-1'), isAnalyzed: true },
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(factory.createCalls()).toBe(measuresBefore + 1);
+    });
+  });
+
+  it('раскладывает заново при правке разлиновки листа без смены идентификатора', async () => {
+    const factory = createFactory();
+
+    await renderHarness(factory);
+
+    const measuresBefore = factory.createCalls();
+
+    act(() => {
+      useGeneratorStore.setState({ presetFamilies: [buildFamilyWithEditedRuling()] });
+    });
+
+    await waitFor(() => {
+      expect(factory.createCalls()).toBe(measuresBefore + 1);
+    });
+  });
 });
 
 describe('снимок страницы', () => {
   it('не содержит элементов интерфейса', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
@@ -261,7 +374,7 @@ describe('снимок страницы', () => {
   });
 
   it('рисует лист и текст, и ничего кроме', async () => {
-    const factory = createMonospaceMeasurerFactory();
+    const factory = createFactory();
 
     await renderHarness(factory);
 

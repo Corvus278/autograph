@@ -1,16 +1,24 @@
 import type { DomMeasurer, MeasurerParams } from './measure.types';
 
 /**
- * Создаёт измеритель на скрытом контейнере в конце `body`. Контейнер повторяет
- * шрифт и размер страницы, поэтому браузер считает те же размеры, что и при
- * отрисовке.
+ * Кегль контейнера, на котором снимаются ширины. Крупный: доля кегля
+ * получается делением, и на мелком кегле округление раскладки заметно сдвигало
+ * бы долю.
+ */
+const MEASURE_FONT_SIZE_PX = 200;
+
+/**
+ * Создаёт измеритель на скрытом контейнере в конце `body`. Контейнер набран
+ * шрифтом страницы на постоянном кегле, а ширина отдаётся в долях кегля: кегль
+ * у каждой страницы свой, и меряй мы в пикселях, одно и то же слово мерилось бы
+ * заново на каждом листе с другим шагом разлиновки.
  *
  * Ширину снимаем через `Range.getClientRects()`: у самого элемента ширина
  * округляется до целых пикселей, а на длинной строке набежавшая ошибка
  * заметно сдвигает перенос.
  */
 export const createDomMeasurer = (params: MeasurerParams): DomMeasurer => {
-  const { fontFamily, fontSize, lineSpacing } = params;
+  const { fontFamily } = params;
   const container = document.createElement('div');
 
   container.setAttribute('aria-hidden', 'true');
@@ -23,7 +31,7 @@ export const createDomMeasurer = (params: MeasurerParams): DomMeasurer => {
     'pointer-events: none',
   ].join('; ');
   container.style.fontFamily = fontFamily;
-  container.style.fontSize = `${fontSize}em`;
+  container.style.fontSize = `${MEASURE_FONT_SIZE_PX}px`;
   document.body.append(container);
 
   const widths = new Map<string, number>();
@@ -38,26 +46,22 @@ export const createDomMeasurer = (params: MeasurerParams): DomMeasurer => {
     container.textContent = text;
 
     const textNode = container.firstChild;
-    let width = 0;
+    let widthPx = 0;
 
     if (textNode) {
       const range = document.createRange();
 
       range.selectNodeContents(textNode);
-      width = [...range.getClientRects()].reduce((total, rect) => {
+      widthPx = [...range.getClientRects()].reduce((total, rect) => {
         return total + rect.width;
       }, 0);
     }
 
+    const width = widthPx / MEASURE_FONT_SIZE_PX;
+
     widths.set(text, width);
 
     return width;
-  };
-
-  const measureLineHeight = (): number => {
-    container.textContent = 'Ад';
-
-    return container.getBoundingClientRect().height + lineSpacing;
   };
 
   const destroy = (): void => {
@@ -65,5 +69,5 @@ export const createDomMeasurer = (params: MeasurerParams): DomMeasurer => {
     widths.clear();
   };
 
-  return { measureWidth, measureLineHeight, destroy };
+  return { measureWidth, destroy };
 };

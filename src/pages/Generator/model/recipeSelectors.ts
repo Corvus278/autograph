@@ -1,4 +1,6 @@
+import type { PaperFamily } from '../lib/paper/paper.types';
 import { buildRunRecipe, JPEG_QUALITY, RENDER_SCALE } from '../lib/recipe/buildRunRecipe';
+import { createSheetSequence } from '../lib/recipe/pickSheetSequence';
 import type { PageOpticsRecipe, RunRecipe } from '../lib/recipe/recipe.types';
 
 /**
@@ -87,6 +89,50 @@ export const pickPageSheetId = (
  */
 export const selectPageSheetId = (state: GeneratorState, pageIndex: number): string => {
   return pickPageSheetId(state, selectRunRecipe(state, pageIndex + 1), pageIndex);
+};
+
+/**
+ * Листы страниц прогона одной раздачей: лист страницы `i` тот же, что отдаёт
+ * `selectPageSheetId(state, i)`, но рецепт прогона не собирается — раздача
+ * наращивается по мере запросов и запоминается. Проход по всем страницам
+ * остаётся линейным, а число страниц заранее знать не нужно.
+ *
+ * Ручной выбор перебивает раздачу целиком — выбранный лист встаёт на все
+ * страницы.
+ *
+ * @param selection — выбор экземпляра листа и seed прогона
+ * @param family — выбранная семья; `null` — семьи нет, остаётся выбранный лист
+ * @returns идентификатор экземпляра листа страницы по её номеру
+ */
+export const buildPageSheetSequence = (
+  selection: Pick<GeneratorState, 'sheetId' | 'isSheetPinned' | 'runSeed'>,
+  family: PaperFamily | null
+): ((pageIndex: number) => string) => {
+  const { sheetId, isSheetPinned, runSeed } = selection;
+
+  if (isSheetPinned || !family) {
+    return () => {
+      return sheetId;
+    };
+  }
+
+  const sheetAt = createSheetSequence(runSeed, family.sheets);
+
+  return (pageIndex) => {
+    return sheetAt(pageIndex).id;
+  };
+};
+
+/**
+ * Раздача листов по страницам по одному состоянию генератора.
+ *
+ * @param state — состояние генератора
+ * @returns идентификатор экземпляра листа страницы по её номеру
+ */
+export const selectPageSheetSequence = (
+  state: GeneratorState
+): ((pageIndex: number) => string) => {
+  return buildPageSheetSequence(state, selectActiveFamily(state) || null);
 };
 
 /**

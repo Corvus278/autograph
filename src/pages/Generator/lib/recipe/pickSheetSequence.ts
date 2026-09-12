@@ -31,16 +31,64 @@ export const toPageSeed = (seed: number, pageIndex: number, salt: number): numbe
 };
 
 /**
- * Раздаёт экземпляры листов по страницам: соседним страницам достаются разные
- * экземпляры, пока в семье есть из чего выбирать.
+ * Раздача экземпляров листов по страницам, которая наращивается по запросу:
+ * лист страницы достраивает раздачу до неё и запоминает, поэтому проход по
+ * страницам подряд линеен, а число страниц заранее знать не нужно.
  *
- * Правило соседства — против самого заметного признака подделки: две подряд
- * идущие страницы с одной и той же фотографией листа выдают, что бумага
+ * Соседним страницам достаются разные экземпляры, пока в семье есть из чего
+ * выбирать. Правило соседства — против самого заметного признака подделки: две
+ * подряд идущие страницы с одной и той же фотографией листа выдают, что бумага
  * нарисована, а не снята.
  *
- * Последовательность растёт хвостом: первые `n` элементов не зависят от того,
- * сколько страниц запросили, — выбор страницы определяется её собственным
- * подпотоком и листом предыдущей страницы.
+ * Выбор страницы определяется её собственным подпотоком и листом предыдущей
+ * страницы, поэтому раздача не зависит ни от порядка запросов, ни от того,
+ * сколько страниц запросили.
+ *
+ * @param seed — seed прогона
+ * @param sheets — экземпляры выбранной семьи
+ * @returns лист страницы по её номеру; на пустой семье запрос отказывает
+ */
+export const createSheetSequence = (
+  seed: number,
+  sheets: PaperSheet[]
+): ((pageIndex: number) => PaperSheet) => {
+  const sequence: PaperSheet[] = [];
+
+  return (pageIndex) => {
+    while (sequence.length <= pageIndex) {
+      const previous = sequence.at(-1);
+      /**
+       * На семье из одного экземпляра отбор соседа отсекает всё — тогда повтор
+       * допускается: это не ошибка, а единственная возможность.
+       */
+      const candidates = sheets.filter((sheet) => {
+        return sheet.id !== previous?.id;
+      });
+      const pool = candidates.length > 0 ? candidates : sheets;
+      const random = mulberry32(toPageSeed(seed, sequence.length, SHEET_SALT));
+      const picked = pool[randomInt(random, 0, pool.length - 1)];
+
+      if (!picked) {
+        throw new Error('Семья листов пуста: выбирать экземпляр не из чего');
+      }
+
+      sequence.push(picked);
+    }
+
+    const sheet = sequence[pageIndex];
+
+    if (!sheet) {
+      throw new Error(`Нет страницы с номером ${pageIndex}`);
+    }
+
+    return sheet;
+  };
+};
+
+/**
+ * Экземпляры листов для заданного числа страниц — начало раздачи
+ * `createSheetSequence`: первые `n` элементов не зависят от того, сколько
+ * страниц запросили.
  *
  * @param seed — seed прогона
  * @param sheets — экземпляры выбранной семьи; пустым список не бывает
@@ -52,27 +100,9 @@ export const pickSheetSequence = (
   sheets: PaperSheet[],
   pageCount: number
 ): PaperSheet[] => {
-  const sequence: PaperSheet[] = [];
+  const sheetAt = createSheetSequence(seed, sheets);
 
-  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
-    const previous = sequence.at(-1);
-    /**
-     * На семье из одного экземпляра отбор соседа отсекает всё — тогда повтор
-     * допускается: это не ошибка, а единственная возможность.
-     */
-    const candidates = sheets.filter((sheet) => {
-      return sheet.id !== previous?.id;
-    });
-    const pool = candidates.length > 0 ? candidates : sheets;
-    const random = mulberry32(toPageSeed(seed, pageIndex, SHEET_SALT));
-    const picked = pool[randomInt(random, 0, pool.length - 1)];
-
-    if (!picked) {
-      throw new Error('Семья листов пуста: выбирать экземпляр не из чего');
-    }
-
-    sequence.push(picked);
-  }
-
-  return sequence;
+  return Array.from({ length: pageCount }, (_page, pageIndex) => {
+    return sheetAt(pageIndex);
+  });
 };

@@ -1,9 +1,15 @@
-import type { DomMeasurer, MeasurerParams } from '../lib/measure/measure.types';
+import type { GeometryCorrection } from '../lib/calibrate/calibrate.types';
+import type {
+  DomMeasurer,
+  FontMetrics,
+  MeasurerParams,
+} from '../lib/measure/measure.types';
+import type { PaperFamily } from '../lib/paper/paper.types';
 
 /**
- * Параметры, от которых зависят переносы и разбивка на страницы. Всё
- * остальное — поворот блока, цвет чернил, сдвиги, искажения — на разбивку не
- * влияет и в ключ кэша не входит, поэтому меняется без повторного измерения.
+ * Параметры, от которых зависит раскладка текста по страницам. Всё остальное —
+ * цвет чернил, искажения, номер показанной страницы — на раскладку не влияет и
+ * в ключ кэша не входит, поэтому меняется без повторного измерения.
  */
 export type LayoutParams = {
   /**
@@ -12,20 +18,45 @@ export type LayoutParams = {
   text: string;
 
   /**
-   * Ширина блока текста в пикселях.
+   * Семейство шрифта, которым набран текст.
    */
-  blockWidth: number;
+  fontFamily: string;
 
   /**
-   * Высота, доступная под текст на странице, в пикселях. `Infinity` — предела
-   * нет, весь текст ложится на одну страницу.
+   * Метрики шрифта в долях кегля: по ним выводятся кегль, отступы и шаг строк
+   * каждой страницы.
    */
-  availableHeight: number;
+  metrics: FontMetrics;
 
   /**
-   * Шрифт, размер и межстрочный интервал, которыми набран текст.
+   * Ручная поправка геометрии в долях шага разлиновки.
    */
-  measurerParams: MeasurerParams;
+  correction: GeometryCorrection;
+
+  /**
+   * Запас снизу в долях шага разлиновки листа страницы.
+   */
+  bottomMargin: number;
+
+  /**
+   * Seed прогона: из него раздаются листы по страницам.
+   */
+  runSeed: number;
+
+  /**
+   * Выбранная семья вместе с подмешанными в неё своими листами.
+   */
+  family: PaperFamily;
+
+  /**
+   * Выбранный экземпляр листа. На раскладку влияет, только когда закреплён.
+   */
+  sheetId: string;
+
+  /**
+   * Экземпляр закреплён вручную и стоит на всех страницах прогона.
+   */
+  isSheetPinned: boolean;
 };
 
 /**

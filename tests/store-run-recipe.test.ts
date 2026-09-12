@@ -1,12 +1,32 @@
+import type * as BuildRunRecipeModule from '@pages/Generator/lib/recipe/buildRunRecipe';
+import { buildRunRecipe } from '@pages/Generator/lib/recipe/buildRunRecipe';
+import { selectActiveFamily } from '@pages/Generator/model/paperSelectors';
 import {
   selectPageSheetId,
+  selectPageSheetSequence,
   selectRunRecipe,
 } from '@pages/Generator/model/recipeSelectors';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
 } from '@pages/Generator/model/useGeneratorStore';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Сборка рецепта под шпионом: по числу вызовов видно, пересобирается ли рецепт
+ * на каждой странице. Шпион зовёт настоящую сборку — состав рецепта не меняется.
+ */
+vi.mock('@pages/Generator/lib/recipe/buildRunRecipe', async (importOriginal) => {
+  const actual = await importOriginal<typeof BuildRunRecipeModule>();
+
+  return { ...actual, buildRunRecipe: vi.fn(actual.buildRunRecipe) };
+});
+
+/**
+ * Длинный прогон: на нём пересборка рецепта на каждой странице дала бы
+ * квадратичное число вызовов.
+ */
+const LONG_RUN_PAGE_COUNT = 50;
 
 /**
  * Прогон на нескольких страницах: на одной странице совпадение рецептов ещё
@@ -100,6 +120,61 @@ describe('экземпляр листа страницы', () => {
 
     expect(store().isSheetPinned).toBe(false);
     expect(pageSheetIds()).toEqual(recipeSheetIds);
+  });
+});
+
+describe('последовательность листов прогона', () => {
+  /**
+   * Листы длинного прогона из одной последовательности.
+   *
+   * @returns идентификаторы экземпляров по страницам
+   */
+  const sequenceSheetIds = (): string[] => {
+    const sheetIdAt = selectPageSheetSequence(store());
+
+    return Array.from({ length: LONG_RUN_PAGE_COUNT }, (_page, pageIndex) => {
+      return sheetIdAt(pageIndex);
+    });
+  };
+
+  /**
+   * Листы длинного прогона, запрошенные у селектора страницы по одной.
+   *
+   * @returns идентификаторы экземпляров по страницам
+   */
+  const pageByPageSheetIds = (): string[] => {
+    return Array.from({ length: LONG_RUN_PAGE_COUNT }, (_page, pageIndex) => {
+      return selectPageSheetId(store(), pageIndex);
+    });
+  };
+
+  it('совпадает с листом каждой страницы, запрошенным по отдельности', () => {
+    expect(selectActiveFamily(store())?.sheets.length).toBeGreaterThanOrEqual(3);
+    expect(sequenceSheetIds()).toEqual(pageByPageSheetIds());
+  });
+
+  it('с закреплённым листом ставит его на все страницы', () => {
+    store().selectSheet('grid-3');
+
+    expect(sequenceSheetIds()).toEqual(pageByPageSheetIds());
+    expect(new Set(sequenceSheetIds())).toEqual(new Set(['grid-3']));
+  });
+
+  it('не пересобирает рецепт на каждой странице', () => {
+    const buildRunRecipeSpy = vi.mocked(buildRunRecipe);
+
+    buildRunRecipeSpy.mockClear();
+    pageByPageSheetIds();
+
+    /**
+     * Шпион видит сборки: селектор страницы собирает рецепт на каждый вызов.
+     */
+    expect(buildRunRecipeSpy).toHaveBeenCalledTimes(LONG_RUN_PAGE_COUNT);
+
+    buildRunRecipeSpy.mockClear();
+    sequenceSheetIds();
+
+    expect(buildRunRecipeSpy.mock.calls.length).toBeLessThanOrEqual(1);
   });
 });
 

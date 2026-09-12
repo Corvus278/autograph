@@ -12,7 +12,7 @@ export {
   normalizeInkColor,
   pickInkColor,
 } from './inkPalette';
-export { pickSheetSequence } from './pickSheetSequence';
+export { createSheetSequence, pickSheetSequence } from './pickSheetSequence';
 export type {
   BuildRunRecipeParams,
   ContourRecipe,

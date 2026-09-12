@@ -6,14 +6,15 @@ import type { FontsReadySource, MeasurerParams } from './measure.types';
  * пользователь.
  *
  * `load()` тянет только запрошенное начертание, `ready` дожидается остальных
- * шрифтов документа — нужны оба.
+ * шрифтов документа — нужны оба. Кегль в запросе роли не играет: грузится
+ * начертание целиком.
  */
 export const waitForFont = async (
   params: MeasurerParams,
   fonts: FontsReadySource = document.fonts
 ): Promise<void> => {
-  const { fontFamily, fontSize } = params;
+  const { fontFamily } = params;
 
-  await fonts.load(`${fontSize}em "${fontFamily}"`);
+  await fonts.load(`1em "${fontFamily}"`);
   await fonts.ready;
 };

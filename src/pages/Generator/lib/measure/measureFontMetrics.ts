@@ -160,12 +160,7 @@ export const loadFontMetrics = async (
     return cached;
   }
 
-  /**
-   * Кегль запроса на загрузку роли не играет — грузится начертание целиком.
-   */
-  const params = { fontFamily, fontSize: 1, lineSpacing: 0 };
-
-  await waitForFont(params, fonts || document.fonts);
+  await waitForFont({ fontFamily }, fonts || document.fonts);
 
   return measureFontMetrics(fontFamily, createProbe);
 };

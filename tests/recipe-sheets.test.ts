@@ -1,4 +1,8 @@
-import { buildRunRecipe, pickSheetSequence } from '@pages/Generator/lib/recipe';
+import {
+  buildRunRecipe,
+  createSheetSequence,
+  pickSheetSequence,
+} from '@pages/Generator/lib/recipe';
 import { describe, expect, it } from 'vitest';
 
 import { ALL_DISTORTION_FLAGS } from './helpers/distortion-flags';
@@ -56,6 +60,36 @@ describe('pickSheetSequence', () => {
 
   it('нулевое число страниц даёт пустую последовательность', () => {
     expect(pickSheetSequence(1, buildFamily(2).sheets, 0)).toEqual([]);
+  });
+});
+
+describe('createSheetSequence', () => {
+  it('в любом порядке запросов отдаёт те же листы, что и последовательность целиком', () => {
+    const { sheets } = buildFamily(4);
+
+    for (let seed = 0; seed < 20; seed += 1) {
+      const whole = pickSheetSequence(seed, sheets, PAGE_COUNT);
+      const sheetAt = createSheetSequence(seed, sheets);
+      const pageIndexes = [7, 2, 19, 0, 13, 7];
+
+      expect(
+        pageIndexes.map((pageIndex) => {
+          return sheetAt(pageIndex).id;
+        })
+      ).toEqual(
+        pageIndexes.map((pageIndex) => {
+          return whole[pageIndex]?.id;
+        })
+      );
+    }
+  });
+
+  it('на пустой семье отказывает при запросе листа', () => {
+    const sheetAt = createSheetSequence(1, []);
+
+    expect(() => {
+      return sheetAt(0);
+    }).toThrow();
   });
 });
 
