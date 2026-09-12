@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 
 import { buildPaperFamilies } from '@pages/Generator/config/paperFamilies';
 import type { PaperFamily, PaperSheet } from '@pages/Generator/lib/paper';
-import { computeNormalizeScale, fitSheetToPage } from '@pages/Generator/lib/paper';
+import {
+  buildSheetRuling,
+  computeNormalizeScale,
+  fitSheetToPage,
+} from '@pages/Generator/lib/paper';
 import { parsePaperProfiles } from '@pages/Generator/model/paperProfiles';
 import { describe, expect, it } from 'vitest';
 
@@ -32,6 +36,7 @@ const DRIFT_TOLERANCE = 0.1;
 const FAMILY: PaperFamily = {
   id: 'lined',
   label: 'В линейку',
+  kind: 'lined',
   width: PAGE_WIDTH,
   height: PAGE_HEIGHT,
   ruling: {
@@ -51,6 +56,11 @@ const buildSheet = (patch: Partial<PaperSheet> = {}): PaperSheet => {
     src: '/paper/lined/1.jpg',
     width: 1500,
     height: 1900,
+    ruling: buildSheetRuling({
+      step: MEASURED_STEP,
+      firstLinePhase: FIRST_LINE_PHASE,
+      skewAngle: 0,
+    }),
     skewAngle: 0,
     measuredStep: MEASURED_STEP,
     normalizeScale: computeNormalizeScale(MEASURED_STEP, CANONICAL_STEP),

@@ -19,6 +19,7 @@ import type {
   SheetImageData,
 } from '../src/pages/Generator/lib/paper';
 import {
+  buildSheetRuling,
   computeNormalizeScale,
   detectRuling,
   detectSkewAngle,
@@ -162,8 +163,8 @@ const decodePhoto = async (
 };
 
 /**
- * Собирает характеристики одного экземпляра. Разлиновку не сохраняет: она
- * принадлежит семье, экземпляр приводится к её шагу коэффициентом нормировки.
+ * Собирает характеристики одного экземпляра вместе с его разлиновкой в
+ * пикселях фотографии: ненайденные поля сборка разлиновки заменяет фолбэком.
  */
 const buildSheetProfile = (
   photo: DecodedPhoto,
@@ -180,6 +181,7 @@ const buildSheetProfile = (
       ...sheet,
       width: photo.width,
       height: photo.height,
+      ruling: buildSheetRuling({ ...detection, skewAngle }),
       skewAngle,
       measuredStep: detection.step,
       normalizeScale: computeNormalizeScale(detection.step, ruling.step),

@@ -1,4 +1,12 @@
-import type { LightingField, PaperSheet, PaperTexture } from '../lib/paper/paper.types';
+import type {
+  LightingField,
+  MarginLineSide,
+  PaperMargins,
+  PaperSheet,
+  PaperTexture,
+  SheetRuling,
+} from '../lib/paper/paper.types';
+import { buildSheetRuling } from '../lib/paper/sheetRuling';
 
 /**
  * Разобранный JSON — не то же самое, что объект нужного типа: и артефакт
@@ -90,6 +98,63 @@ const parseTexture = (value: unknown): PaperTexture | null => {
 };
 
 /**
+ * Край линии поля из JSON.
+ *
+ * @param value — разобранное значение
+ * @returns край; `null` — края нет или он нечитаем
+ */
+const parseMarginLineSide = (value: unknown): MarginLineSide | null => {
+  return value === 'left' || value === 'right' ? value : null;
+};
+
+/**
+ * Поля листа из JSON. Нечитаемое поле становится нулём: сборка разлиновки
+ * считает такую сторону ненайденной и отступает с неё фолбэком.
+ *
+ * @param value — разобранное значение
+ * @returns поля листа
+ */
+const parseMargins = (value: unknown): PaperMargins => {
+  const margins: Record<string, unknown> = isJsonRecord(value) ? value : {};
+
+  return {
+    top: toFiniteNumber(margins.top, 0),
+    right: toFiniteNumber(margins.right, 0),
+    bottom: toFiniteNumber(margins.bottom, 0),
+    left: toFiniteNumber(margins.left, 0),
+  };
+};
+
+/**
+ * Разлиновка экземпляра из JSON. Запись прежней формы разлиновки не несёт: шаг,
+ * фаза и наклон берутся из полей самого экземпляра, поля и линия поля —
+ * фолбэком.
+ *
+ * @param value — разобранный экземпляр
+ * @returns разлиновка экземпляра
+ */
+const parseSheetRuling = (value: Record<string, unknown>): SheetRuling => {
+  const { ruling } = value;
+
+  if (!isJsonRecord(ruling)) {
+    return buildSheetRuling({
+      step: toFiniteNumber(value.measuredStep, 0),
+      firstLinePhase: toFiniteNumber(value.firstLinePhase, 0),
+      skewAngle: toFiniteNumber(value.skewAngle, 0),
+    });
+  }
+
+  return buildSheetRuling({
+    step: toFiniteNumber(ruling.step, 0),
+    firstLinePhase: toFiniteNumber(ruling.firstLinePhase, 0),
+    skewAngle: toFiniteNumber(ruling.skewAngle, 0),
+    margins: parseMargins(ruling.margins),
+    marginLineX: toFiniteNumber(ruling.marginLineX, 0) || null,
+    marginLineSide: parseMarginLineSide(ruling.marginLineSide),
+  });
+};
+
+/**
  * Экземпляр листа из JSON. Обязательны только идентификатор и фотография:
  * экземпляр без них нечем показать и не с чем связать, поэтому такой
  * отбрасывается. Остальное — измерения, и отсутствующее измерение заменяется
@@ -116,6 +181,7 @@ export const parsePaperSheet = (value: unknown): PaperSheet | null => {
     src,
     width: toFiniteNumber(value.width, 0),
     height: toFiniteNumber(value.height, 0),
+    ruling: parseSheetRuling(value),
     skewAngle: toFiniteNumber(value.skewAngle, 0),
     measuredStep: toFiniteNumber(value.measuredStep, 0),
     normalizeScale: toFiniteNumber(value.normalizeScale, 1),

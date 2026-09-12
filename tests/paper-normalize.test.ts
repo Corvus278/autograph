@@ -17,17 +17,19 @@ const FAMILY: Pick<PaperFamily, 'ruling'> = {
   },
 };
 
-const SHEET_BASE: Omit<PaperSheet, 'measuredStep' | 'normalizeScale' | 'firstLinePhase'> =
-  {
-    id: 'sheet-1',
-    label: 'Лист 1',
-    src: '/sheet-1.jpg',
-    width: 1600,
-    height: 2000,
-    skewAngle: 0.7,
-    lighting: null,
-    texture: null,
-  };
+const SHEET_BASE: Omit<
+  PaperSheet,
+  'ruling' | 'measuredStep' | 'normalizeScale' | 'firstLinePhase'
+> = {
+  id: 'sheet-1',
+  label: 'Лист 1',
+  src: '/sheet-1.jpg',
+  width: 1600,
+  height: 2000,
+  skewAngle: 0.7,
+  lighting: null,
+  texture: null,
+};
 
 describe('computeNormalizeScale', () => {
   it('приводит измеренный шаг к каноническому', () => {
@@ -88,6 +90,30 @@ describe('buildNormalizedSheet', () => {
 
     expect(sheet.skewAngle).toBe(SHEET_BASE.skewAngle);
     expect(sheet.src).toBe(SHEET_BASE.src);
+  });
+
+  it('собирает разлиновку экземпляра из измерений и наклона', () => {
+    const margins = { top: 120, right: 90, bottom: 100, left: 70 };
+    const sheet = buildNormalizedSheet(
+      {
+        step: 64,
+        firstLinePhase: 56,
+        margins,
+        marginLineX: 1400,
+        marginLineSide: 'right',
+      },
+      FAMILY,
+      SHEET_BASE
+    );
+
+    expect(sheet.ruling).toEqual({
+      step: 64,
+      firstLinePhase: 56,
+      skewAngle: SHEET_BASE.skewAngle,
+      margins,
+      marginLineX: 1400,
+      marginLineSide: 'right',
+    });
   });
 });
 

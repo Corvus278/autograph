@@ -48,6 +48,14 @@ const SHEET: PaperSheet = {
   src: '/paper/sheet-1.jpg',
   width: 400,
   height: 800,
+  ruling: {
+    step: RULING_STEP,
+    firstLinePhase: 100,
+    skewAngle: SKEW_ANGLE,
+    margins: { top: 100, right: 100, bottom: 0, left: 0 },
+    marginLineX: MARGIN_LINE_X,
+    marginLineSide: 'left',
+  },
   skewAngle: SKEW_ANGLE,
   measuredStep: RULING_STEP,
   normalizeScale: 1,
@@ -59,6 +67,7 @@ const SHEET: PaperSheet = {
 const FAMILY: PaperFamily = {
   id: 'lined',
   label: 'В линейку',
+  kind: 'lined',
   width: PAGE_WIDTH,
   height: PAGE_HEIGHT,
   ruling: {

@@ -1,4 +1,5 @@
 import type { PaperFamily, PaperRuling, PaperSheet } from '../lib/paper/paper.types';
+import { buildSheetRuling } from '../lib/paper/sheetRuling';
 
 import type { PaperSheetProfiles, PhotoSize } from './config.types';
 
@@ -137,6 +138,8 @@ const buildPlainSheets = (
 ): PaperSheet[] => {
   const sheets: PaperSheet[] = [];
   const normalizeScale = Math.max(page.width / size.width, page.height / size.height);
+  const measuredStep = ruling.step / normalizeScale;
+  const firstLinePhase = ruling.firstLineOffset / normalizeScale;
 
   for (let number = 1; number <= PRESET_SHEET_COUNT; number += 1) {
     sheets.push({
@@ -145,10 +148,11 @@ const buildPlainSheets = (
       src: `/paper/${familyId}/${number}.jpg`,
       width: size.width,
       height: size.height,
+      ruling: buildSheetRuling({ step: measuredStep, firstLinePhase, skewAngle: 0 }),
       skewAngle: 0,
-      measuredStep: ruling.step / normalizeScale,
+      measuredStep,
       normalizeScale,
-      firstLinePhase: ruling.firstLineOffset / normalizeScale,
+      firstLinePhase,
       lighting: null,
       texture: null,
     });
@@ -178,6 +182,7 @@ const PLAIN_FAMILIES: PaperFamily[] = [
   {
     id: GRID_FAMILY_ID,
     label: 'В клетку',
+    kind: GRID_RULING.kind,
     ...GRID_PAGE_SIZE,
     ruling: GRID_RULING,
     sheets: buildPlainSheets(
@@ -191,6 +196,7 @@ const PLAIN_FAMILIES: PaperFamily[] = [
   {
     id: LINED_FAMILY_ID,
     label: 'В линейку',
+    kind: LINED_RULING.kind,
     ...LINED_PAGE_SIZE,
     ruling: LINED_RULING,
     sheets: buildPlainSheets(

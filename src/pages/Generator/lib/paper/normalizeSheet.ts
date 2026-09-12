@@ -1,4 +1,12 @@
 import type { PaperFamily, PaperSheet, RulingDetection } from './paper.types';
+import { buildSheetRuling } from './sheetRuling';
+
+/**
+ * Измерения, из которых собирается экземпляр: шаг и фаза есть всегда, поля и
+ * линия поля — только если детектор до них дошёл.
+ */
+type SheetDetection = Pick<RulingDetection, 'step' | 'firstLinePhase'> &
+  Partial<Pick<RulingDetection, 'margins' | 'marginLineX' | 'marginLineSide'>>;
 
 /**
  * Коэффициент приведения экземпляра к канону семьи.
@@ -48,16 +56,17 @@ export const toPhotoLength = (sheet: PaperSheet, canonicalLength: number): numbe
  *
  * @param detection — измеренная на фотографии разлиновка
  * @param family — семья, к канону которой приводится экземпляр
- * @param sheet — остальные характеристики экземпляра
- * @returns экземпляр с посчитанным коэффициентом нормировки
+ * @param sheet — остальные характеристики экземпляра; наклон идёт и в разлиновку
+ * @returns экземпляр с разлиновкой и посчитанным коэффициентом нормировки
  */
 export const buildNormalizedSheet = (
-  detection: Pick<RulingDetection, 'step' | 'firstLinePhase'>,
+  detection: SheetDetection,
   family: Pick<PaperFamily, 'ruling'>,
-  sheet: Omit<PaperSheet, 'measuredStep' | 'normalizeScale' | 'firstLinePhase'>
+  sheet: Omit<PaperSheet, 'ruling' | 'measuredStep' | 'normalizeScale' | 'firstLinePhase'>
 ): PaperSheet => {
   return {
     ...sheet,
+    ruling: buildSheetRuling({ ...detection, skewAngle: sheet.skewAngle }),
     measuredStep: detection.step,
     normalizeScale: computeNormalizeScale(detection.step, family.ruling.step),
     firstLinePhase: detection.firstLinePhase,

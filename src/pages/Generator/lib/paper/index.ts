@@ -11,6 +11,7 @@ export {
 } from './extractLighting';
 export { extractTexture } from './extractTexture';
 export { fitSheetToPage } from './fitSheetToPage';
+export { mirrorSheetRuling } from './mirrorSheetRuling';
 export {
   buildNormalizedSheet,
   computeNormalizeScale,
@@ -32,6 +33,9 @@ export type {
   RulingKind,
   SheetImageData,
   SheetPlacement,
+  SheetRuling,
+  SheetRulingSource,
   TextureMap,
 } from './paper.types';
+export { buildSheetRuling, MARGIN_FALLBACK_STEPS, resolveFirstLine } from './sheetRuling';
 export { synthesizeLighting } from './synthesizeLighting';
