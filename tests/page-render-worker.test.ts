@@ -46,7 +46,6 @@ const TASK: PageRenderTask = {
     width: 16,
     height: 32,
     isMirrored: true,
-    placement: { x: -20, y: -10, width: 220, height: 440 },
   },
   textureSrc: '/texture.png',
   font: { family: 'Abram', url: '/fonts/Abram.ttf', hasVariance: true },
@@ -128,8 +127,17 @@ describe('клиент отрисовки в воркере', () => {
 
     const [request] = recorder.requests;
 
-    expect(request?.sheet?.image).toBe(BITMAP);
-    expect(request?.sheet?.isMirrored).toBe(true);
+    /**
+     * Фотография ложится во всю страницу, поэтому с ней едут только её кадр и
+     * сторона разворота, а размер страницы — кадр листа из задания.
+     */
+    expect(request?.sheet).toStrictEqual({
+      image: BITMAP,
+      width: 16,
+      height: 32,
+      isMirrored: true,
+    });
+    expect([request?.pageWidth, request?.pageHeight]).toEqual([200, 400]);
     expect(request?.params.scale).toBe(3);
     expect(request?.textureSrc).toBe('/texture.png');
     expect(request?.font?.url).toBe('/fonts/Abram.ttf');

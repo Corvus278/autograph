@@ -2,8 +2,8 @@ import type * as BuildRunRecipeModule from '@pages/Generator/lib/recipe/buildRun
 import { buildRunRecipe } from '@pages/Generator/lib/recipe/buildRunRecipe';
 import { selectActiveFamily } from '@pages/Generator/model/paperSelectors';
 import {
+  buildPageSheetSequence,
   selectPageSheetId,
-  selectPageSheetSequence,
   selectRunRecipe,
 } from '@pages/Generator/model/recipeSelectors';
 import {
@@ -130,7 +130,10 @@ describe('последовательность листов прогона', () 
    * @returns идентификаторы экземпляров по страницам
    */
   const sequenceSheetIds = (): string[] => {
-    const sheetIdAt = selectPageSheetSequence(store());
+    const sheetIdAt = buildPageSheetSequence(
+      store(),
+      selectActiveFamily(store()) || null
+    );
 
     return Array.from({ length: LONG_RUN_PAGE_COUNT }, (_page, pageIndex) => {
       return sheetIdAt(pageIndex);

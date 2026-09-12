@@ -1,14 +1,13 @@
 import { SUBSTITUTE_FONTS } from '../config';
 import type { BlockGeometry } from '../lib/calibrate/calibrate.types';
-import { deriveCanonGeometry } from '../lib/calibrate/deriveGeometry';
+import { deriveCanonGeometry, deriveGeometry } from '../lib/calibrate/deriveGeometry';
 import type { Page } from '../lib/paginate/paginate.types';
-import { fitSheetToPage } from '../lib/paper';
 import { buildDistortions } from '../lib/randomize/buildDistortions';
 import { buildLineDistortions } from '../lib/randomize/buildLineDistortions';
 import type { LineDistortion, WordDistortion } from '../lib/randomize/randomize.types';
 import type { PageRenderParams, RenderLine, RenderPage } from '../lib/render';
 
-import type { PageRenderInput } from './pageRender.types';
+import type { CanonGeometryInput, PageRenderInput } from './pageRender.types';
 
 /**
  * Пустые искажения: нужны, когда слов или строк на странице больше, чем
@@ -43,41 +42,17 @@ export const isMirroredPage = (pageIndex: number): boolean => {
 };
 
 /**
- * Наклон блока на отражённой странице.
+ * Номер страницы, которая действительно показывается. Номер в сторе обгоняет
+ * раскладку, пока она не пересчитана под укоротившийся текст: тогда
+ * показывается первая страница. Предпросмотр и сохранение берут номер отсюда,
+ * иначе сохранилась бы не та страница, что на экране.
  *
- * Отражение переворачивает фотографию, а вместе с ней и наклон её разлиновки:
- * линия, шедшая вниз слева направо, после отражения идёт вниз справа налево.
- * Блок обязан наклониться в ту же сторону, иначе текст расходится с линиями
- * веером — на удвоенный угол к краям листа.
- *
- * @param skewAngle — наклон разлиновки экземпляра в градусах
- * @param isMirrored — страница отражена: правая половина разворота
- * @returns наклон блока текста в градусах
+ * @param pageIndex — номер страницы в сторе, считая с нуля
+ * @param pageCount — число страниц раскладки
+ * @returns номер показанной страницы, считая с нуля
  */
-export const mirrorSkewAngle = (skewAngle: number, isMirrored: boolean): number => {
-  return isMirrored ? -skewAngle : skewAngle;
-};
-
-/**
- * Отступ блока на отражённой странице.
- *
- * Отражается не отдельный отступ, а вся разлиновка вместе с листом: линия поля
- * после отражения оказывается у противоположного края, и блок отступает от неё
- * на ту же величину, что и на нечётной странице. Отдельной настройки для этого
- * не нужно — величина выводится из того же `leftPadding`, что посчитала
- * автокалибровка.
- *
- * @param pageWidth — ширина листа в канонических пикселях
- * @param leftPadding — отступ блока на нечётной странице
- * @param blockWidth — ширина блока текста
- * @returns отступ блока от левого края отражённой страницы
- */
-export const mirrorLeftPadding = (
-  pageWidth: number,
-  leftPadding: number,
-  blockWidth: number
-): number => {
-  return Math.max(0, pageWidth - leftPadding - blockWidth);
+export const resolveShownPageIndex = (pageIndex: number, pageCount: number): number => {
+  return pageIndex < pageCount ? pageIndex : 0;
 };
 
 /**
@@ -133,17 +108,13 @@ const buildRenderPage = (page: Page, input: PageRenderInput): RenderPage => {
 
 /**
  * Геометрия блока по разлиновке семьи, метрикам шрифта и ручной поправке.
- * Отдельной функцией, потому что тем же расчётом пользуется раскладка: разойдись
- * они — переносы посчитались бы по одной ширине блока, а отрисовались по другой.
  * Поправка в долях шага переводится в пиксели по шагу канона семьи.
  *
  * @param input — семья, метрики и поправка
  * @returns геометрия блока в канонических пикселях семьи
  * @deprecated sheet-native-ruling — геометрия страницы: `selectBlockGeometry`
  */
-export const buildBlockGeometry = (
-  input: Pick<PageRenderInput, 'family' | 'metrics' | 'correction'>
-): BlockGeometry => {
+export const buildBlockGeometry = (input: CanonGeometryInput): BlockGeometry => {
   const { family, metrics, correction } = input;
 
   return deriveCanonGeometry(
@@ -160,30 +131,29 @@ export const buildBlockGeometry = (
  * Кегль сюда приходит уже в пикселях: em — единица DOM, и живёт она только на
  * границе с измерителем текста, а рендереру нужны пиксели страницы.
  *
- * Блок наклоняется на угол разлиновки выбранного экземпляра: фотография не
- * выправляется, текст выкладывается вдоль её наклона. На отражённой странице
- * наклон разлиновки переворачивается вместе с фотографией, и блок идёт за ним.
+ * Геометрия блока выводится из разлиновки страницы тем же расчётом, которым
+ * страницу раскладывает `lib/paginate`: разойдись они — переносы посчитались бы
+ * по одной ширине блока, а отрисовались по другой. На чётной странице
+ * разлиновка приходит уже отражённой (`model/geometrySelectors.ts`), поэтому
+ * отступ от перенесённой линии поля и сдвиг наклонных линий выходят из неё
+ * сами. Блок наклоняется на угол той же разлиновки: фотография не
+ * выправляется, текст выкладывается вдоль её наклона.
  *
- * Фотография при этом ложится не во всю страницу, а прямоугольником, который
- * считает `lib/paper/fitSheetToPage.ts`: её разлиновка приводится к канону
- * семьи, по которому посчитана раскладка.
+ * Страница равна кадру листа, и фотография ложится на неё целиком — от угла до
+ * угла, без масштаба и сдвига.
  *
- * @param input — состояние генератора, раскладка и разрешение
+ * @param input — раскладка страницы, разлиновка её листа и разрешение
  * @returns параметры отрисовки страницы
  */
 export const buildPageRenderParams = (input: PageRenderInput): PageRenderParams => {
-  const { page, family, sheet, sheetImage, metrics, isMirrored, scale } = input;
-  const geometry = buildBlockGeometry(input);
-  const leftPadding = isMirrored
-    ? mirrorLeftPadding(family.width, geometry.leftPadding, geometry.blockWidth)
-    : geometry.leftPadding;
+  const { page, calibration, sheetImage, metrics, correction, scale } = input;
+  const geometry = deriveGeometry(calibration, metrics, correction);
 
   return {
     page: buildRenderPage(page, input),
-    background:
-      sheetImage && sheet
-        ? { image: sheetImage, ...fitSheetToPage(sheet, family, isMirrored) }
-        : null,
+    background: sheetImage
+      ? { image: sheetImage, width: calibration.width, height: calibration.height }
+      : null,
     inkColor: input.inkColor,
     ink: input.ink,
     glyphs: input.glyphs,
@@ -192,9 +162,9 @@ export const buildPageRenderParams = (input: PageRenderInput): PageRenderParams 
       fontSizePx: geometry.fontSizePx,
       lineSpacing: geometry.lineSpacing,
       topOffset: geometry.topOffset,
-      leftPadding,
+      leftPadding: geometry.leftPadding,
       blockWidth: geometry.blockWidth,
-      blockRotate: mirrorSkewAngle(sheet?.skewAngle || 0, isMirrored),
+      blockRotate: calibration.ruling.skewAngle,
       fontMetrics: metrics,
     },
     scale,

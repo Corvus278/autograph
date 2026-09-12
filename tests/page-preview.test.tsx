@@ -1,8 +1,10 @@
 /**
  * @vitest-environment jsdom
  */
+import { PAGE_WIDTH } from '@pages/Generator/config';
 import type { PaperFamily } from '@pages/Generator/lib/paper';
 import { clearLayoutCache } from '@pages/Generator/model/measureLayout';
+import { findSheet } from '@pages/Generator/model/paperSelectors';
 import { selectPageSheetId } from '@pages/Generator/model/recipeSelectors';
 import {
   DEFAULT_GENERATOR_STATE,
@@ -110,7 +112,7 @@ const getDrawnWords = (): unknown[] => {
  * Отступ блока текста от левого края листа: рендерер сдвигает на него начало
  * координат перед отрисовкой строк.
  *
- * @returns отступ в канонических пикселях семьи
+ * @returns отступ в пикселях кадра листа страницы
  */
 const getBlockLeftPadding = (): unknown => {
   const [translate] = findCalls(getCanvasFrame(getPageCanvas()), 'translate');
@@ -355,6 +357,150 @@ describe('кэш разбивки', () => {
     await waitFor(() => {
       expect(factory.createCalls()).toBe(measuresBefore + 1);
     });
+  });
+});
+
+describe('листы с разными пропорциями', () => {
+  /**
+   * Кадр второго листа: и ширина, и пропорции отличаются от первого. Высота
+   * подобрана так, чтобы при запасе в восемь шагов на нём помещалась одна
+   * строка, а на первом листе — две.
+   */
+  const OTHER_FRAME = { width: 300, height: 360 };
+
+  /**
+   * Текст, которому на листах семьи-модели нужно больше двух страниц. Исходный
+   * текст из `beforeEach` раскладывается ровно на две.
+   */
+  const LONG_TEXT = 'раз два три четыре пять шесть семь восемь девять десять';
+
+  /**
+   * Семья-модель с теми же идентификаторами листов, но с другим кадром у
+   * второго листа.
+   *
+   * @returns семья из двух листов с разными пропорциями
+   */
+  const buildFramedFamily = (): PaperFamily => {
+    return {
+      ...FAMILY,
+      sheets: FAMILY.sheets.map((sheet, index) => {
+        return index === 0 ? sheet : buildSheet(sheet.id, sheet.ruling, OTHER_FRAME);
+      }),
+    };
+  };
+
+  const FRAMED_FAMILY = buildFramedFamily();
+
+  /**
+   * Пропорции кадра листа, доставшегося странице в прогоне.
+   *
+   * @param pageIndex — номер страницы, считая с нуля
+   * @returns высота кадра, делённая на ширину
+   */
+  const getFrameRatio = (pageIndex: number): number => {
+    const sheet = findSheet(
+      FRAMED_FAMILY,
+      selectPageSheetId(useGeneratorStore.getState(), pageIndex)
+    );
+
+    return (sheet?.height || 0) / (sheet?.width || 1);
+  };
+
+  /**
+   * Пропорции холста предпросмотра.
+   *
+   * @returns высота холста, делённая на ширину
+   */
+  const getCanvasRatio = (): number => {
+    const canvas = getPageCanvas();
+
+    return canvas.height / canvas.width;
+  };
+
+  const renderFramedHarness = async (): Promise<void> => {
+    useGeneratorStore.setState({
+      presetFamilies: [FRAMED_FAMILY],
+      bottomMargin: TWO_LINE_BOTTOM_MARGIN,
+    });
+    await renderHarness(createFactory());
+    await waitFor(() => {
+      expect(screen.getAllByRole('button')).toHaveLength(2);
+    });
+  };
+
+  it('держит ширину предпросмотра, а высоту ведёт за кадром листа страницы', async () => {
+    await renderFramedHarness();
+
+    expect(getFrameRatio(0)).not.toBeCloseTo(getFrameRatio(1));
+
+    for (const pageIndex of [0, 1, 0]) {
+      act(() => {
+        useGeneratorStore.getState().goToPage(pageIndex);
+      });
+
+      await waitFor(() => {
+        expect(getCanvasRatio()).toBeCloseTo(getFrameRatio(pageIndex), 2);
+      });
+
+      expect(getPageCanvas().width).toBe(PAGE_WIDTH);
+      expect(screen.getByTestId('page').style.width).toBe(`${PAGE_WIDTH}px`);
+    }
+  });
+
+  it('оставляет пользователя на странице, когда пересчёт меняет число страниц', async () => {
+    await renderFramedHarness();
+
+    act(() => {
+      useGeneratorStore.getState().goToPage(1);
+    });
+
+    await waitFor(() => {
+      expect(getCanvasRatio()).toBeCloseTo(getFrameRatio(1), 2);
+    });
+
+    act(() => {
+      useGeneratorStore.getState().setText(LONG_TEXT);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button').length).toBeGreaterThan(2);
+    });
+
+    expect(useGeneratorStore.getState().pageIndex).toBe(1);
+    expect(getCanvasRatio()).toBeCloseTo(getFrameRatio(1), 2);
+  });
+
+  it('оставляет пользователя на странице, когда страниц становится меньше, но она ещё есть', async () => {
+    const { text } = useGeneratorStore.getState();
+
+    await renderFramedHarness();
+
+    act(() => {
+      useGeneratorStore.getState().setText(LONG_TEXT);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button').length).toBeGreaterThan(2);
+    });
+
+    act(() => {
+      useGeneratorStore.getState().goToPage(1);
+    });
+
+    await waitFor(() => {
+      expect(getCanvasRatio()).toBeCloseTo(getFrameRatio(1), 2);
+    });
+
+    act(() => {
+      useGeneratorStore.getState().setText(text);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button')).toHaveLength(2);
+    });
+
+    expect(useGeneratorStore.getState().pageIndex).toBe(1);
+    expect(getCanvasRatio()).toBeCloseTo(getFrameRatio(1), 2);
   });
 });
 

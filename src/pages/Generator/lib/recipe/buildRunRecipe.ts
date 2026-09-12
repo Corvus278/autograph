@@ -12,13 +12,6 @@ import type { BuildRunRecipeParams, RunRecipe } from './recipe.types';
 export const JPEG_QUALITY = 0.92;
 
 /**
- * Во сколько раз снимок крупнее страницы в предпросмотре. Тройка — нижняя
- * граница требования: резкий растр экранного размера читается как отрисовка,
- * повышенное разрешение с последующей мягкостью — как фотография.
- */
-export const RENDER_SCALE = 3;
-
-/**
  * Амплитуда смещения контрольных точек контура в долях em. Порядок сотых:
  * заметно при сравнении двух вхождений буквы, но буква остаётся узнаваемой.
  */
@@ -127,7 +120,6 @@ export const buildRunRecipe = ({
     },
     optics: {
       jpegQuality: JPEG_QUALITY,
-      renderScale: RENDER_SCALE,
     },
   };
 };

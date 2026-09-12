@@ -25,11 +25,12 @@ type PagePreviewStoryProps = {
 
 /**
  * Источник отрисовки собирается из стора, поэтому story задаёт только строки
- * страницы, а лист, шрифт и искажения ставит в сторе.
+ * страницы, а лист, шрифт и искажения ставит в сторе. Листа раскладки у
+ * страницы нет — источник берёт лист из раздачи прогона.
  */
 const PagePreviewStory: FC<PagePreviewStoryProps> = (props) => {
   const { page } = props;
-  const source = usePageRender([page]);
+  const source = usePageRender([{ ...page, sheetId: '' }]);
 
   return <PagePreview source={source} />;
 };

@@ -1,22 +1,35 @@
 /**
  * @vitest-environment jsdom
  */
+import type { LayoutPage } from '@pages/Generator/lib/paginate/paginate.types';
 import type {
   PageRenderTask,
   RunRenderPlan,
 } from '@pages/Generator/model/pageTask.types';
+import { buildPageSheetSequence } from '@pages/Generator/model/recipeSelectors';
 import { useExportPage } from '@pages/Generator/model/useExportPage';
 import type { ExportDeps } from '@pages/Generator/model/useExportPage.types';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
 } from '@pages/Generator/model/useGeneratorStore';
+import { usePageRender } from '@pages/Generator/model/usePageRender';
+import { useRunRender } from '@pages/Generator/model/useRunRender';
 import { SaveBar } from '@pages/Generator/ui/Generator/SaveBar';
 import { Button } from '@shared/ui/Button';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FC } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildRenderFamily } from './helpers/paper-family';
 
 type HarnessProps = {
   /**
@@ -238,6 +251,57 @@ describe('сохранение страницы', () => {
 
     expect(buildTask).toHaveBeenCalledTimes(1);
     expect(buildTask).toHaveBeenCalledWith(2);
+  });
+
+  it('сохраняет показанную страницу, когда номер обогнал раскладку', async () => {
+    const family = buildRenderFamily();
+
+    /**
+     * Номер страницы за пределами раскладки: так бывает, пока раскладка не
+     * пересчитана под укоротившийся текст, и предпросмотр в это время
+     * показывает первую страницу.
+     */
+    useGeneratorStore.setState({
+      presetFamilies: [family],
+      familyId: family.id,
+      sheetId: family.sheets[0]?.id || '',
+      pageIndex: 3,
+    });
+
+    const sheetIdAt = buildPageSheetSequence(useGeneratorStore.getState(), family);
+    const pages: LayoutPage[] = [0, 1].map((pageIndex) => {
+      return {
+        sheetId: sheetIdAt(pageIndex),
+        lines: [{ text: `страница ${pageIndex}`, paragraphIndex: 0 }],
+      };
+    });
+    const renderPage = vi.fn<ExportDeps['renderPage']>(() => {
+      return Promise.resolve('data:image/jpeg;base64,page');
+    });
+    const download = vi.fn();
+    const { result } = renderHook(() => {
+      return {
+        source: usePageRender(pages),
+        control: useExportPage(useRunRender(pages), { renderPage, download }),
+      };
+    });
+
+    await act(async () => {
+      await result.current.control.save();
+    });
+
+    const [task] = renderPage.mock.calls[0] || [];
+    const { source } = result.current;
+    const shown = source?.buildParams(1);
+
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(shown?.page.lines.length).toBeGreaterThan(0);
+    expect(task?.params.page).toEqual(shown?.page);
+    expect(task?.params.geometry).toEqual(shown?.geometry);
+    expect([task?.pageWidth, task?.pageHeight]).toEqual([
+      source?.pageWidth,
+      source?.pageHeight,
+    ]);
   });
 });
 

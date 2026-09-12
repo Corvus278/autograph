@@ -9,7 +9,7 @@ import type { PageRenderTask } from './pageTask.types';
  */
 export type ExportDeps = {
   /**
-   * Растеризует страницу в повышенном разрешении и отдаёт data URL.
+   * Растеризует страницу в разрешении кадра её листа и отдаёт data URL.
    */
   renderPage: (task: PageRenderTask) => Promise<string>;
 

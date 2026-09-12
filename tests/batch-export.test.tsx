@@ -31,10 +31,10 @@ vi.mock('@shared/lib/files', () => {
 });
 
 /**
- * Множитель разрешения снимка: по нему видно, что в воркер уходит полное
- * разрешение, а не размер предпросмотра.
+ * Масштаб снимка: страница рисуется в кадре листа один к одному, а не в размере
+ * предпросмотра.
  */
-const EXPORT_SCALE = 3;
+const FRAME_SCALE = 1;
 
 const PAGE_COUNT = 4;
 
@@ -58,7 +58,7 @@ const TASK: PageRenderTask = {
       blockRotate: 0,
       fontMetrics: { fontAscent: 0.8, lineHeight: 1.2 },
     },
-    scale: EXPORT_SCALE,
+    scale: FRAME_SCALE,
   },
   sheet: null,
   textureSrc: null,
@@ -233,7 +233,7 @@ describe('отмена выгрузки', () => {
 });
 
 describe('отзывчивость интерфейса во время отрисовки', () => {
-  it('не рисует страницу на главном потоке и отдаёт заданиям полное разрешение', async () => {
+  it('не рисует страницу на главном потоке и отдаёт заданиям кадр листа', async () => {
     const createElement = vi.spyOn(document, 'createElement');
 
     render(<BatchBar plan={PLAN} />);
@@ -255,7 +255,7 @@ describe('отзывчивость интерфейса во время отри
     expect(canvasCalls).toHaveLength(0);
     expect(renderPageInWorker).toHaveBeenCalledTimes(PAGE_COUNT);
     expect(vi.mocked(renderPageInWorker).mock.calls[0]?.[0].params.scale).toBe(
-      EXPORT_SCALE
+      FRAME_SCALE
     );
 
     createElement.mockRestore();

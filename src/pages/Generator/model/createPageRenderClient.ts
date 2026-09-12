@@ -116,7 +116,6 @@ export const createPageRenderClient = (deps: PageRenderClientDeps): PageRenderCl
       width: sheet.width,
       height: sheet.height,
       isMirrored: sheet.isMirrored,
-      placement: sheet.placement,
     };
   };
 

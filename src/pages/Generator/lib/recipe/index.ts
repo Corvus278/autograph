@@ -3,7 +3,6 @@ export {
   CONTOUR_AMPLITUDE,
   CONTOUR_CELL_SIZE,
   JPEG_QUALITY,
-  RENDER_SCALE,
 } from './buildRunRecipe';
 export {
   INK_COLOR_JITTER,

@@ -523,13 +523,7 @@ const drawPage = (
   ctx.scale(scale, scale);
 
   if (layers.hasBackground && background) {
-    ctx.drawImage(
-      background.image,
-      background.x,
-      background.y,
-      background.width,
-      background.height
-    );
+    ctx.drawImage(background.image, 0, 0, background.width, background.height);
   }
 
   if (layers.hasInk) {

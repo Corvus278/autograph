@@ -745,11 +745,11 @@ const buildEmptyBand = (probe: RasterProbe): RasterBand | null => {
     topOffset +
     fontMetrics.fontAscent * fontSizePx +
     Math.max(0, params.page.lines.length - 1) * lineStep;
-  const top = Math.ceil(Math.max(background.y, lastBaseline + lineStep));
-  const limit = Math.floor(Math.min(family.height, background.y + background.height));
+  const top = Math.ceil(Math.max(0, lastBaseline + lineStep));
+  const limit = Math.floor(Math.min(family.height, background.height));
   const bottom = Math.min(limit, top + MAX_BAND_STEPS * family.ruling.step);
-  const left = Math.round(background.x + background.width * BAND_LEFT_SHARE);
-  const right = Math.round(background.x + background.width * BAND_RIGHT_SHARE);
+  const left = Math.round(background.width * BAND_LEFT_SHARE);
+  const right = Math.round(background.width * BAND_RIGHT_SHARE);
 
   if (bottom - top < MIN_BAND_STEPS * family.ruling.step || right - left < 2) {
     return null;

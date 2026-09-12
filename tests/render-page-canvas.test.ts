@@ -214,7 +214,7 @@ const NO_INK: InkModulationSource = { lighting: null, texture: null, seed: 1 };
 const buildParams = (overrides: Partial<PageRenderParams> = {}): PageRenderParams => {
   return {
     page: PAGE,
-    background: { image: BACKGROUND_IMAGE, x: 0, y: 0, width: 800, height: 1000 },
+    background: { image: BACKGROUND_IMAGE, width: 800, height: 1000 },
     inkColor: INK_COLOR,
     ink: NO_INK,
     glyphs: null,

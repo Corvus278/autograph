@@ -1,11 +1,22 @@
-import { fitSheetToPage } from '../lib/paper';
-
-import { buildPageRenderParams } from './buildPageRenderParams';
+import { buildPageRenderParams, isMirroredPage } from './buildPageRenderParams';
+import { getPageCalibration } from './geometrySelectors';
 import { mirrorLightingField } from './mirrorLightingField';
 import type { PageRenderTask, PageTaskInput } from './pageTask.types';
 
 /**
+ * Масштаб снимка: страница рисуется в кадре своего листа один к одному. Выше
+ * разрешения фотографии детализации взять неоткуда, а ниже — значило бы
+ * выбросить уже снятую текстуру бумаги.
+ */
+const FRAME_SCALE = 1;
+
+/**
  * Собирает задание на отрисовку страницы.
+ *
+ * Страница равна кадру доставшегося ей листа — и тогда, когда фон скрыт: иначе
+ * скрытие фона меняло бы размер снимка и положение текста на нём. Геометрия
+ * считается по разлиновке страницы (`getPageCalibration`) — той же, по
+ * которой страница разложена.
  *
  * Ресурсы в параметры не кладутся: фотография листа, карта текстуры и контуры
  * шрифта остаются адресами и подставляются уже там, где страница рисуется.
@@ -15,24 +26,22 @@ import type { PageRenderTask, PageTaskInput } from './pageTask.types';
  * Освещение при этом едет в параметрах как есть: это сетка чисел, и отразить
  * её вместе с листом дешевле здесь, чем гонять признак отражения дальше.
  *
- * @param input — состояние генератора, раскладка страницы и её ресурсы
+ * @param input — состояние генератора, раскладка страницы, её лист и ресурсы
  * @returns задание на отрисовку
  */
 export const buildPageTask = (input: PageTaskInput): PageRenderTask => {
-  const { family, sheet, isBackgroundHidden, isMirrored, runSeed, font, quality } = input;
-  const sheetLighting = sheet?.lighting || null;
-  const lighting = isMirrored ? mirrorLightingField(sheetLighting) : sheetLighting;
-  const hasBackground = Boolean(sheet) && !isBackgroundHidden;
+  const { page, family, sheet, pageIndex, isBackgroundHidden, runSeed, font, quality } =
+    input;
+  const isMirrored = isMirroredPage(pageIndex);
+  const lighting = isMirrored ? mirrorLightingField(sheet.lighting) : sheet.lighting;
 
   return {
     params: buildPageRenderParams({
-      page: input.page,
-      family,
-      sheet,
+      page,
+      calibration: getPageCalibration(family, sheet, pageIndex),
       sheetImage: null,
       metrics: input.metrics,
       correction: input.correction,
-      isMirrored,
       inkColor: input.inkColor,
       fontFamily: input.fontFamily,
       flags: input.flags,
@@ -41,22 +50,15 @@ export const buildPageTask = (input: PageTaskInput): PageRenderTask => {
       seed: input.seed,
       ink: { lighting, texture: null, seed: runSeed },
       glyphs: null,
-      scale: input.scale,
+      scale: FRAME_SCALE,
     }),
-    sheet:
-      hasBackground && sheet
-        ? {
-            src: sheet.src,
-            width: sheet.width,
-            height: sheet.height,
-            isMirrored,
-            placement: fitSheetToPage(sheet, family, isMirrored),
-          }
-        : null,
-    textureSrc: sheet?.texture?.src || null,
+    sheet: isBackgroundHidden
+      ? null
+      : { src: sheet.src, width: sheet.width, height: sheet.height, isMirrored },
+    textureSrc: sheet.texture?.src || null,
     font,
-    pageWidth: family.width,
-    pageHeight: family.height,
+    pageWidth: sheet.width,
+    pageHeight: sheet.height,
     quality,
   };
 };

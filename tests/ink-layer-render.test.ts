@@ -95,8 +95,6 @@ const buildParams = (): PageRenderParams => {
     },
     background: {
       image: BACKGROUND_IMAGE,
-      x: 0,
-      y: 0,
       width: PAGE_WIDTH,
       height: PAGE_HEIGHT,
     },

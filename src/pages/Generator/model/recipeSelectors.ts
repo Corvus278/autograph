@@ -1,5 +1,5 @@
 import type { PaperFamily } from '../lib/paper/paper.types';
-import { buildRunRecipe, JPEG_QUALITY, RENDER_SCALE } from '../lib/recipe/buildRunRecipe';
+import { buildRunRecipe, JPEG_QUALITY } from '../lib/recipe/buildRunRecipe';
 import { createSheetSequence } from '../lib/recipe/pickSheetSequence';
 import type { PageOpticsRecipe, RunRecipe } from '../lib/recipe/recipe.types';
 
@@ -10,7 +10,6 @@ import type { PageOpticsRecipe, RunRecipe } from '../lib/recipe/recipe.types';
  */
 const DEFAULT_OPTICS: PageOpticsRecipe = {
   jpegQuality: JPEG_QUALITY,
-  renderScale: RENDER_SCALE,
 };
 
 import type { GeneratorState } from './generator.types';
@@ -124,25 +123,13 @@ export const buildPageSheetSequence = (
 };
 
 /**
- * Раздача листов по страницам по одному состоянию генератора.
- *
- * @param state — состояние генератора
- * @returns идентификатор экземпляра листа страницы по её номеру
- */
-export const selectPageSheetSequence = (
-  state: GeneratorState
-): ((pageIndex: number) => string) => {
-  return buildPageSheetSequence(state, selectActiveFamily(state) || null);
-};
-
-/**
  * Оптика прогона: чем растеризуется страница. Отдельным селектором, потому что
- * сборка рецепта проходит по всем страницам, а вызывающей стороне нужны две
- * величины.
+ * сборка рецепта проходит по всем страницам, а вызывающей стороне нужна одна
+ * величина.
  *
  * @param state — состояние генератора
  * @param pageCount — число страниц прогона
- * @returns качество кодирования и множитель разрешения снимка
+ * @returns качество кодирования снимка
  */
 export const selectRunOptics = (
   state: GeneratorState,

@@ -4,7 +4,6 @@ import {
   CONTOUR_AMPLITUDE,
   CONTOUR_CELL_SIZE,
   JPEG_QUALITY,
-  RENDER_SCALE,
 } from '@pages/Generator/lib/recipe';
 import { describe, expect, it } from 'vitest';
 
@@ -73,7 +72,11 @@ describe('buildRunRecipe', () => {
       amplitude: CONTOUR_AMPLITUDE,
       cellSize: CONTOUR_CELL_SIZE,
     });
-    expect(optics).toEqual({ jpegQuality: JPEG_QUALITY, renderScale: RENDER_SCALE });
+    /**
+     * Множителя разрешения в оптике нет: снимок равен кадру листа страницы, и
+     * от прогона зависит только качество кодирования.
+     */
+    expect(optics).toStrictEqual({ jpegQuality: JPEG_QUALITY });
   });
 
   it('держит частоты побуквенной обработки в границах 1..3 и обе границы достижимы', () => {

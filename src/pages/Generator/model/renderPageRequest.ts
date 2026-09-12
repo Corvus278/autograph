@@ -122,9 +122,8 @@ const resolveGlyphs = async (
 };
 
 /**
- * Фон страницы из переданной фотографии. Прямоугольник фотографии приехал в
- * задании: приводить её разлиновку к канону семьи — работа сборки задания, а не
- * отрисовки.
+ * Фон страницы из переданной фотографии. Страница равна кадру листа, поэтому
+ * фотография ложится на неё целиком.
  *
  * @param request — задание вместе с фотографией листа
  * @param createMirror — чем отражать фотографию
@@ -134,7 +133,7 @@ const resolveBackground = (
   request: RenderPageRequest,
   createMirror: CreateMirrorSurface
 ): RenderBackground | null => {
-  const { sheet } = request;
+  const { sheet, pageWidth, pageHeight } = request;
 
   if (!sheet) {
     return null;
@@ -144,7 +143,7 @@ const resolveBackground = (
     ? mirrorRenderImage(sheet.image, sheet.width, sheet.height, createMirror)
     : sheet.image;
 
-  return { image, ...sheet.placement };
+  return { image, width: pageWidth, height: pageHeight };
 };
 
 /**

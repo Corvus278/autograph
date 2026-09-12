@@ -1,4 +1,3 @@
-import type { SheetPlacement } from '../lib/paper/paper.types';
 import type { PageRenderParams } from '../lib/render';
 
 import type { PageFontSource, PageRenderTask } from './pageTask.types';
@@ -6,7 +5,8 @@ import type { PageFontSource, PageRenderTask } from './pageTask.types';
 /**
  * Фотография листа на границе воркера: битмап уезжает передачей владения, а
  * размеры нужны отражению — оно рисует фотографию в её собственный
- * прямоугольник.
+ * прямоугольник. Прямоугольника на странице у фотографии нет: страница равна
+ * её кадру.
  */
 export type RenderSheetBitmap = {
   /**
@@ -28,11 +28,6 @@ export type RenderSheetBitmap = {
    * Фотографию нужно отразить по горизонтали.
    */
   isMirrored: boolean;
-
-  /**
-   * Прямоугольник фотографии на странице в канонических пикселях семьи.
-   */
-  placement: SheetPlacement;
 };
 
 /**
@@ -67,12 +62,12 @@ export type RenderPageRequest = {
   font: PageFontSource | null;
 
   /**
-   * Ширина страницы в канонических пикселях семьи.
+   * Ширина страницы — ширина кадра её листа.
    */
   pageWidth: number;
 
   /**
-   * Высота страницы в канонических пикселях семьи.
+   * Высота страницы — высота кадра её листа.
    */
   pageHeight: number;
 

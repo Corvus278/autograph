@@ -1,14 +1,13 @@
+import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { PAGE_WIDTH } from '../config';
-import type { Page } from '../lib/paginate/paginate.types';
-import { buildRunRecipe } from '../lib/recipe';
+import type { LayoutPage, Page } from '../lib/paginate/paginate.types';
 
-import { isMirroredPage } from './buildPageRenderParams';
+import { resolveShownPageIndex } from './buildPageRenderParams';
 import { buildPageTask } from './buildPageTask';
 import type { PageFontSource, RunRenderPlan } from './pageTask.types';
 import { findSheet } from './paperSelectors';
-import { pickPageSheetId, selectRunOptics } from './recipeSelectors';
+import { buildPageSheetSequence, selectRunOptics } from './recipeSelectors';
 import { findFontUrl } from './useFontGlyphs';
 import { useGeneratorStore } from './useGeneratorStore';
 import { usePageGeometry } from './usePageGeometry';
@@ -25,19 +24,22 @@ const EMPTY_PAGE: Page = { lines: [] };
  * Что берётся из рецепта, а что из настроек, решается одним правилом: снимок
  * обязан совпадать с тем, что пользователь видит в предпросмотре. Цвет чернил,
  * почерк и геометрия приходят оттуда же, откуда их берёт предпросмотр; лист
- * страницы — из рецепта, тем же `pickPageSheetId`, которым его берёт
- * предпросмотр, поэтому страница в архиве повторяет показанную.
+ * страницы — тот, на котором она разложена, а без него — из раздачи прогона,
+ * ровно как в `usePageRender`, поэтому страница в архиве повторяет показанную.
  *
- * @param pages — страницы прогона с посчитанной раскладкой
- * @returns план отрисовки; `null` — семья листов не выбрана
+ * Снимок каждой страницы равен кадру её листа, поэтому страницы одной пачки
+ * бывают разного размера.
+ *
+ * @param pages — страницы прогона с посчитанной раскладкой и листом каждой
+ * @returns план отрисовки; `null` — семья листов не выбрана или листов в ней
+ *   нет
  */
-export const useRunRender = (pages: Page[]): RunRenderPlan | null => {
+export const useRunRender = (pages: LayoutPage[]): RunRenderPlan | null => {
   const { family, metrics, correction, fontFamily } = usePageGeometry();
   const {
     pageIndex,
     isBackgroundHidden,
     inkColor,
-    isInkColorAuto,
     flags,
     wordFrequency,
     letterFrequency,
@@ -52,7 +54,6 @@ export const useRunRender = (pages: Page[]): RunRenderPlan | null => {
         pageIndex: state.pageIndex,
         isBackgroundHidden: state.isBackgroundHidden,
         inkColor: state.inkColor,
-        isInkColorAuto: state.isInkColorAuto,
         flags: state.flags,
         wordFrequency: state.wordFrequency,
         letterFrequency: state.letterFrequency,
@@ -69,39 +70,41 @@ export const useRunRender = (pages: Page[]): RunRenderPlan | null => {
       return selectRunOptics(state, pages.length);
     })
   );
+  /**
+   * Раздача листов живёт между отрисовками: пачка просит страницы по порядку,
+   * и наращиваемая раздача проходит их за один проход.
+   */
+  const sheetIdAt = useMemo(() => {
+    return buildPageSheetSequence({ runSeed, sheetId, isSheetPinned }, family);
+  }, [runSeed, sheetId, isSheetPinned, family]);
 
-  if (!family) {
+  if (!family || family.sheets.length === 0) {
     return null;
   }
 
   const pageCount = Math.max(1, pages.length);
-  const recipe = buildRunRecipe({
-    seed: runSeed,
-    family,
-    pageCount,
-    flags,
-    inkColor: isInkColorAuto ? null : inkColor,
-    wordFrequency,
-    letterFrequency,
-  });
   const fontUrl = findFontUrl(fontFamily);
   const font: PageFontSource | null = fontUrl
     ? { family: fontFamily, url: fontUrl, hasVariance: hasContourVariance }
     : null;
-  const scale = (PAGE_WIDTH / family.width) * optics.renderScale;
 
   return {
     pageCount,
-    pageIndex,
+    pageIndex: resolveShownPageIndex(pageIndex, pages.length),
     buildTask: (index) => {
-      const pageSheetId = pickPageSheetId({ sheetId, isSheetPinned }, recipe, index);
+      const page = pages[index];
+      const sheet = findSheet(family, page?.sheetId || sheetIdAt(index));
+
+      if (!sheet) {
+        throw new Error('Семья листов пуста: страницу не на чем отрисовать');
+      }
 
       return buildPageTask({
-        page: pages[index] || EMPTY_PAGE,
+        page: page || EMPTY_PAGE,
         family,
-        sheet: findSheet(family, pageSheetId) || null,
+        sheet,
+        pageIndex: index,
         isBackgroundHidden,
-        isMirrored: isMirroredPage(index),
         metrics,
         correction,
         inkColor,
@@ -112,7 +115,6 @@ export const useRunRender = (pages: Page[]): RunRenderPlan | null => {
         seed,
         runSeed,
         font,
-        scale,
         quality: optics.jpegQuality,
       });
     },
