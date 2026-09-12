@@ -1,12 +1,33 @@
 import { buildPaperFamilies } from '@pages/Generator/config/paperFamilies';
+import { deriveGeometry, deriveTextHeight } from '@pages/Generator/lib/calibrate';
+import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
+import { MARGIN_FALLBACK_STEPS } from '@pages/Generator/lib/paper';
+import { getPageCalibration } from '@pages/Generator/model/geometrySelectors';
 import {
   PAPER_PROFILES_VERSION,
   parsePaperProfiles,
 } from '@pages/Generator/model/paperProfiles';
 import { describe, expect, it } from 'vitest';
 
+import { getLineStep } from './helpers/baseline-model';
+
 /**
- * Экземпляр в том виде, в каком его пишет скрипт сборки: карта текстуры —
+ * Разлиновка экземпляра в пикселях его фотографии: поля несимметричны и линия
+ * поля справа, как у пресет-пака, — по ним видно, что разлиновка пришла из
+ * артефакта, а не собрана фолбэком.
+ */
+const PROFILE_RULING = {
+  step: 53.5,
+  firstLinePhase: 41.2,
+  skewAngle: -0.8,
+  margins: { top: 94.7, right: 150, bottom: 90, left: 70 },
+  marginLineX: 1450,
+  marginLineSide: 'right',
+};
+
+/**
+ * Экземпляр в том виде, в каком его пишет скрипт сборки: разлиновка целиком в
+ * `ruling`, наклона, шага и нормировки на верхнем уровне нет, карта текстуры —
  * путь к файлу рядом с фотографией, а не data URL.
  */
 const buildProfile = (id: string) => {
@@ -16,9 +37,7 @@ const buildProfile = (id: string) => {
     src: `/paper/grid/${id}.jpg`,
     width: 1600,
     height: 2050,
-    skewAngle: -0.8,
-    normalizeScale: 1.04,
-    firstLinePhase: 96.5,
+    ruling: PROFILE_RULING,
     lighting: {
       gridWidth: 2,
       gridHeight: 1,
@@ -39,13 +58,25 @@ const buildArtifact = (version: number = PAPER_PROFILES_VERSION) => {
   return { version, families: { grid: [buildProfile('1')] } };
 };
 
+/**
+ * Требование `paper-profile`: страница, на которой не помещается ни одной
+ * строки, — не страница.
+ */
+const MIN_PAGE_CAPACITY = 1;
+
 describe('разбор артефакта профилей', () => {
-  it('берёт характеристики экземпляров как есть', () => {
+  it('берёт разлиновку экземпляра как есть', () => {
     const profiles = parsePaperProfiles(buildArtifact());
 
-    expect(profiles.grid?.[0]?.skewAngle).toBe(-0.8);
-    expect(profiles.grid?.[0]?.normalizeScale).toBe(1.04);
-    expect(profiles.grid?.[0]?.firstLinePhase).toBe(96.5);
+    expect(profiles.grid?.[0]?.ruling).toEqual(PROFILE_RULING);
+  });
+
+  it('устаревшие поля листа заполняет из разлиновки, а не с верхнего уровня', () => {
+    const [sheet] = parsePaperProfiles(buildArtifact()).grid || [];
+
+    expect(sheet?.measuredStep).toBe(PROFILE_RULING.step);
+    expect(sheet?.skewAngle).toBe(PROFILE_RULING.skewAngle);
+    expect(sheet?.firstLinePhase).toBe(PROFILE_RULING.firstLinePhase);
   });
 
   it('принимает карту текстуры, заданную путём к файлу', () => {
@@ -56,6 +87,7 @@ describe('разбор артефакта профилей', () => {
   });
 
   it('отбрасывает артефакт чужой версии целиком', () => {
+    expect(parsePaperProfiles(buildArtifact(PAPER_PROFILES_VERSION - 1))).toEqual({});
     expect(parsePaperProfiles(buildArtifact(PAPER_PROFILES_VERSION + 1))).toEqual({});
   });
 
@@ -79,18 +111,11 @@ describe('сборка предустановленных семей', () => {
 
     expect(grid?.sheets).toHaveLength(1);
     expect(grid?.sheets[0]?.id).toBe('1');
+    expect(grid?.sheets[0]?.ruling).toEqual(PROFILE_RULING);
     expect(lined?.sheets).toHaveLength(4);
   });
 
-  it('оставляет канон семьи из констант, а не из артефакта', () => {
-    const [gridWithProfiles] = buildPaperFamilies(parsePaperProfiles(buildArtifact()));
-    const [gridPlain] = buildPaperFamilies({});
-
-    expect(gridWithProfiles?.ruling).toEqual(gridPlain?.ruling);
-    expect(gridWithProfiles?.width).toBe(gridPlain?.width);
-  });
-
-  it('без артефакта отдаёт обе семьи с экземплярами без измерений', () => {
+  it('без артефакта отдаёт обе семьи с синтезированной разлиновкой листов', () => {
     const families = buildPaperFamilies({});
 
     expect(
@@ -98,18 +123,50 @@ describe('сборка предустановленных семей', () => {
         return family.id;
       })
     ).toEqual(['grid', 'lined']);
-    /**
-     * Измерений нет: экземпляр берёт нормировку, при которой фотография
-     * закрывает канонический лист целиком, а шаг разлиновки в пикселях
-     * фотографии выводится из той же нормировки — иначе разлиновка
-     * фотографии не села бы на канон семьи.
-     */
-    const sheet = families[0]?.sheets[0];
 
-    expect((sheet?.measuredStep || 0) * (sheet?.normalizeScale || 0)).toBeCloseTo(
-      families[0]?.ruling.step || 0,
-      9
-    );
-    expect(sheet?.lighting).toBeNull();
+    for (const family of families) {
+      for (const sheet of family.sheets) {
+        const { ruling, width, height } = sheet;
+        const fallback = ruling.step * MARGIN_FALLBACK_STEPS;
+
+        /**
+         * Шаг — доля кадра: клетка укладывается в ширину листа 33 раза,
+         * линейка в высоту — 25.
+         */
+        const expectedStep = family.kind === 'grid' ? width / 33 : height / 25;
+
+        expect(ruling.step).toBeCloseTo(expectedStep, 9);
+        expect(ruling.margins.left).toBeCloseTo(fallback, 9);
+        expect(ruling.margins.right).toBeCloseTo(fallback, 9);
+        expect(ruling.margins.bottom).toBeCloseTo(fallback, 9);
+        expect(ruling.margins.top).toBeGreaterThanOrEqual(fallback - 1e-9);
+        expect(ruling.marginLineX).toBeNull();
+        expect(ruling.marginLineSide).toBeNull();
+        expect(sheet.lighting).toBeNull();
+      }
+    }
+  });
+
+  it('без артефакта листы дают рисуемую геометрию на обеих сторонах разворота', () => {
+    for (const family of buildPaperFamilies({})) {
+      for (const sheet of family.sheets) {
+        for (const pageIndex of [0, 1]) {
+          const calibration = getPageCalibration(family, sheet, pageIndex);
+          const geometry = deriveGeometry(calibration, FALLBACK_FONT_METRICS);
+          const lineStep = getLineStep(geometry, FALLBACK_FONT_METRICS);
+          const capacity = Math.floor(
+            deriveTextHeight(calibration, geometry, 0) / lineStep
+          );
+
+          expect(geometry.blockWidth).toBeGreaterThan(0);
+          expect(geometry.leftPadding).toBeGreaterThanOrEqual(0);
+          expect(geometry.leftPadding + geometry.blockWidth).toBeLessThanOrEqual(
+            sheet.width
+          );
+          expect(geometry.topOffset).toBeGreaterThanOrEqual(0);
+          expect(capacity).toBeGreaterThanOrEqual(MIN_PAGE_CAPACITY);
+        }
+      }
+    }
   });
 });

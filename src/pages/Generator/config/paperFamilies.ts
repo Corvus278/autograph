@@ -1,3 +1,4 @@
+import { computeNormalizeScale } from '../lib/paper/normalizeSheet';
 import type { PaperFamily, PaperRuling, PaperSheet } from '../lib/paper/paper.types';
 import { buildSheetRuling } from '../lib/paper/sheetRuling';
 
@@ -9,6 +10,8 @@ import type { PaperSheetProfiles, PhotoSize } from './config.types';
  * пикселях на миллиметр клетка в пять миллиметров получает ровно пятьдесят
  * пикселей, а канонический лист выходит одного порядка с фотографиями
  * пресет-пака — коэффициент нормировки у них остаётся рядом с единицей.
+ *
+ * @deprecated sheet-native-ruling — страница равна кадру своего листа
  */
 export const CANONICAL_PX_PER_MM = 10;
 
@@ -59,6 +62,15 @@ const LINED_MARGIN_MM = { top: 15, right: 8, bottom: 12, left: 10 };
 const LINED_MARGIN_LINE_MM = 25;
 
 /**
+ * Сколько шагов разлиновки укладывается в кадр листа без измерений. Доли
+ * выведены из миллиметровых размеров тетради: 165 мм ширины на клетку в 5 мм
+ * и 205 мм высоты на шаг линейки в 8 мм. Клетка мерится по ширине, линейка —
+ * по высоте: вдоль этой стороны у каждой из них шаг и задан.
+ */
+const GRID_STEPS_ACROSS = SHEET_WIDTH_MM / GRID_CELL_MM;
+const LINED_STEPS_DOWN = Math.floor(LINED_SHEET_HEIGHT_MM / LINED_STEP_MM);
+
+/**
  * Число экземпляров в каждой предустановленной семье. Четыре — нижняя граница
  * требования: на меньшем числе правило «соседние страницы не получают один
  * экземпляр» вырождается в чередование двух фотографий.
@@ -74,6 +86,8 @@ const LINED_PHOTO_SIZE = { width: 1550, height: 2000 };
 
 /**
  * Каноническая разлиновка семьи в клетку.
+ *
+ * @deprecated sheet-native-ruling — разлиновка у каждого листа своя: `sheet.ruling`
  */
 export const GRID_RULING: PaperRuling = {
   kind: 'grid',
@@ -90,6 +104,8 @@ export const GRID_RULING: PaperRuling = {
 
 /**
  * Каноническая разлиновка семьи в линейку.
+ *
+ * @deprecated sheet-native-ruling — разлиновка у каждого листа своя: `sheet.ruling`
  */
 export const LINED_RULING: PaperRuling = {
   kind: 'lined',
@@ -112,21 +128,21 @@ export const GRID_FAMILY_ID = 'grid';
 export const LINED_FAMILY_ID = 'lined';
 
 /**
- * Экземпляры семьи без измерений: фотографии на месте, характеристики —
- * нейтральные. Такая семья работает и без артефакта профилей, только текст
- * ложится по канону семьи, а не по конкретной фотографии.
+ * Экземпляры семьи без измерений: фотографии на месте, разлиновка —
+ * синтезированная. Шаг — доля кадра, поля — фолбэком, линии поля нет: такая
+ * семья рисуется и без артефакта профилей, только строки ложатся на
+ * приблизительную разлиновку, а не на линии конкретной фотографии.
  *
- * Нормировка при этом не единица, а масштаб, при котором фотография
- * закрывает канонический лист целиком: вход по условию обрезан по краям листа,
- * поэтому без измерений разумно считать, что кадр — это и есть лист. Из того
- * же масштаба выводятся шаг и фаза в пикселях фотографии: они обязаны быть
- * согласованы с нормировкой, иначе разлиновка фотографии не села бы на канон.
+ * Нормировка и фаза считаются от масштаба, при котором фотография закрывает
+ * канонический лист целиком: их ещё читает отрисовка по канону семьи
+ * (`@deprecated sheet-native-ruling`).
  *
  * @param familyId — идентификатор семьи, к которой принадлежат экземпляры
  * @param labelPrefix — подпись семьи в списке экземпляров
- * @param ruling — канон семьи: из него берутся шаг и отступ первой линии
+ * @param ruling — канон семьи: из него берётся отступ первой линии
  * @param page — размеры канонического листа семьи в пикселях
  * @param size — размеры фотографий семьи в пикселях
+ * @param step — шаг синтезированной разлиновки в пикселях фотографии
  * @returns экземпляры семьи по порядку номеров файлов
  */
 const buildPlainSheets = (
@@ -134,12 +150,16 @@ const buildPlainSheets = (
   labelPrefix: string,
   ruling: PaperRuling,
   page: PhotoSize,
-  size: PhotoSize
+  size: PhotoSize,
+  step: number
 ): PaperSheet[] => {
   const sheets: PaperSheet[] = [];
   const normalizeScale = Math.max(page.width / size.width, page.height / size.height);
-  const measuredStep = ruling.step / normalizeScale;
-  const firstLinePhase = ruling.firstLineOffset / normalizeScale;
+  const sheetRuling = buildSheetRuling({
+    step,
+    firstLinePhase: ruling.firstLineOffset / normalizeScale,
+    skewAngle: 0,
+  });
 
   for (let number = 1; number <= PRESET_SHEET_COUNT; number += 1) {
     sheets.push({
@@ -148,11 +168,11 @@ const buildPlainSheets = (
       src: `/paper/${familyId}/${number}.jpg`,
       width: size.width,
       height: size.height,
-      ruling: buildSheetRuling({ step: measuredStep, firstLinePhase, skewAngle: 0 }),
-      skewAngle: 0,
-      measuredStep,
+      ruling: sheetRuling,
+      skewAngle: sheetRuling.skewAngle,
+      measuredStep: sheetRuling.step,
       normalizeScale,
-      firstLinePhase,
+      firstLinePhase: sheetRuling.firstLinePhase,
       lighting: null,
       texture: null,
     });
@@ -182,7 +202,7 @@ const PLAIN_FAMILIES: PaperFamily[] = [
   {
     id: GRID_FAMILY_ID,
     label: 'В клетку',
-    kind: GRID_RULING.kind,
+    kind: 'grid',
     ...GRID_PAGE_SIZE,
     ruling: GRID_RULING,
     sheets: buildPlainSheets(
@@ -190,13 +210,14 @@ const PLAIN_FAMILIES: PaperFamily[] = [
       'Клетка',
       GRID_RULING,
       GRID_PAGE_SIZE,
-      GRID_PHOTO_SIZE
+      GRID_PHOTO_SIZE,
+      GRID_PHOTO_SIZE.width / GRID_STEPS_ACROSS
     ),
   },
   {
     id: LINED_FAMILY_ID,
     label: 'В линейку',
-    kind: LINED_RULING.kind,
+    kind: 'lined',
     ...LINED_PAGE_SIZE,
     ruling: LINED_RULING,
     sheets: buildPlainSheets(
@@ -204,15 +225,17 @@ const PLAIN_FAMILIES: PaperFamily[] = [
       'Линейка',
       LINED_RULING,
       LINED_PAGE_SIZE,
-      LINED_PHOTO_SIZE
+      LINED_PHOTO_SIZE,
+      LINED_PHOTO_SIZE.height / LINED_STEPS_DOWN
     ),
   },
 ];
 
 /**
  * Собирает предустановленные семьи, подставляя посчитанные скриптом сборки
- * характеристики экземпляров. Разлиновка при этом всегда берётся из констант:
- * канон — решение, а не измерение, и от содержимого артефакта не зависит.
+ * экземпляры. Разлиновка экземпляра берётся из артефакта как есть, а
+ * нормировка — из шага его разлиновки и канона семьи: в артефакте её нет, а
+ * отрисовка по канону её ещё читает (`@deprecated sheet-native-ruling`).
  *
  * Семья, которой в артефакте нет, остаётся с экземплярами без измерений —
  * пресеты доступны сразу, даже если артефакт ещё не собран.
@@ -224,7 +247,20 @@ export const buildPaperFamilies = (profiles: PaperSheetProfiles): PaperFamily[] 
   return PLAIN_FAMILIES.reduce<PaperFamily[]>((acc, family) => {
     const measured = profiles[family.id];
 
-    acc.push(measured && measured.length > 0 ? { ...family, sheets: measured } : family);
+    if (!measured || measured.length === 0) {
+      acc.push(family);
+
+      return acc;
+    }
+
+    const sheets = measured.map((sheet) => {
+      return {
+        ...sheet,
+        normalizeScale: computeNormalizeScale(sheet.ruling.step, family.ruling.step),
+      };
+    });
+
+    acc.push({ ...family, sheets });
 
     return acc;
   }, []);

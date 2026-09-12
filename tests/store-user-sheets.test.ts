@@ -149,6 +149,102 @@ describe('переживание перезагрузки', () => {
   });
 });
 
+/**
+ * Ключ списка лёгких характеристик в локальном хранилище.
+ */
+const INDEX_KEY = 'handwriting.paper.user-sheets';
+
+/**
+ * Кладёт в хранилище запись списка и исходный файл так, как их оставила
+ * сессия, — литералом, мимо сериализатора: проверяется чтение чужой записи, а
+ * не согласие сериализатора с самим собой.
+ */
+const seedStorage = (entry: Record<string, unknown>) => {
+  globalThis.localStorage.setItem(INDEX_KEY, JSON.stringify([entry]));
+  globalThis.localStorage.setItem(
+    `handwriting.paper.source.${String(entry.id)}`,
+    PHOTO_SRC
+  );
+};
+
+describe('форма записи в хранилище', () => {
+  it('пишет разлиновку целиком и не дублирует её устаревшими полями', () => {
+    const record = buildRecord('user-1');
+
+    store().addUserSheet(record);
+
+    const [entry] = JSON.parse(globalThis.localStorage.getItem(INDEX_KEY) || '[]');
+
+    expect(entry.ruling).toEqual(record.sheet.ruling);
+    expect(entry).not.toHaveProperty('measuredStep');
+    expect(entry).not.toHaveProperty('skewAngle');
+    expect(entry).not.toHaveProperty('firstLinePhase');
+  });
+
+  it('берёт шаг, фазу и наклон записи новой формы из её разлиновки', () => {
+    const ruling = {
+      step: 58,
+      firstLinePhase: 21,
+      skewAngle: 0.7,
+      margins: { top: 137, right: 95, bottom: 100, left: 80 },
+      marginLineX: 1110,
+      marginLineSide: 'right',
+    };
+
+    seedStorage({
+      familyId: 'grid',
+      isAnalyzed: true,
+      id: 'user-new',
+      label: 'Лист новой формы',
+      width: 1200,
+      height: 1600,
+      ruling,
+    });
+    store().restoreUserSheets();
+
+    const [restored] = store().userSheets;
+
+    expect(restored?.sheet.ruling).toEqual(ruling);
+    expect(restored?.sheet.measuredStep).toBe(ruling.step);
+    expect(restored?.sheet.firstLinePhase).toBe(ruling.firstLinePhase);
+    expect(restored?.sheet.skewAngle).toBe(ruling.skewAngle);
+  });
+
+  it('оставляет в списке запись прежней формы с приблизительной разлиновкой', () => {
+    seedStorage({
+      familyId: 'grid',
+      isAnalyzed: true,
+      id: 'user-legacy',
+      label: 'Лист прежней формы',
+      width: 1200,
+      height: 1600,
+      skewAngle: -0.6,
+      measuredStep: 48,
+      normalizeScale: 1.04,
+      firstLinePhase: 30,
+    });
+    store().restoreUserSheets();
+
+    const family = selectPaperFamilies(store()).find((item) => {
+      return item.id === 'grid';
+    });
+
+    /**
+     * Поля — полтора шага от края кадра: 72 px. Верхнее опускается до
+     * ближайшей линии: 30 + 48 = 78.
+     */
+    expect(family?.sheets.at(-1)?.ruling).toEqual({
+      step: 48,
+      firstLinePhase: 30,
+      skewAngle: -0.6,
+      margins: { top: 78, right: 72, bottom: 72, left: 72 },
+      marginLineX: null,
+      marginLineSide: null,
+    });
+    expect(family?.sheets.at(-1)?.id).toBe('user-legacy');
+  });
+});
+
 describe('удаление пользовательского листа', () => {
   it('убирает лист из списка и переводит выбор на оставшийся экземпляр', () => {
     store().addUserSheet(buildRecord('user-1'));

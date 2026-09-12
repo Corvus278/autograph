@@ -158,7 +158,12 @@ const parseSheetRuling = (value: Record<string, unknown>): SheetRuling => {
  * Экземпляр листа из JSON. Обязательны только идентификатор и фотография:
  * экземпляр без них нечем показать и не с чем связать, поэтому такой
  * отбрасывается. Остальное — измерения, и отсутствующее измерение заменяется
- * нейтральным: лист остаётся в списке, просто ложится по канону семьи.
+ * нейтральным: лист остаётся в списке, а недостающие поля разлиновки
+ * берутся фолбэком.
+ *
+ * Наклон, шаг и фаза на верхнем уровне листа повторяют разлиновку и берутся
+ * из неё: запись новой формы их не несёт, и чтение с верхнего уровня дало бы
+ * нулевой шаг при найденной разлиновке.
  *
  * @param value — разобранное значение
  * @returns экземпляр листа или `null`, если его нечем показать
@@ -175,17 +180,19 @@ export const parsePaperSheet = (value: unknown): PaperSheet | null => {
     return null;
   }
 
+  const ruling = parseSheetRuling(value);
+
   return {
     id,
     label: toText(value.label) || id,
     src,
     width: toFiniteNumber(value.width, 0),
     height: toFiniteNumber(value.height, 0),
-    ruling: parseSheetRuling(value),
-    skewAngle: toFiniteNumber(value.skewAngle, 0),
-    measuredStep: toFiniteNumber(value.measuredStep, 0),
+    ruling,
+    skewAngle: ruling.skewAngle,
+    measuredStep: ruling.step,
     normalizeScale: toFiniteNumber(value.normalizeScale, 1),
-    firstLinePhase: toFiniteNumber(value.firstLinePhase, 0),
+    firstLinePhase: ruling.firstLinePhase,
     lighting: parseLighting(value.lighting),
     texture: parseTexture(value.texture),
   };

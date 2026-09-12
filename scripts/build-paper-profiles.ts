@@ -5,22 +5,19 @@ import { chromium } from 'playwright';
 
 import type {
   PaperProfilesArtifact,
-  PaperSheetProfiles,
+  PaperSheetProfile,
 } from '../src/pages/Generator/config/config.types';
 import {
   GRID_FAMILY_ID,
-  GRID_RULING,
   LINED_FAMILY_ID,
-  LINED_RULING,
 } from '../src/pages/Generator/config/paperFamilies';
 import type {
-  PaperRuling,
+  PaperMargins,
   PaperSheet,
   SheetImageData,
 } from '../src/pages/Generator/lib/paper';
 import {
   buildSheetRuling,
-  computeNormalizeScale,
   detectRuling,
   detectSkewAngle,
   extractLighting,
@@ -46,23 +43,19 @@ const ROOT = process.cwd();
 
 /**
  * Версия формата артефакта. Совпадает с `PAPER_PROFILES_VERSION` в модели:
- * при расхождении приложение отбрасывает артефакт и берёт пресеты из констант.
+ * при расхождении приложение отбрасывает артефакт и берёт листы с
+ * синтезированной разлиновкой.
  */
-const ARTIFACT_VERSION = 1;
+const ARTIFACT_VERSION = 2;
 
 /**
- * Семья пресет-пака: идентификатор, канон разлиновки и подпись экземпляров.
+ * Семья пресет-пака: идентификатор и подпись экземпляров.
  */
 type PaperFamilyPreset = {
   /**
    * Идентификатор семьи, он же имя каталога с фотографиями в `public/paper`.
    */
   id: string;
-
-  /**
-   * Канон разлиновки семьи, к которому нормируются экземпляры.
-   */
-  ruling: PaperRuling;
 
   /**
    * Подпись, от которой строятся подписи экземпляров.
@@ -97,9 +90,14 @@ type DecodedGray = {
  */
 type SheetProfileResult = {
   /**
-   * Характеристики экземпляра.
+   * Характеристики экземпляра в форме артефакта.
    */
-  sheet: PaperSheet;
+  sheet: PaperSheetProfile;
+
+  /**
+   * Стороны, поля с которых детектор не нашёл и которые взяты фолбэком.
+   */
+  fallbackSides: (keyof PaperMargins)[];
 
   /**
    * Пиксели карты текстуры или `null`, если карта не строилась.
@@ -132,9 +130,14 @@ type TextureEncodeInput = {
  * Семьи пресет-пака. Фотографии лежат в `public/paper/<id>`.
  */
 const FAMILIES: PaperFamilyPreset[] = [
-  { id: GRID_FAMILY_ID, ruling: GRID_RULING, label: 'Клетка' },
-  { id: LINED_FAMILY_ID, ruling: LINED_RULING, label: 'Линейка' },
+  { id: GRID_FAMILY_ID, label: 'Клетка' },
+  { id: LINED_FAMILY_ID, label: 'Линейка' },
 ];
+
+/**
+ * Стороны полей в порядке печати: сверху по часовой стрелке.
+ */
+const MARGIN_SIDES: (keyof PaperMargins)[] = ['top', 'right', 'bottom', 'left'];
 
 /**
  * Полутоновая выжимка фотографии, снятая в браузере: декодировать jpeg в node
@@ -165,14 +168,25 @@ const decodePhoto = async (
 /**
  * Собирает характеристики одного экземпляра вместе с его разлиновкой в
  * пикселях фотографии: ненайденные поля сборка разлиновки заменяет фолбэком.
+ * Фотография при этом ни к какой общей мере не приводится.
+ *
+ * Лист, на котором не нашёлся сам шаг, валит сборку: ручного ввода в скрипте
+ * нет, а пресет без разлиновки выпускать в пак нельзя.
  */
 const buildSheetProfile = (
   photo: DecodedPhoto,
-  ruling: PaperRuling,
+  path: string,
   sheet: Pick<PaperSheet, 'id' | 'label' | 'src'>
 ): SheetProfileResult => {
   const skewAngle = detectSkewAngle(photo);
   const detection = detectRuling(photo, { skewAngle });
+
+  if (!detection.isDetected || detection.step <= 0) {
+    throw new Error(
+      `Разлиновка не найдена: ${path} (уверенность ${detection.confidence.toFixed(3)})`
+    );
+  }
+
   const lighting = extractLighting(photo);
   const textureMap = extractTexture(photo, lighting);
 
@@ -182,10 +196,6 @@ const buildSheetProfile = (
       width: photo.width,
       height: photo.height,
       ruling: buildSheetRuling({ ...detection, skewAngle }),
-      skewAngle,
-      measuredStep: detection.step,
-      normalizeScale: computeNormalizeScale(detection.step, ruling.step),
-      firstLinePhase: detection.firstLinePhase,
       lighting,
       texture: {
         src: `${sheet.src.replace(/\.[^.]+$/, '')}.texture.png`,
@@ -194,8 +204,35 @@ const buildSheetProfile = (
         amplitude: textureMap.amplitude,
       },
     },
+    fallbackSides: MARGIN_SIDES.filter((side) => {
+      return !detection.margins[side];
+    }),
     texturePixels: toTexturePixels(textureMap),
   };
+};
+
+/**
+ * Строка отчёта по экземпляру: всё, что попадает в артефакт из разлиновки, —
+ * чтобы сверить её с фотографией, не открывая json.
+ */
+const describeProfile = (name: string, result: SheetProfileResult): string => {
+  const { sheet, fallbackSides } = result;
+  const { step, firstLinePhase, skewAngle, margins, marginLineX, marginLineSide } =
+    sheet.ruling;
+  const marginsText = MARGIN_SIDES.map((side) => {
+    return `${margins[side].toFixed(1)}${fallbackSides.includes(side) ? '*' : ''}`;
+  }).join('/');
+  const marginLineText =
+    marginLineX === null ? 'нет' : `${marginLineX.toFixed(1)} px, ${marginLineSide}`;
+
+  return [
+    `${name}: шаг ${step.toFixed(2)} px`,
+    `фаза ${firstLinePhase.toFixed(1)} px`,
+    `угол ${skewAngle.toFixed(2)}°`,
+    `поля сверху/справа/снизу/слева ${marginsText}`,
+    `линия поля ${marginLineText}`,
+    `свет ${sheet.lighting?.isUsable ? 'пригоден' : 'непригоден'}`,
+  ].join(', ');
 };
 
 /**
@@ -281,57 +318,57 @@ const main = async (): Promise<void> => {
     );
   };
 
-  const families: PaperSheetProfiles = {};
+  const families: PaperProfilesArtifact['families'] = {};
 
-  for (const family of FAMILIES) {
-    const directory = join(ROOT, 'public', 'paper', family.id);
-    const sheets: PaperSheet[] = [];
+  try {
+    for (const family of FAMILIES) {
+      const directory = join(ROOT, 'public', 'paper', family.id);
+      const sheets: PaperSheetProfile[] = [];
 
-    for (const file of readdirSync(directory).sort()) {
-      if (!file.endsWith('.jpg')) {
-        continue;
+      for (const file of readdirSync(directory).sort()) {
+        if (!file.endsWith('.jpg')) {
+          continue;
+        }
+
+        const index = sheets.length + 1;
+        const path = join(directory, file);
+        const photo = await decodePhoto(decodeInPage, path);
+        const result = buildSheetProfile(photo, path, {
+          id: `${family.id}-${index}`,
+          label: `${family.label} ${index}`,
+          src: `/paper/${family.id}/${file}`,
+        });
+        const { sheet, texturePixels } = result;
+
+        if (texturePixels && sheet.texture) {
+          const dataUrl = await encodeTexturePng(
+            texturePixels,
+            sheet.texture.width,
+            sheet.texture.height
+          );
+
+          writeFileSync(
+            join(ROOT, 'public', sheet.texture.src),
+            Buffer.from(dataUrl.split(',')[1] || '', 'base64')
+          );
+        }
+
+        sheets.push(sheet);
+        console.error(describeProfile(`${family.id}/${file}`, result));
       }
 
-      const index = sheets.length + 1;
-      const photo = await decodePhoto(decodeInPage, join(directory, file));
-      const { sheet, texturePixels } = buildSheetProfile(photo, family.ruling, {
-        id: `${family.id}-${index}`,
-        label: `${family.label} ${index}`,
-        src: `/paper/${family.id}/${file}`,
-      });
-
-      if (texturePixels && sheet.texture) {
-        const dataUrl = await encodeTexturePng(
-          texturePixels,
-          sheet.texture.width,
-          sheet.texture.height
-        );
-
-        writeFileSync(
-          join(ROOT, 'public', sheet.texture.src),
-          Buffer.from(dataUrl.split(',')[1] || '', 'base64')
-        );
-      }
-
-      sheets.push(sheet);
-      console.error(
-        `${family.id}/${file}: угол ${sheet.skewAngle.toFixed(2)}°, нормировка ${sheet.normalizeScale.toFixed(3)}, свет ${
-          sheet.lighting?.isUsable ? 'пригоден' : 'непригоден'
-        }`
-      );
+      families[family.id] = sheets;
     }
-
-    families[family.id] = sheets;
+  } finally {
+    await browser.close();
   }
-
-  await browser.close();
 
   const artifact: PaperProfilesArtifact = { version: ARTIFACT_VERSION, families };
   const outputPath = join(ROOT, 'public', 'paper', 'profiles.json');
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${JSON.stringify(artifact)}\n`);
-  console.error(`Профили записаны: ${outputPath}`);
+  console.error(`Профили записаны: ${outputPath}; * — поле взято фолбэком`);
 };
 
 await main();

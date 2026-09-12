@@ -109,31 +109,9 @@ const toIndexEntry = ({
   sheet,
   isAnalyzed,
 }: UserSheetRecord): UserSheetIndexEntry => {
-  const {
-    id,
-    label,
-    width,
-    height,
-    ruling,
-    skewAngle,
-    measuredStep,
-    normalizeScale,
-    firstLinePhase,
-  } = sheet;
+  const { id, label, width, height, ruling, normalizeScale } = sheet;
 
-  return {
-    familyId,
-    isAnalyzed,
-    id,
-    label,
-    width,
-    height,
-    ruling,
-    skewAngle,
-    measuredStep,
-    normalizeScale,
-    firstLinePhase,
-  };
+  return { familyId, isAnalyzed, id, label, width, height, ruling, normalizeScale };
 };
 
 /**

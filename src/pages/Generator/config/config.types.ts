@@ -109,9 +109,19 @@ export type PhotoSize = {
 export type PaperSheetProfiles = Record<string, PaperSheet[]>;
 
 /**
+ * Экземпляр в том виде, в каком его пишет скрипт сборки: шаг, фаза и наклон
+ * лежат только в разлиновке, иначе артефакт нёс бы их в двух местах, и места
+ * могли бы разойтись.
+ */
+export type PaperSheetProfile = Omit<
+  PaperSheet,
+  'skewAngle' | 'measuredStep' | 'normalizeScale' | 'firstLinePhase'
+>;
+
+/**
  * Артефакт `public/paper/profiles.json`: то, что скрипт сборки посчитал по
- * фотографиям пресет-пака. Разлиновки в нём нет — канон семьи задан
- * константами, а артефакт описывает только внешность экземпляров.
+ * фотографиям пресет-пака, включая разлиновку каждого экземпляра в пикселях
+ * его фотографии.
  */
 export type PaperProfilesArtifact = {
   /**
@@ -122,7 +132,7 @@ export type PaperProfilesArtifact = {
   version: number;
 
   /**
-   * Характеристики экземпляров по идентификатору семьи.
+   * Экземпляры по идентификатору семьи.
    */
-  families: PaperSheetProfiles;
+  families: Record<string, PaperSheetProfile[]>;
 };

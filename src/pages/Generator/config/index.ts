@@ -3,6 +3,7 @@ export type {
   HandwritingFont,
   PageBackground,
   PaperProfilesArtifact,
+  PaperSheetProfile,
   PaperSheetProfiles,
   ParameterRange,
   PhotoSize,
