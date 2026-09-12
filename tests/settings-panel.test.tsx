@@ -314,7 +314,7 @@ describe('группа «Бумага»', () => {
     await openSection(user, 'Бумага');
     await uploadPhoto(user);
 
-    expect(readUserSheet()?.measuredStep).toBe(0);
+    expect(readUserSheet()?.ruling.step).toBe(0);
     expect(screen.getByRole('radio', { name: 'моя тетрадь' })).toBeDefined();
     expect(
       screen.getByText(
@@ -324,8 +324,8 @@ describe('группа «Бумага»', () => {
 
     await applyRuling(user, '25', '40');
 
-    expect(readUserSheet()?.measuredStep).toBe(25);
-    expect(readUserSheet()?.firstLinePhase).toBe(40);
+    expect(readUserSheet()?.ruling.step).toBe(25);
+    expect(readUserSheet()?.ruling.firstLinePhase).toBe(40);
     expect(readUserSheet()?.normalizeScale).toBeCloseTo(GRID_RULING.step / 25, 6);
   });
 
@@ -338,15 +338,15 @@ describe('группа «Бумага»', () => {
     await openSection(user, 'Бумага');
     await uploadPhoto(user);
 
-    expect(readUserSheet()?.measuredStep).toBeCloseTo(RULED_PHOTO.step, 0);
+    expect(readUserSheet()?.ruling.step).toBeCloseTo(RULED_PHOTO.step, 0);
     expect(
       Number(screen.getByLabelText('Шаг строк, px').getAttribute('value'))
     ).toBeCloseTo(RULED_PHOTO.step, 0);
 
     await applyRuling(user, '30', '12');
 
-    expect(readUserSheet()?.measuredStep).toBe(30);
-    expect(readUserSheet()?.firstLinePhase).toBe(12);
+    expect(readUserSheet()?.ruling.step).toBe(30);
+    expect(readUserSheet()?.ruling.firstLinePhase).toBe(12);
   });
 
   it('на чистом листе разлиновку не ищет, а берёт шаг строк от пользователя', async () => {
@@ -359,12 +359,12 @@ describe('группа «Бумага»', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Лист без разлиновки' }));
     await uploadPhoto(user);
 
-    expect(readUserSheet()?.measuredStep).toBe(0);
+    expect(readUserSheet()?.ruling.step).toBe(0);
     expect(screen.getByLabelText('Шаг строк, px').getAttribute('value')).toBe('');
 
     await applyRuling(user, '32', '60');
 
-    expect(readUserSheet()?.measuredStep).toBe(32);
+    expect(readUserSheet()?.ruling.step).toBe(32);
     expect(readUserSheet()?.normalizeScale).toBeCloseTo(GRID_RULING.step / 32, 6);
   });
 

@@ -2,11 +2,24 @@ import { Button } from '@shared/ui/Button';
 import type { FC } from 'react';
 import { useState } from 'react';
 
-import type { PaperRuling, PaperSheet } from '../../../../../lib/paper';
-import { toPhotoLength } from '../../../../../lib/paper';
+import type { SheetRuling } from '../../../../../lib/paper';
 
 import { NumberField } from './NumberField';
 import type { ManualRuling, RulingFormProps, RulingFormValues } from './RulingForm.types';
+
+/**
+ * Форма листа, на котором шаг не найден. Поля тоже пустые: нулевое поле у
+ * такого листа значит «не найдено», а не «поле нулевой ширины», и пустой ввод
+ * при применении так же уходит в отступ по умолчанию.
+ */
+const EMPTY_FORM_VALUES: RulingFormValues = {
+  step: '',
+  firstLinePhase: '',
+  marginTop: '',
+  marginRight: '',
+  marginBottom: '',
+  marginLeft: '',
+};
 
 /**
  * Округление длины до сотых: измеритель выдаёт дробные пиксели, а поле ввода
@@ -18,32 +31,33 @@ const toFieldValue = (length: number): string => {
 
 /**
  * Число из введённой строки. Пустое поле и невнятный ввод — ноль: он же
- * означает «не задано» и для шага разлиновки.
+ * означает «не задано» и для шага разлиновки, и для полей.
  */
 const toLength = (value: string): number => {
   return Number.parseFloat(value) || 0;
 };
 
 /**
- * Начальное состояние формы. Шаг и первая линия — измеренные, поля —
- * канонические, переведённые в пиксели фотографии: в одной форме все длины
- * должны меряться по одному и тому же снимку.
+ * Начальное состояние формы — разлиновка самого листа: шаг, первая линия и
+ * поля в пикселях его фотографии, как их нашли или поправили раньше.
  *
- * @param sheet — экземпляр листа
- * @param ruling — канон семьи
+ * @param ruling — разлиновка экземпляра
  * @returns значения полей формы
  */
-const toFormValues = (sheet: PaperSheet, ruling: PaperRuling): RulingFormValues => {
-  const { margins } = ruling;
-  const hasDetection = sheet.measuredStep > 0;
+const toFormValues = (ruling: SheetRuling): RulingFormValues => {
+  const { step, firstLinePhase, margins } = ruling;
+
+  if (step <= 0) {
+    return EMPTY_FORM_VALUES;
+  }
 
   return {
-    step: hasDetection ? toFieldValue(sheet.measuredStep) : '',
-    firstLinePhase: hasDetection ? toFieldValue(sheet.firstLinePhase) : '',
-    marginTop: toFieldValue(toPhotoLength(sheet, margins.top)),
-    marginRight: toFieldValue(toPhotoLength(sheet, margins.right)),
-    marginBottom: toFieldValue(toPhotoLength(sheet, margins.bottom)),
-    marginLeft: toFieldValue(toPhotoLength(sheet, margins.left)),
+    step: toFieldValue(step),
+    firstLinePhase: toFieldValue(firstLinePhase),
+    marginTop: toFieldValue(margins.top),
+    marginRight: toFieldValue(margins.right),
+    marginBottom: toFieldValue(margins.bottom),
+    marginLeft: toFieldValue(margins.left),
   };
 };
 
@@ -52,11 +66,11 @@ const toFormValues = (sheet: PaperSheet, ruling: PaperRuling): RulingFormValues 
  * и правка найденного, когда справилось не до конца.
  */
 export const RulingForm: FC<RulingFormProps> = (props) => {
-  const { sheet, ruling, onApply } = props;
+  const { ruling, onApply } = props;
   const [values, setValues] = useState<RulingFormValues>(() => {
-    return toFormValues(sheet, ruling);
+    return toFormValues(ruling);
   });
-  const hasDetection = sheet.measuredStep > 0;
+  const hasDetection = ruling.step > 0;
 
   const handleStepChange = (step: string) => {
     setValues({ ...values, step });

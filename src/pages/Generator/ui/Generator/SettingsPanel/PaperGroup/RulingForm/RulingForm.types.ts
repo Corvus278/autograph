@@ -1,4 +1,4 @@
-import type { PaperMargins, PaperRuling, PaperSheet } from '../../../../../lib/paper';
+import type { PaperMargins, SheetRuling } from '../../../../../lib/paper';
 
 /**
  * Разлиновка, заданная руками. Все длины — в пикселях фотографии: пользователь
@@ -59,14 +59,9 @@ export type RulingFormValues = {
 
 export type RulingFormProps = {
   /**
-   * Экземпляр, характеристики которого правятся.
+   * Разлиновка правимого экземпляра: из неё форма берёт начальные значения.
    */
-  sheet: PaperSheet;
-
-  /**
-   * Канон семьи: из него берутся поля, пока пользователь не задал свои.
-   */
-  ruling: PaperRuling;
+  ruling: SheetRuling;
 
   /**
    * Колбэк на применение введённой разлиновки.

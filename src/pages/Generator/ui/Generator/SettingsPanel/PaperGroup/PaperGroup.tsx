@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { PaperSheet } from '../../../../lib/paper';
-import { buildNormalizedSheet } from '../../../../lib/paper';
+import { buildSheetRuling, computeNormalizeScale } from '../../../../lib/paper';
 import { selectPageSheetId } from '../../../../model/recipeSelectors';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
 import type { UserSheetRecord } from '../../../../model/userSheetsStorage.types';
@@ -35,8 +35,8 @@ const listOwnSheets = (records: UserSheetRecord[], familyId: string): PaperSheet
 };
 
 /**
- * Группа «Бумага»: на чём пишем. Разлиновка принадлежит семье, поэтому смена
- * экземпляра меняет только внешность страницы, а не раскладку текста.
+ * Группа «Бумага»: на чём пишем. Разлиновка у каждого экземпляра своя, поэтому
+ * смена листа меняет не только фон, но и раскладку текста под его шаг и поля.
  *
  * Отмечен тот экземпляр, который сейчас на странице: пока пользователь не
  * выбрал лист сам, его выдаёт рецепт прогона, и панель обязана показывать
@@ -112,9 +112,34 @@ export const PaperGroup: FC = () => {
       return;
     }
 
+    const { skewAngle, marginLineX, marginLineSide } = activeSheet.ruling;
+    /**
+     * Наклон и линию поля форма не правит — они остаются найденными: иначе
+     * правка полей молча стирала бы линию поля, и блок текста заезжал бы на
+     * неё.
+     */
+    const ruling = buildSheetRuling({
+      ...manual,
+      skewAngle,
+      marginLineX,
+      marginLineSide,
+    });
+
     addUserSheet({
       familyId: activeFamily.id,
-      sheet: buildNormalizedSheet(manual, activeFamily, activeSheet),
+      sheet: {
+        ...activeSheet,
+        ruling,
+        /**
+         * Поля верхнего уровня повторяют разлиновку, нормировка — от канона
+         * семьи: их ещё читает отрисовка по канону
+         * (`@deprecated sheet-native-ruling`).
+         */
+        skewAngle: ruling.skewAngle,
+        measuredStep: ruling.step,
+        normalizeScale: computeNormalizeScale(ruling.step, activeFamily.ruling.step),
+        firstLinePhase: ruling.firstLinePhase,
+      },
       isAnalyzed: true,
     });
   };
@@ -162,8 +187,7 @@ export const PaperGroup: FC = () => {
       {activeFamily && activeSheet && isOwnSheetSelected ? (
         <RulingForm
           key={activeSheet.id}
-          sheet={activeSheet}
-          ruling={activeFamily.ruling}
+          ruling={activeSheet.ruling}
           onApply={handleRulingApply}
         />
       ) : null}

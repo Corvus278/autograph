@@ -7,7 +7,8 @@ import type {
   SheetImageData,
 } from '../../../../../lib/paper';
 import {
-  buildNormalizedSheet,
+  buildSheetRuling,
+  computeNormalizeScale,
   detectRuling,
   detectSkewAngle,
   encodeTextureMap,
@@ -115,19 +116,36 @@ export const useSheetImport = (): SheetImport => {
       const measurement = image && !isBlank ? measureSheet(image) : null;
       const lighting = image ? extractLighting(image) : null;
       const texture = image && lighting ? await encodeTexture(image, lighting) : null;
+      /**
+       * В разлиновку идёт всё найденное — и поля, и линия поля со стороной:
+       * по ним выкладывается блок текста, а не по общему для семьи отступу.
+       */
+      const ruling = buildSheetRuling({
+        ...(measurement?.detection || MISSING_RULING),
+        skewAngle: measurement?.skewAngle || 0,
+      });
 
       addUserSheet({
         familyId: family.id,
-        sheet: buildNormalizedSheet(measurement?.detection || MISSING_RULING, family, {
+        sheet: {
           id: nextSheetId(),
           label: toSheetLabel(file.name),
           src,
           width: image?.width || family.width,
           height: image?.height || family.height,
-          skewAngle: measurement?.skewAngle || 0,
+          ruling,
+          /**
+           * Поля верхнего уровня повторяют разлиновку, нормировка — от канона
+           * семьи: их ещё читает отрисовка по канону
+           * (`@deprecated sheet-native-ruling`).
+           */
+          skewAngle: ruling.skewAngle,
+          measuredStep: ruling.step,
+          normalizeScale: computeNormalizeScale(ruling.step, family.ruling.step),
+          firstLinePhase: ruling.firstLinePhase,
           lighting,
           texture,
-        }),
+        },
         /**
          * Разбор считается пройденным даже тогда, когда разлиновка не нашлась:
          * повторный прогон по той же фотографии дал бы тот же результат, а
