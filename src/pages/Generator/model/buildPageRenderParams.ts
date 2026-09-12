@@ -1,6 +1,6 @@
 import { SUBSTITUTE_FONTS } from '../config';
 import type { BlockGeometry } from '../lib/calibrate/calibrate.types';
-import { deriveGeometry } from '../lib/calibrate/deriveGeometry';
+import { deriveCanonGeometry } from '../lib/calibrate/deriveGeometry';
 import type { Page } from '../lib/paginate/paginate.types';
 import { fitSheetToPage } from '../lib/paper';
 import { buildDistortions } from '../lib/randomize/buildDistortions';
@@ -135,16 +135,18 @@ const buildRenderPage = (page: Page, input: PageRenderInput): RenderPage => {
  * Геометрия блока по разлиновке семьи, метрикам шрифта и ручной поправке.
  * Отдельной функцией, потому что тем же расчётом пользуется раскладка: разойдись
  * они — переносы посчитались бы по одной ширине блока, а отрисовались по другой.
+ * Поправка в долях шага переводится в пиксели по шагу канона семьи.
  *
  * @param input — семья, метрики и поправка
  * @returns геометрия блока в канонических пикселях семьи
+ * @deprecated sheet-native-ruling — геометрия страницы: `selectBlockGeometry`
  */
 export const buildBlockGeometry = (
   input: Pick<PageRenderInput, 'family' | 'metrics' | 'correction'>
 ): BlockGeometry => {
   const { family, metrics, correction } = input;
 
-  return deriveGeometry(
+  return deriveCanonGeometry(
     { ...family.ruling, pageWidth: family.width },
     metrics,
     correction

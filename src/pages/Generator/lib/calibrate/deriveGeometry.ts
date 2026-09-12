@@ -1,11 +1,14 @@
 import type { FontMetrics } from '../measure/measure.types';
 import { FALLBACK_FONT_METRICS } from '../measure/measureFontMetrics';
 import type { RulingKind } from '../paper/paper.types';
+import { resolveFirstLine } from '../paper/sheetRuling';
 
 import type {
   BlockGeometry,
   CalibrationRuling,
+  GeometryBasis,
   GeometryCorrection,
+  SheetCalibration,
 } from './calibrate.types';
 
 /**
@@ -33,16 +36,16 @@ export const GRID_ROW_STEPS = 2;
 const X_HEIGHT_SHARE = 0.55;
 
 /**
- * Зазор между линией поля и началом текста в долях шага разлиновки: буква не
+ * Зазор между линией поля и краем текста в долях шага разлиновки: буква не
  * садится вплотную на линию поля.
  */
 const MARGIN_LINE_GAP_SHARE = 0.2;
 
 /**
- * Запасной шаг разлиновки в канонических пикселях — примерно школьная
- * линейка. Идёт в дело, когда шага нет: разлиновку на фотографии не нашли или
- * у чистого листа пользователь ещё не задал свой шаг. Без него кегль
- * обратился бы в ноль, а вместе с ним и вся геометрия.
+ * Запасной шаг разлиновки в пикселях — примерно школьная линейка. Идёт в дело,
+ * когда шага нет: разлиновку на фотографии не нашли или у чистого листа
+ * пользователь ещё не задал свой шаг. Без него кегль обратился бы в ноль, а
+ * вместе с ним и вся геометрия.
  */
 const FALLBACK_RULING_STEP = 40;
 
@@ -82,7 +85,57 @@ const getRowSteps = (kind: RulingKind): number => {
 };
 
 /**
- * Выводит геометрию блока текста из разлиновки семьи и метрик шрифта.
+ * Шаг, по которому считается геометрия и переводится поправка.
+ *
+ * @param step — шаг разлиновки; ноль и меньше — шаг не задан
+ * @returns шаг больше нуля
+ */
+const resolveStep = (step: number): number => {
+  return step > 0 ? step : FALLBACK_RULING_STEP;
+};
+
+/**
+ * Левый и правый края блока на листе страницы.
+ *
+ * Линия поля сужает блок со своей стороны: текст отступает от неё на зазор.
+ * Поля листа при этом остаются границей — линия, лежащая внутри поля, не
+ * выводит блок за поле.
+ *
+ * @param sheet — лист страницы
+ * @param step — шаг разлиновки больше нуля
+ * @returns края блока в пикселях кадра
+ */
+const resolveBlockBounds = (
+  sheet: SheetCalibration,
+  step: number
+): Pick<GeometryBasis, 'left' | 'right'> => {
+  const { ruling, width } = sheet;
+  const { margins, marginLineX, marginLineSide } = ruling;
+  const gap = step * MARGIN_LINE_GAP_SHARE;
+  const left = margins.left;
+  const right = width - margins.right;
+
+  if (marginLineX === null) {
+    return { left, right };
+  }
+
+  switch (marginLineSide) {
+    case 'left': {
+      return { left: Math.max(left, marginLineX + gap), right };
+    }
+
+    case 'right': {
+      return { left, right: Math.min(right, marginLineX - gap) };
+    }
+
+    default: {
+      return { left, right };
+    }
+  }
+};
+
+/**
+ * Геометрия блока по готовой основе.
  *
  * Модель строчного бокса — общая с отрисовкой:
  *
@@ -95,36 +148,121 @@ const getRowSteps = (kind: RulingKind): number => {
  * Межстрочный интервал — внешний отступ строки, внутрь бокса он не идёт и в
  * верхнем отступе не участвует.
  *
- * Пользовательская поправка складывается с вычисленным, а не заменяет его:
- * после смены семьи или экземпляра листа она применяется к новому расчёту.
+ * @param basis — вид разлиновки, шаг, первая линия и края блока
+ * @param metrics — метрики шрифта в долях кегля
+ * @param correction — дельты в долях шага
+ * @returns геометрия блока в пикселях
+ */
+const buildGeometry = (
+  basis: GeometryBasis,
+  metrics: FontMetrics,
+  correction: GeometryCorrection
+): BlockGeometry => {
+  const { kind, step, firstLine, left, right } = basis;
+  const { fontAscent, lineHeight } = metrics;
+  const xHeight = metrics.xHeight || FALLBACK_FONT_METRICS.xHeight;
+  const fontSizePx = (step * X_HEIGHT_SHARE) / xHeight;
+  const lineSpacing = step * getRowSteps(kind) - fontSizePx * lineHeight;
+  const topOffset = firstLine - fontAscent * fontSizePx;
+
+  return {
+    fontSizePx: Math.max(
+      MIN_FONT_SIZE_PX,
+      fontSizePx + (correction.fontSizePx || 0) * step
+    ),
+    lineSpacing: lineSpacing + (correction.lineSpacing || 0) * step,
+    topOffset: topOffset + (correction.topOffset || 0) * step,
+    leftPadding: left + (correction.leftPadding || 0) * step,
+    blockWidth: Math.max(0, right - left + (correction.blockWidth || 0) * step),
+  };
+};
+
+/**
+ * Выводит геометрию блока текста из разлиновки листа страницы и метрик шрифта.
+ *
+ * Базовая линия первой строки садится на первую линию разлиновки не выше
+ * верхнего поля, а не на само поле: поле, взятое по умолчанию, к линиям не
+ * привязано, и отсчёт от него увёл бы строки между линиями.
+ *
+ * Левый и правый края блока — поля листа, сужённые линией поля с её стороны.
+ *
+ * Пользовательская поправка задана в долях шага и складывается с вычисленным,
+ * а не заменяет его: после смены листа она применяется к новому расчёту и
+ * сдвигает текст на ту же долю шага, какой бы шаг ни был у фотографии.
+ *
+ * @param sheet — лист страницы: разлиновка, вид разлиновки и кадр
+ * @param metrics — метрики шрифта в долях кегля
+ * @param correction — дельты поверх вычисленного в долях шага
+ * @returns геометрия блока в пикселях кадра листа
+ */
+export const deriveGeometry = (
+  sheet: SheetCalibration,
+  metrics: FontMetrics,
+  correction: GeometryCorrection = {}
+): BlockGeometry => {
+  const { ruling, kind } = sheet;
+  const step = resolveStep(ruling.step);
+
+  return buildGeometry(
+    {
+      kind,
+      step,
+      firstLine: resolveFirstLine(ruling),
+      ...resolveBlockBounds(sheet, step),
+    },
+    metrics,
+    correction
+  );
+};
+
+/**
+ * Высота под текст на листе страницы: кадр без верхнего отступа блока, нижнего
+ * поля листа и запаса снизу. Запас задан в шагах разлиновки, поэтому на листах
+ * с разным шагом он отнимает одно и то же число строк.
+ *
+ * @param sheet — лист страницы
+ * @param geometry — геометрия блока на этом листе
+ * @param bottomMargin — запас снизу в долях шага разлиновки
+ * @returns высота в пикселях кадра
+ */
+export const deriveTextHeight = (
+  sheet: SheetCalibration,
+  geometry: BlockGeometry,
+  bottomMargin: number
+): number => {
+  const { ruling, height } = sheet;
+
+  return (
+    height -
+    geometry.topOffset -
+    ruling.margins.bottom -
+    bottomMargin * resolveStep(ruling.step)
+  );
+};
+
+/**
+ * Геометрия блока по канону семьи. Поправка в долях шага переводится в
+ * пиксели по шагу канона.
  *
  * @param ruling — каноническая разлиновка семьи с шириной листа
  * @param metrics — метрики шрифта в долях кегля
- * @param correction — дельты поверх вычисленного
+ * @param correction — дельты поверх вычисленного в долях шага
  * @returns геометрия блока в канонических пикселях семьи
+ * @deprecated sheet-native-ruling — геометрия считается по листу страницы: `deriveGeometry`
  */
-export const deriveGeometry = (
+export const deriveCanonGeometry = (
   ruling: CalibrationRuling,
   metrics: FontMetrics,
   correction: GeometryCorrection = {}
 ): BlockGeometry => {
   const { kind, firstLineOffset, margins, marginLineX, pageWidth } = ruling;
-  const { fontAscent, lineHeight } = metrics;
-  const step = ruling.step > 0 ? ruling.step : FALLBACK_RULING_STEP;
-  const xHeight = metrics.xHeight || FALLBACK_FONT_METRICS.xHeight;
-  const rowStep = step * getRowSteps(kind);
-  const fontSizePx = (step * X_HEIGHT_SHARE) / xHeight;
-  const lineSpacing = rowStep - fontSizePx * lineHeight;
-  const topOffset = firstLineOffset - fontAscent * fontSizePx;
-  const leftPadding =
+  const step = resolveStep(ruling.step);
+  const left =
     marginLineX === null ? margins.left : marginLineX + step * MARGIN_LINE_GAP_SHARE;
-  const blockWidth = pageWidth - leftPadding - margins.right;
 
-  return {
-    fontSizePx: Math.max(MIN_FONT_SIZE_PX, fontSizePx + (correction.fontSizePx || 0)),
-    lineSpacing: lineSpacing + (correction.lineSpacing || 0),
-    topOffset: topOffset + (correction.topOffset || 0),
-    leftPadding: leftPadding + (correction.leftPadding || 0),
-    blockWidth: Math.max(0, blockWidth + (correction.blockWidth || 0)),
-  };
+  return buildGeometry(
+    { kind, step, firstLine: firstLineOffset, left, right: pageWidth - margins.right },
+    metrics,
+    correction
+  );
 };

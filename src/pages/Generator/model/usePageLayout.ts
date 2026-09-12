@@ -46,12 +46,16 @@ export const usePageLayout = (createMeasurer?: MeasurerFactory): Page[] => {
   const lineSpacing = geometry?.lineSpacing || 0;
   /**
    * Высота под текст: лист минус верхний отступ блока, нижнее поле листа и
-   * заданный пользователем запас снизу. Семьи нет — предела нет, всё ложится
-   * на одну страницу.
+   * заданный пользователем запас снизу. Запас задан в шагах разлиновки и
+   * переводится в пиксели по шагу той же разлиновки, по которой посчитана
+   * геометрия. Семьи нет — предела нет, всё ложится на одну страницу.
    */
   const availableHeight =
     family && geometry
-      ? family.height - geometry.topOffset - family.ruling.margins.bottom - bottomMargin
+      ? family.height -
+        geometry.topOffset -
+        family.ruling.margins.bottom -
+        bottomMargin * family.ruling.step
       : Number.POSITIVE_INFINITY;
 
   useEffect(() => {

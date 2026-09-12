@@ -26,3 +26,10 @@
 Аудит: ok с первого круга, critical нет. typecheck ok, npm test 441/441.
 Долг: (1) paperSheetJson.ts:185 — у новой формы skewAngle/measuredStep берутся с верхнего уровня, а не из ruling — закрыть G3; (2) tests/helpers/paper-family.ts:26 RENDER_SHEET_RULING с нулевыми полями — ловушка для G2/G4: через buildSheetRuling подменятся фолбэком; (3) normalizeSheet.ts, fitSheetToPage.ts без @deprecated на экспортах — G7 найдёт rg по именам; (4) sheetRuling.ts:3-6 комментарий-история (comments.md #5), sheetRuling.ts:27 имя snapDownToLine при ceil — поправить в G7.
 Сценарии «разлиновка читается с листа» и «вид разлиновки у семьи» пока только на уровне типов — на итоговый аудит.
+
+### G2 · Калибровка страницы
+
+Решения: deriveGeometry(SheetCalibration, metrics, correction); старая сигнатура — deriveCanonGeometry @deprecated (K10). Линия поля сужает блок, но не выводит за поле (зазор ≥ step/5). K3 — getPageRuling(sheet, pageIndex), единственное ветвление по чётности; getPageCalibration для G4/G6. deriveTextHeight переводит запас снизу в пиксели для вместимости K7. Слайдеры в долях шага: кегль/интервал ±0.25, сдвиги ±2, ширина ±4, запас 0..20.
+Отступления: новые селекторы продукт пока не вызывает — подключают G4/G6. Удалён тест «не перекладывает текст при смене экземпляра»: противоречит сценарию «Смена экземпляра пересчитывает геометрию» (буква спеки). На клетке при нечётном запасе или поправке интервала число строк зависит от дробной части — следствие K7.
+Аудит: ok с первого круга. typecheck ok, npm test 455/455.
+Долг: (1) RealLayout.stories.tsx:139 applyText(LONG_TEXT, 1800) — запас теперь в шагах, поправить в G7 (6.1); (2) usePageGeometry.ts:731 selectPageSheetId внутри useShallow пересчитывается на каждое изменение стора — закрыть в 4.3; (3) usePageGeometry — новые поля и ветка pageIndex без теста хука, добавить при подключении в G4/G6; (4) семья ищется двумя путями (usePageGeometry vs selectActiveFamily); (5) store-geometry-correction.test «разный кегль» зависит от seed рецепта; (6) нет отдельного теста «Смена семьи пересчитывает геометрию» — на итоговый аудит; (7) GeometryGroup: подпись «Высота нижнего поля» при единицах в строках — G7.

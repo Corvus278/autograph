@@ -208,8 +208,35 @@ describe('группа «Геометрия»', () => {
     slider.focus();
     await user.keyboard('{ArrowRight}');
 
-    expect(store().geometryCorrection.blockWidth).toBe(1);
-    expect(slider.getAttribute('aria-valuenow')).toBe('1');
+    expect(store().geometryCorrection.blockWidth).toBe(0.1);
+    expect(slider.getAttribute('aria-valuenow')).toBe('0.1');
+  });
+
+  it('поправка и запас снизу ходят долями шага разлиновки', async () => {
+    const user = userEvent.setup();
+
+    render(<SettingsPanel />);
+    await openSection(user, 'Геометрия');
+
+    const fontSize = screen.getByRole('slider', { name: 'Размер шрифта' });
+    const topOffset = screen.getByRole('slider', { name: 'Вертикальный сдвиг' });
+    const bottomMargin = screen.getByRole('slider', { name: 'Высота нижнего поля' });
+
+    expect(fontSize.getAttribute('aria-valuemax')).toBe('0.25');
+    expect(topOffset.getAttribute('aria-valuemin')).toBe('-2');
+    expect(topOffset.getAttribute('aria-valuemax')).toBe('2');
+    expect(bottomMargin.getAttribute('aria-valuemax')).toBe('20');
+
+    fontSize.focus();
+    await user.keyboard('{ArrowRight}');
+    topOffset.focus();
+    await user.keyboard('{ArrowLeft}');
+    bottomMargin.focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(store().geometryCorrection.fontSizePx).toBe(0.01);
+    expect(store().geometryCorrection.topOffset).toBe(-0.05);
+    expect(store().bottomMargin).toBe(1);
   });
 
   it('«Сбросить поправку» возвращает геометрию к вычисленной', async () => {
@@ -223,7 +250,7 @@ describe('группа «Геометрия»', () => {
     slider.focus();
     await user.keyboard('{ArrowRight}');
 
-    expect(store().geometryCorrection.leftPadding).toBe(1);
+    expect(store().geometryCorrection.leftPadding).toBe(0.05);
 
     await user.click(screen.getByRole('button', { name: 'Сбросить поправку' }));
 

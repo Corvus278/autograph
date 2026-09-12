@@ -37,7 +37,14 @@ export const LINE_SPACING_RANGE: ParameterRange = { min: -100, max: 100, step: 1
 export const TOP_OFFSET_RANGE: ParameterRange = { min: -50, max: 300, step: 1 };
 export const LEFT_PADDING_RANGE: ParameterRange = { min: 0, max: 600, step: 1 };
 export const BLOCK_ROTATE_RANGE: ParameterRange = { min: -60, max: 60, step: 1 };
-export const BOTTOM_MARGIN_RANGE: ParameterRange = { min: 0, max: 1000, step: 1 };
+
+/**
+ * Запас снизу в шагах разлиновки. Шаг слайдера — целый шаг разлиновки: на
+ * линейке это ровно строка, и запас отнимает одинаковое число строк на листах
+ * с любым шагом.
+ */
+export const BOTTOM_MARGIN_RANGE: ParameterRange = { min: 0, max: 20, step: 1 };
+
 export const FREQUENCY_RANGE: ParameterRange = { min: 1, max: 5, step: 1 };
 export const SCENE_ROTATE_RANGE: ParameterRange = { min: -10, max: 10, step: 1 };
 export const SCENE_SHIFT_RANGE: ParameterRange = { min: 0, max: 50, step: 1 };

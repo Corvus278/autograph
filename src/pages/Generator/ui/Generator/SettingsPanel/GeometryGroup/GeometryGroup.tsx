@@ -8,18 +8,26 @@ import { BOTTOM_MARGIN_RANGE } from '../../../../config';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
 
 /**
- * Границы поправок. Слайдеры правят не саму геометрию, а дельту поверх
- * вычисленной из разлиновки, поэтому диапазоны симметричны нулю и узкие:
- * широкий диапазон здесь означал бы, что автокалибровка промахнулась, и чинить
- * надо её, а не двигать блок руками.
+ * Границы поправок в долях шага разлиновки. Слайдеры правят не саму геометрию,
+ * а дельту поверх вычисленной из разлиновки, поэтому диапазоны симметричны
+ * нулю и узкие: широкий диапазон здесь означал бы, что автокалибровка
+ * промахнулась, и чинить надо её, а не двигать блок руками.
+ *
+ * Кегль и интервал — до четверти шага: кегль и так около шага, и больше
+ * четверти уже меняет почерк, а не подгоняет его. Сдвиги — до двух шагов:
+ * текст можно пересадить на соседние линии, но не увести с листа.
  */
-const FONT_SIZE_CORRECTION_RANGE: ParameterRange = { min: -20, max: 20, step: 1 };
+const FONT_SIZE_CORRECTION_RANGE: ParameterRange = { min: -0.25, max: 0.25, step: 0.01 };
 
-const LINE_SPACING_CORRECTION_RANGE: ParameterRange = { min: -20, max: 20, step: 1 };
+const LINE_SPACING_CORRECTION_RANGE: ParameterRange = {
+  min: -0.25,
+  max: 0.25,
+  step: 0.01,
+};
 
-const OFFSET_CORRECTION_RANGE: ParameterRange = { min: -100, max: 100, step: 1 };
+const OFFSET_CORRECTION_RANGE: ParameterRange = { min: -2, max: 2, step: 0.05 };
 
-const BLOCK_WIDTH_CORRECTION_RANGE: ParameterRange = { min: -200, max: 200, step: 1 };
+const BLOCK_WIDTH_CORRECTION_RANGE: ParameterRange = { min: -4, max: 4, step: 0.1 };
 
 /**
  * Группа «Геометрия»: поправка к тому, как блок текста лёг на разлиновку.

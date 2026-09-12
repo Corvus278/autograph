@@ -1,7 +1,7 @@
 import type { BlockGeometry, GeometryCorrection } from '../lib/calibrate/calibrate.types';
 import type { FontMetrics } from '../lib/measure/measure.types';
 import type { Page } from '../lib/paginate/paginate.types';
-import type { PaperFamily, PaperSheet } from '../lib/paper/paper.types';
+import type { PaperFamily, PaperSheet, SheetRuling } from '../lib/paper/paper.types';
 import type { DistortionFlags } from '../lib/randomize/randomize.types';
 import type {
   InkModulationSource,
@@ -24,6 +24,18 @@ export type PageGeometryView = {
   family: PaperFamily | null;
 
   /**
+   * Лист, доставшийся странице по рецепту прогона. `null` — семьи или листов
+   * нет.
+   */
+  sheet: PaperSheet | null;
+
+  /**
+   * Разлиновка страницы в пикселях кадра её листа, на чётной странице —
+   * отражённая. `null` — листа нет.
+   */
+  ruling: SheetRuling | null;
+
+  /**
    * Метрики выбранного шрифта в долях кегля.
    */
   metrics: FontMetrics;
@@ -31,11 +43,19 @@ export type PageGeometryView = {
   /**
    * Геометрия блока в канонических пикселях семьи. `null` — семьи нет и
    * считать не по чему.
+   *
+   * @deprecated sheet-native-ruling — читать `sheetGeometry`
    */
   geometry: BlockGeometry | null;
 
   /**
-   * Ручная поправка поверх вычисленной геометрии.
+   * Геометрия блока в пикселях кадра листа страницы. `null` — листа нет и
+   * считать не по чему.
+   */
+  sheetGeometry: BlockGeometry | null;
+
+  /**
+   * Ручная поправка поверх вычисленной геометрии в долях шага разлиновки.
    */
   correction: GeneratorGeometryCorrection;
 
@@ -81,7 +101,7 @@ export type PageRenderInput = {
   metrics: FontMetrics;
 
   /**
-   * Ручная поправка поверх вычисленной геометрии.
+   * Ручная поправка поверх вычисленной геометрии в долях шага разлиновки.
    */
   correction: GeometryCorrection;
 

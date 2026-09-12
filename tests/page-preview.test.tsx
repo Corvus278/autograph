@@ -48,11 +48,18 @@ const Harness: FC<HarnessProps> = (props) => {
 const FAMILY = buildRenderFamily();
 
 /**
- * Нижнее поле, оставляющее под текст ровно две строки измерителя-модели:
- * верхний отступ блока у семьи-модели нулевой, высота листа — четыреста
- * пикселей, высота строки — двадцать.
+ * Запас снизу в шагах разлиновки, оставляющий под текст ровно две строки
+ * измерителя-модели: верхний отступ блока у семьи-модели нулевой, высота
+ * листа — четыреста пикселей, шаг — сорок, высота строки — двадцать. Восемь
+ * и три четверти шага — триста пятьдесят пикселей, под текст остаётся
+ * пятьдесят.
  */
-const TWO_LINE_BOTTOM_MARGIN = 350;
+const TWO_LINE_BOTTOM_MARGIN = 8.75;
+
+/**
+ * Поправка кегля в долях шага: четверть шага семьи-модели — десять пикселей.
+ */
+const FONT_SIZE_CORRECTION = 0.25;
 
 /**
  * Узел canvas страницы: на нём рисует предпросмотр.
@@ -201,7 +208,9 @@ describe('кэш разбивки', () => {
     const measuresBefore = factory.createCalls();
 
     act(() => {
-      useGeneratorStore.getState().setGeometryCorrection({ fontSizePx: 10 });
+      useGeneratorStore
+        .getState()
+        .setGeometryCorrection({ fontSizePx: FONT_SIZE_CORRECTION });
     });
 
     await waitFor(() => {
@@ -215,7 +224,9 @@ describe('кэш разбивки', () => {
     await renderHarness(factory);
 
     act(() => {
-      useGeneratorStore.getState().setGeometryCorrection({ fontSizePx: 10 });
+      useGeneratorStore
+        .getState()
+        .setGeometryCorrection({ fontSizePx: FONT_SIZE_CORRECTION });
     });
 
     await waitFor(() => {
