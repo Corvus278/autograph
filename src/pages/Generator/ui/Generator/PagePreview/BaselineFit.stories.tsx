@@ -2,15 +2,12 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import type { FC } from 'react';
 import { useEffect } from 'react';
 import { expect, waitFor } from 'storybook/test';
-import { useShallow } from 'zustand/react/shallow';
 
 import { GRID_FAMILY_ID, HANDWRITING_FONTS, LINED_FAMILY_ID } from '../../../config';
 import { loadFontMetrics } from '../../../lib/measure/measureFontMetrics';
 import type { PaperFamily } from '../../../lib/paper';
-import { isMirroredPage } from '../../../model/buildPageRenderParams';
 import { clearLayoutCache } from '../../../model/measureLayout';
 import { loadPaperFamilies } from '../../../model/paperProfiles';
-import { findSheet } from '../../../model/paperSelectors';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -21,33 +18,49 @@ import { usePageRender } from '../../../model/usePageRender';
 
 /**
  * Снимок того, как страница легла на лист. Числа сняты с тех самых параметров,
- * которыми рендерер рисует страницу, и с разлиновки семьи, — считать
- * попадание по чему-то другому значило бы проверять не то, что видно.
+ * которыми рендерер рисует страницу, и с разлиновки листа этой страницы, —
+ * считать попадание по чему-то другому значило бы проверять не то, что видно.
  */
 type BaselineProbe = {
+  /**
+   * Экземпляр листа, доставшийся странице.
+   */
+  sheetId: string;
+
+  /**
+   * Лист, под который разложена показанная страница. Раскладка под новый лист
+   * пересчитывается асинхронно и до того отстаёт от листа страницы.
+   */
+  layoutSheetId: string;
+
+  /**
+   * Номер показанной страницы, считая с нуля.
+   */
+  pageIndex: number;
+
   /**
    * Семейство шрифта страницы.
    */
   fontFamily: string;
 
   /**
-   * Кегль в канонических пикселях семьи.
+   * Кегль в пикселях кадра листа.
    */
   fontSizePx: number;
 
   /**
-   * Добавка к естественной высоте строки в канонических пикселях.
+   * Добавка к естественной высоте строки в пикселях кадра листа.
    */
   lineSpacing: number;
 
   /**
-   * Отступ верха первой строки от верха листа.
+   * Отступ верха первой строки от верха страницы до поворота блока.
    */
   topOffset: number;
 
   /**
-   * Угол наклона блока в градусах: у ровного экземпляра — ноль, и только на
-   * нём попадание считается в канонических координатах листа.
+   * Угол наклона блока в градусах. Блок поворачивается вокруг левого верхнего
+   * угла страницы.
    */
   blockRotate: number;
 
@@ -62,103 +75,34 @@ type BaselineProbe = {
   lineHeight: number;
 
   /**
-   * Шаг разлиновки семьи в канонических пикселях.
+   * Шаг разлиновки листа страницы в пикселях кадра.
    */
   step: number;
 
   /**
-   * Отступ первой линии разлиновки от верха листа.
+   * Высота одной из линий разлиновки страницы у левого края кадра.
    */
-  firstLineOffset: number;
+  firstLinePhase: number;
+
+  /**
+   * Наклон разлиновки страницы в градусах; на чётной странице — отражённый.
+   */
+  skewAngle: number;
 
   /**
    * Число строк на показанной странице.
    */
   lineCount: number;
-};
-
-/**
- * Снимок того, как на страницу легла фотография листа. Проба именно
- * разлиновки: базовые линии считаются по канону семьи, и без этого снимка
- * никакая проверка не увидела бы, что разлиновка на самой фотографии от канона
- * уехала.
- */
-type SheetRulingProbe = {
-  /**
-   * Идентификатор экземпляра, чья фотография ушла в отрисовку.
-   */
-  sheetId: string;
 
   /**
-   * Номер показанной страницы: у половин разворота укладка разная, а
-   * экземпляр один и тот же.
-   */
-  pageIndex: number;
-
-  /**
-   * Шаг разлиновки, измеренный на фотографии, в её пикселях.
-   */
-  measuredStep: number;
-
-  /**
-   * Коэффициент приведения фотографии к каноническому шагу семьи.
-   */
-  normalizeScale: number;
-
-  /**
-   * Смещение первой линии от верха фотографии в её пикселях.
-   */
-  firstLinePhase: number;
-
-  /**
-   * Наклон разлиновки экземпляра в градусах.
-   */
-  skewAngle: number;
-
-  /**
-   * Отражена ли страница: правая половина разворота.
-   */
-  isMirrored: boolean;
-
-  /**
-   * Высота фотографии в её собственных пикселях.
-   */
-  photoHeight: number;
-
-  /**
-   * Отступ левого края фотографии от левого края страницы.
-   */
-  backgroundX: number;
-
-  /**
-   * Отступ верхнего края фотографии от верха страницы.
-   */
-  backgroundY: number;
-
-  /**
-   * Ширина фотографии на странице в канонических пикселях.
-   */
-  backgroundWidth: number;
-
-  /**
-   * Высота фотографии на странице в канонических пикселях.
-   */
-  backgroundHeight: number;
-
-  /**
-   * Ширина канонического листа семьи.
+   * Ширина страницы в пикселях.
    */
   pageWidth: number;
 
   /**
-   * Шаг разлиновки семьи в канонических пикселях.
+   * Высота страницы в пикселях.
    */
-  step: number;
-
-  /**
-   * Отступ первой линии разлиновки от верха листа.
-   */
-  firstLineOffset: number;
+  pageHeight: number;
 };
 
 /**
@@ -167,13 +111,11 @@ type SheetRulingProbe = {
  * значения, что ушли в рендерер.
  */
 let lastProbe: BaselineProbe | null = null;
-let lastSheetProbe: SheetRulingProbe | null = null;
 
 /**
  * Текст на много строк: попадание на одной строке ничего не значит —
  * расхождение шага строк с шагом разлиновки копится и видно только к концу
- * страницы. Длины хватает и на семью в клетку, где строка занимает две клетки
- * и кегль выходит мельче, чем в линейку.
+ * страницы. Длины хватает и на семью в клетку, где строка занимает две клетки.
  */
 const LONG_TEXT = [
   'Рукописный текст ложится на разлиновку тетрадного листа строка за строкой,',
@@ -181,7 +123,7 @@ const LONG_TEXT = [
   'с шагом линий: к низу листа текст либо держится линий, либо уезжает от них',
   'на целую строку, и никакой подкрутки настроек это уже не спасает.',
   'Кегль, межстрочный интервал и верхний отступ блока никто не задаёт руками:',
-  'их выводит автокалибровка из шага разлиновки семьи и метрик выбранного',
+  'их выводит автокалибровка из шага разлиновки листа и метрик выбранного',
   'шрифта, снятых в браузере на настоящем начертании, а не на подстановочном.',
   'Поэтому проверять попадание нужно именно в браузере и именно на нескольких',
   'шрифтах: у каждого своя высота строчных, свой подъём строчного бокса и своя',
@@ -190,9 +132,21 @@ const LONG_TEXT = [
 ].join(' ');
 
 /**
+ * Текст на разворот: и на второй, отражённой, странице должно лечь не меньше
+ * строк, чем нужно для проверки.
+ */
+const SPREAD_TEXT = [LONG_TEXT, LONG_TEXT, LONG_TEXT].join('\n');
+
+/**
  * Допустимое отклонение базовой линии от линии разлиновки в долях шага.
  */
 const DRIFT_TOLERANCE = 0.1;
+
+/**
+ * Допуск сравнения шага строк с шагом разлиновки: шаг строк складывается из
+ * кегля и интервала, и равенство теряется в последнем знаке.
+ */
+const STEP_EPSILON = 1e-9;
 
 /**
  * Сколько строк должно лечь на страницу, чтобы проверка что-то значила.
@@ -218,53 +172,23 @@ const DEFAULT_FONT = HANDWRITING_FONTS[0]?.family || '';
  *
  * Раскладку и отрисовку берёт теми же хуками, что и экран генератора: кегль,
  * межстрочный интервал и верхний отступ выведены автокалибровкой из
- * разлиновки семьи и метрик шрифта, снятых живым измерителем браузера. В
+ * разлиновки листа и метрик шрифта, снятых живым измерителем браузера. В
  * jsdom такую проверку не поставить — там метрики шрифта взять неоткуда.
  */
 const BaselineFitProbe: FC = () => {
   const pages = usePageLayout();
   const source = usePageRender(pages);
-  const { family } = usePageGeometry();
-  /**
-   * Экземпляр берётся по выбору из стора, а не по раздаче рецепта: проба
-   * разлиновки снимается только на закреплённом листе, и тогда выбранный лист
-   * — тот самый, который ушёл в отрисовку.
-   */
-  const { sheetId, isSheetPinned, pageIndex } = useGeneratorStore(
-    useShallow((state) => {
-      return {
-        sheetId: state.sheetId,
-        isSheetPinned: state.isSheetPinned,
-        pageIndex: state.pageIndex,
-      };
-    })
-  );
+  const { sheet, ruling } = usePageGeometry();
+  const pageIndex = useGeneratorStore((state) => {
+    return state.pageIndex;
+  });
   const params = source ? source.buildParams(1) : null;
-  const sheet = family ? findSheet(family, sheetId) : undefined;
-  const background = params?.background || null;
-  const sheetProbe: SheetRulingProbe | null =
-    family && background && sheet && isSheetPinned
+  const probe: BaselineProbe | null =
+    source && params && sheet && ruling
       ? {
           sheetId: sheet.id,
+          layoutSheetId: pages[pageIndex]?.sheetId || '',
           pageIndex,
-          measuredStep: sheet.measuredStep,
-          normalizeScale: sheet.normalizeScale,
-          firstLinePhase: sheet.firstLinePhase,
-          skewAngle: sheet.skewAngle,
-          isMirrored: isMirroredPage(pageIndex),
-          photoHeight: sheet.height,
-          backgroundX: 0,
-          backgroundY: 0,
-          backgroundWidth: background.width,
-          backgroundHeight: background.height,
-          pageWidth: family.width,
-          step: family.ruling.step,
-          firstLineOffset: family.ruling.firstLineOffset,
-        }
-      : null;
-  const probe: BaselineProbe | null =
-    family && params
-      ? {
           fontFamily: params.fontFamily,
           fontSizePx: params.geometry.fontSizePx,
           lineSpacing: params.geometry.lineSpacing,
@@ -272,9 +196,12 @@ const BaselineFitProbe: FC = () => {
           blockRotate: params.geometry.blockRotate,
           fontAscent: params.geometry.fontMetrics.fontAscent,
           lineHeight: params.geometry.fontMetrics.lineHeight,
-          step: family.ruling.step,
-          firstLineOffset: family.ruling.firstLineOffset,
+          step: ruling.step,
+          firstLinePhase: ruling.firstLinePhase,
+          skewAngle: ruling.skewAngle,
           lineCount: params.page.lines.length,
+          pageWidth: source.pageWidth,
+          pageHeight: source.pageHeight,
         }
       : null;
 
@@ -284,7 +211,6 @@ const BaselineFitProbe: FC = () => {
    */
   useEffect(() => {
     lastProbe = probe;
-    lastSheetProbe = sheetProbe;
   });
 
   return (
@@ -297,8 +223,8 @@ const BaselineFitProbe: FC = () => {
 };
 
 /**
- * Шаг строк страницы в канонических пикселях: расстояние между базовыми
- * линиями соседних строк.
+ * Шаг строк страницы в пикселях кадра: расстояние между базовыми линиями
+ * соседних строк.
  *
  * @param probe — снимок параметров отрисовки
  * @returns шаг строк
@@ -313,24 +239,27 @@ const measureLineStep = (probe: BaselineProbe): number => {
  * Наибольшее отклонение базовых линий страницы от линий разлиновки в долях
  * шага.
  *
- * Базовые линии считаются по модели рендерера: `topOffset + fontAscent *
- * fontSizePx + n * (fontSizePx * lineHeight + lineSpacing)`. Линии разлиновки
- * идут от `firstLineOffset` через `step`, поэтому попадание — это расстояние
- * до ближайшей из них: на листе в клетку строка занимает две клетки, и
- * базовая линия садится на каждую вторую линию.
+ * Базовые линии считаются по модели рендерера: до поворота строка n стоит на
+ * высоте `topOffset + fontAscent × кегль + n × шаг строк`. Блок поворачивается
+ * вокруг левого верхнего угла страницы, поэтому базовая линия b пересекает
+ * столбец x на высоте `b / cos θ + x × tg θ`, а линия разлиновки — на высоте
+ * `фаза + k × шаг + x × tg θ`. Слагаемое вдоль строки у них общее, и попадание
+ * — это расстояние от `b / cos θ` до ближайшей линии у левого края: на листе в
+ * клетку строка занимает две клетки, и базовая линия садится на каждую вторую.
  *
  * @param probe — снимок параметров отрисовки и разлиновки
  * @returns отклонение в долях шага разлиновки
  */
 const measureBaselineDrift = (probe: BaselineProbe): number => {
-  const { topOffset, fontSizePx, fontAscent } = probe;
-  const { step, firstLineOffset, lineCount } = probe;
+  const { topOffset, fontSizePx, fontAscent, blockRotate } = probe;
+  const { step, firstLinePhase, lineCount } = probe;
   const lineStep = measureLineStep(probe);
+  const stretch = 1 / Math.cos((blockRotate * Math.PI) / 180);
   let drift = 0;
 
   for (let index = 0; index < lineCount; index += 1) {
-    const baselineY = topOffset + fontAscent * fontSizePx + index * lineStep;
-    const lines = (baselineY - firstLineOffset) / step;
+    const baselineY = (topOffset + fontAscent * fontSizePx + index * lineStep) * stretch;
+    const lines = (baselineY - firstLinePhase) / step;
 
     drift = Math.max(drift, Math.abs(lines - Math.round(lines)));
   }
@@ -339,23 +268,34 @@ const measureBaselineDrift = (probe: BaselineProbe): number => {
 };
 
 /**
- * Ждёт, пока страница ляжет выбранным шрифтом, и отдаёт снятую пробу.
+ * Ждёт, пока страница ляжет выбранным шрифтом на нужный лист, и отдаёт снятую
+ * пробу.
  *
  * Ожидание идёт по метрикам: шрифт грузится и меряется асинхронно, и до
  * замера геометрия считается по запасным пропорциям — попадание на линиях
  * такой страницы ничего не сказало бы о самом шрифте. Метрики проба сверяет с
  * замером живого щупа: так видно, что в отрисовку ушли пропорции именно этого
- * начертания.
+ * начертания. Ждёт проба и раскладку под лист страницы: до пересчёта отрисовка
+ * берёт геометрию прежнего листа, а разлиновку проба снимает уже с нового.
  *
  * @param fontFamily — ожидаемое семейство шрифта страницы
+ * @param pageIndex — ожидаемая страница
+ * @param sheetId — ожидаемый лист; не задан — любой
  * @returns проба, снятая на метриках этого шрифта
  */
-const waitForProbe = async (fontFamily: string): Promise<BaselineProbe> => {
+const waitForProbe = async (
+  fontFamily: string,
+  pageIndex = 0,
+  sheetId = ''
+): Promise<BaselineProbe> => {
   const metrics = await loadFontMetrics(fontFamily);
 
   await waitFor(
     async () => {
       await expect(lastProbe?.fontFamily).toBe(fontFamily);
+      await expect(lastProbe?.pageIndex).toBe(pageIndex);
+      await expect(lastProbe?.sheetId).toBe(sheetId || lastProbe?.sheetId);
+      await expect(lastProbe?.layoutSheetId).toBe(lastProbe?.sheetId);
       await expect(lastProbe?.fontAscent).toBeCloseTo(metrics.fontAscent, 6);
       await expect(lastProbe?.lineHeight).toBeCloseTo(metrics.lineHeight, 6);
       await expect(lastProbe?.lineCount || 0).toBeGreaterThanOrEqual(MIN_LINE_COUNT);
@@ -371,32 +311,33 @@ const waitForProbe = async (fontFamily: string): Promise<BaselineProbe> => {
 };
 
 /**
- * Проверяет, что базовые линии сели на разлиновку.
+ * Проверяет, что базовые линии сели на разлиновку листа страницы.
  *
  * @param probe — снятая проба
  */
 const expectBaselinesOnRuling = async (probe: BaselineProbe): Promise<void> => {
   /**
-   * Наклона нет: попадание считается в канонических координатах листа, а
-   * повёрнутый блок садится на линии повёрнутой фотографии — это другая
-   * проверка.
+   * Блок наклонён ровно на угол разлиновки страницы: только при этом сдвиг
+   * вдоль строки у базовой линии и у линии разлиновки один и тот же, и
+   * попадание у левого края значит попадание по всей строке.
    */
-  await expect(probe.blockRotate).toBe(0);
+  await expect(probe.blockRotate).toBeCloseTo(probe.skewAngle, 9);
 
   /**
    * Строка занимает не меньше линии разлиновки: сойдись шаг строк в ноль,
    * строки легли бы одна на другую, а отклонение от линий всё равно вышло бы
    * нулевым — попадание проверяется вместе с тем, что строки расходятся.
    */
-  await expect(measureLineStep(probe)).toBeGreaterThanOrEqual(probe.step);
+  await expect(measureLineStep(probe)).toBeGreaterThanOrEqual(
+    probe.step * (1 - STEP_EPSILON)
+  );
   await expect(measureBaselineDrift(probe)).toBeLessThanOrEqual(DRIFT_TOLERANCE);
 };
 
 /**
  * Ставит стор в известное состояние и забывает прошлую пробу: семья листов —
- * из аргумента, всё остальное по умолчанию. Экземпляры пресет-пака без измерений сняты ровно по
- * канону семьи, поэтому наклона у них нет и линии листа совпадают с
- * каноническими.
+ * из аргумента, всё остальное по умолчанию. Экземпляры без артефакта профилей
+ * несут синтезированную разлиновку без наклона.
  *
  * @param familyId — семья листов
  */
@@ -408,6 +349,52 @@ const applyFamily = (familyId: string): void => {
     text: LONG_TEXT,
     familyId,
   });
+};
+
+/**
+ * Ставит стор на закреплённый лист пресет-пака с измерениями и на заданную
+ * половину разворота.
+ *
+ * @param families — предустановленные семьи с измерениями
+ * @param familyId — семья листов
+ * @param sheetId — экземпляр листа
+ * @param pageIndex — номер страницы, считая с нуля
+ */
+const applySheet = (
+  families: PaperFamily[],
+  familyId: string,
+  sheetId: string,
+  pageIndex: number
+): void => {
+  lastProbe = null;
+  clearLayoutCache();
+  useGeneratorStore.setState({
+    ...DEFAULT_GENERATOR_STATE,
+    presetFamilies: families,
+    text: SPREAD_TEXT,
+    familyId,
+    sheetId,
+    isSheetPinned: true,
+    pageIndex,
+  });
+};
+
+/**
+ * Сколько разных шагов разлиновки у экземпляров семьи. Экземпляры пресет-пака
+ * сняты с разного расстояния, поэтому число меньше числа экземпляров значит,
+ * что в дело пошли листы без измерений.
+ *
+ * @param family — семья листов
+ * @returns число разных шагов
+ */
+const countDistinctSteps = (family: PaperFamily): number => {
+  const steps = family.sheets.reduce<Set<number>>((acc, sheet) => {
+    acc.add(sheet.ruling.step);
+
+    return acc;
+  }, new Set<number>());
+
+  return steps.size;
 };
 
 const meta = {
@@ -461,155 +448,30 @@ export const FontSwitchKeepsRuling: Story = {
 };
 
 /**
- * Наибольшее отклонение линий разлиновки самой фотографии от канонических
- * линий страницы в долях шага.
+ * Строки садятся на разлиновку настоящих фотографий пресет-пака — на каждом
+ * экземпляре и на обеих половинах разворота, а страница равна кадру своего
+ * листа.
  *
- * Линии считаются по прямоугольнику, которым рендерер кладёт фотографию на
- * страницу: фаза первой линии и шаг переводятся в канонические пиксели тем же
- * масштабом, что и вся фотография. Растянись фотография по размеру страницы —
- * её шаг разошёлся бы с каноническим, и отклонение росло бы от линии к линии.
- *
- * @param probe — снимок укладки фотографии
- * @returns отклонение в долях канонического шага
+ * Экземпляры берутся из артефакта профилей: у каждого свой шаг, поля и наклон,
+ * и на чётной странице разлиновка отражена вместе с наклоном — на наклонных
+ * листах потерянная при отражении поправка вывела бы строки за допуск.
  */
-const measureSheetRulingDrift = (probe: SheetRulingProbe): number => {
-  const { measuredStep, firstLinePhase, photoHeight, skewAngle, isMirrored } = probe;
-  const { backgroundY, backgroundHeight, step, firstLineOffset, pageWidth } = probe;
-  const scale = backgroundHeight / photoHeight;
-  const lineCount = Math.floor(photoHeight / measuredStep);
-  /**
-   * Отражение переворачивает наклон разлиновки, поэтому у левого края страницы
-   * — там, где рендерер отсчитывает базовые линии, — оказывается линия,
-   * опущенная на наклон во всю ширину страницы.
-   */
-  const tilt = isMirrored ? Math.tan((skewAngle * Math.PI) / 180) * pageWidth : 0;
-  let drift = 0;
-
-  for (let index = 0; index < lineCount; index += 1) {
-    const lineY = backgroundY + (firstLinePhase + index * measuredStep) * scale + tilt;
-    const lines = (lineY - firstLineOffset) / step;
-
-    drift = Math.max(drift, Math.abs(lines - Math.round(lines)));
-  }
-
-  return drift;
-};
-
-/**
- * Сколько разных коэффициентов нормировки у экземпляров семьи. У пресетов без
- * измерений он один на всю семью, поэтому число больше единицы означает, что в
- * дело пошёл артефакт профилей с настоящими замерами фотографий.
- *
- * @param family — семья листов
- * @returns число разных коэффициентов нормировки
- */
-const countNormalizeScales = (family: PaperFamily): number => {
-  const scales = family.sheets.reduce<Set<number>>((acc, sheet) => {
-    acc.add(sheet.normalizeScale);
-
-    return acc;
-  }, new Set<number>());
-
-  return scales.size;
-};
-
-/**
- * Ждёт, пока страница нарисуется закреплённым экземпляром, и отдаёт снятую
- * пробу его укладки.
- *
- * @param sheetId — ожидаемый экземпляр листа
- * @param pageIndex — ожидаемая страница
- * @returns проба укладки фотографии этого экземпляра
- */
-const waitForSheetProbe = async (
-  sheetId: string,
-  pageIndex: number
-): Promise<SheetRulingProbe> => {
-  /**
-   * Ожидание с запасом: проба снимается только когда фотография уже
-   * загрузилась, а каждый экземпляр пресет-пака — это отдельный файл в
-   * полмегабайта.
-   */
-  await waitFor(
-    async () => {
-      await expect(lastSheetProbe?.sheetId).toBe(sheetId);
-      await expect(lastSheetProbe?.pageIndex).toBe(pageIndex);
-    },
-    { timeout: 15_000 }
-  );
-
-  if (!lastSheetProbe) {
-    throw new Error('Проба не снялась: фотография не легла на страницу');
-  }
-
-  return lastSheetProbe;
-};
-
-/**
- * Проверяет, что разлиновка фотографии села на канон семьи.
- *
- * @param probe — снятая проба укладки
- * @param isMirrored — страница отражена: правая половина разворота
- */
-const expectSheetRulingOnCanon = async (
-  probe: SheetRulingProbe,
-  isMirrored: boolean
-): Promise<void> => {
-  const scale = probe.backgroundHeight / probe.photoHeight;
-
-  /**
-   * Масштаб укладки — коэффициент нормировки экземпляра: только при нём шаг
-   * фотографии становится каноническим шагом семьи.
-   */
-  await expect(scale).toBeCloseTo(probe.normalizeScale, 6);
-  await expect(probe.measuredStep * scale).toBeCloseTo(probe.step, 6);
-  await expect(measureSheetRulingDrift(probe)).toBeLessThanOrEqual(DRIFT_TOLERANCE);
-
-  /**
-   * Отражённая страница прижата к правому краю: после отражения разлиновка
-   * вместе с линией поля уходит туда же, куда и отступ блока.
-   */
-  await expect(
-    isMirrored ? probe.backgroundX + probe.backgroundWidth : probe.backgroundX
-  ).toBeCloseTo(isMirrored ? probe.pageWidth : 0, 6);
-};
-
-/**
- * Разлиновка настоящих фотографий пресет-пака садится на канон семьи.
- *
- * Экземпляры берутся из артефакта профилей, а не из пресетов без измерений: у
- * измеренных экземпляров шаг на фотографии отличается от канонического, и
- * только на них видно, применилась ли нормировка. Проверяются обе половины
- * разворота: у отражённой страницы фаза считается от отражённой разлиновки.
- */
-export const PhotoRulingMatchesCanon: Story = {
+export const PhotoRulingOnSheet: Story = {
   play: async () => {
     const families = await loadPaperFamilies();
-    const { setPresetFamilies, selectFamily, selectSheet, goToPage } =
-      useGeneratorStore.getState();
-
-    setPresetFamilies(families);
 
     for (const family of families) {
-      selectFamily(family.id);
-
-      /**
-       * Без артефакта профилей проверять нечего: у экземпляров без измерений
-       * нормировка одна на всю семью, и подмена её растяжением по странице
-       * прошла бы незамеченной.
-       */
-      await expect(countNormalizeScales(family)).toBeGreaterThan(1);
+      await expect(countDistinctSteps(family)).toBe(family.sheets.length);
 
       for (const sheet of family.sheets) {
-        selectSheet(sheet.id);
-
         for (const pageIndex of [0, 1]) {
-          goToPage(pageIndex);
+          applySheet(families, family.id, sheet.id, pageIndex);
 
-          await expectSheetRulingOnCanon(
-            await waitForSheetProbe(sheet.id, pageIndex),
-            pageIndex % 2 === 1
-          );
+          const probe = await waitForProbe(DEFAULT_FONT, pageIndex, sheet.id);
+
+          await expectBaselinesOnRuling(probe);
+          await expect(probe.pageWidth).toBe(sheet.width);
+          await expect(probe.pageHeight).toBe(sheet.height);
         }
       }
     }

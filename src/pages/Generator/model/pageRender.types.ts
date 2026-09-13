@@ -45,14 +45,6 @@ export type PageGeometryView = {
   metrics: FontMetrics;
 
   /**
-   * Геометрия блока в канонических пикселях семьи. `null` — семьи нет и
-   * считать не по чему.
-   *
-   * @deprecated sheet-native-ruling — читать `sheetGeometry`
-   */
-  geometry: BlockGeometry | null;
-
-  /**
    * Геометрия блока в пикселях кадра листа страницы. `null` — листа нет и
    * считать не по чему.
    */
@@ -67,29 +59,6 @@ export type PageGeometryView = {
    * Семейство шрифта страницы: свой шрифт важнее выбора из списка.
    */
   fontFamily: string;
-};
-
-/**
- * Вход геометрии блока по канону семьи.
- *
- * @deprecated sheet-native-ruling — геометрия страницы считается по
- *   `SheetCalibration`
- */
-export type CanonGeometryInput = {
-  /**
-   * Семья листов: по её канону выводится геометрия.
-   */
-  family: PaperFamily;
-
-  /**
-   * Метрики шрифта в долях кегля.
-   */
-  metrics: FontMetrics;
-
-  /**
-   * Ручная поправка поверх вычисленной геометрии в долях шага разлиновки.
-   */
-  correction: GeometryCorrection;
 };
 
 /**

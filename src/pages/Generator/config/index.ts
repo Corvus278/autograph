@@ -44,10 +44,7 @@ export {
 export { CUSTOM_FONT_FAMILY, HANDWRITING_FONTS, SUBSTITUTE_FONTS } from './fonts';
 export {
   buildPaperFamilies,
-  CANONICAL_PX_PER_MM,
   GRID_FAMILY_ID,
-  GRID_RULING,
   LINED_FAMILY_ID,
-  LINED_RULING,
   PRESET_PAPER_FAMILIES,
 } from './paperFamilies';

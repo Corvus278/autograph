@@ -7,6 +7,7 @@ import type {
   PageSheet,
   PaginateOptions,
 } from '@pages/Generator/lib/paginate/paginate.types';
+import type { RulingKind } from '@pages/Generator/lib/paper';
 import { describe, expect, it } from 'vitest';
 
 import { getBaselineY, getLineStep } from './helpers/baseline-model';
@@ -21,15 +22,17 @@ import { createMonospaceMeasurer } from './helpers/monospace-measurer';
 const METRICS: FontMetrics = { xHeight: 0.55, fontAscent: 1, lineHeight: 1.25 };
 
 /**
- * Лист на линейке без боковых полей: ширина блока равна ширине кадра.
+ * Лист без боковых полей: ширина блока равна ширине кадра.
  *
  * @param step — шаг разлиновки; первая линия и верхнее поле — на один шаг от верха
  * @param size — кадр листа
+ * @param kind — вид разлиновки
  * @returns лист страницы, как его видит разбивка
  */
 const buildCalibration = (
   step: number,
-  size: Pick<SheetCalibration, 'width' | 'height'>
+  size: Pick<SheetCalibration, 'width' | 'height'>,
+  kind: RulingKind = 'lined'
 ): SheetCalibration => {
   return {
     ruling: {
@@ -40,7 +43,7 @@ const buildCalibration = (
       marginLineX: null,
       marginLineSide: null,
     },
-    kind: 'lined',
+    kind,
     ...size,
   };
 };
@@ -79,6 +82,62 @@ const NARROW_STEP_LINES = 12;
 const BOTTOM_MARGIN_STEPS = 1.5;
 const WIDE_STEP_LINES_WITH_RESERVE = 8;
 const NARROW_STEP_LINES_WITH_RESERVE = 11;
+
+/**
+ * Метрики рукописного шрифта, на которых низ страницы легко потерять: подъём
+ * строчного бокса выше шага строк на линейке и заметно ниже — на клетке. На
+ * шаге 40 кегль — 40 × 0,55 / 0,5 = 44, подъём — 1,1 × 44 = 48,4, верхний
+ * отступ блока — 40 − 48,4 = −8,4, первая базовая линия — 40.
+ */
+const TALL_METRICS: FontMetrics = { xHeight: 0.5, fontAscent: 1.1, lineHeight: 1.3 };
+
+/**
+ * Лист, на котором проверяется низ страницы, вместе с эталонной вместимостью.
+ */
+type BottomCase = {
+  /**
+   * Лист страницы.
+   */
+  sheet: PageSheet;
+
+  /**
+   * Сколько строк встаёт на полную страницу этого листа.
+   */
+  lineCount: number;
+};
+
+/**
+ * Листы, где последняя строка встаёт у самого нижнего поля. Вместимость
+ * посчитана по числам кадра: строка ставится, пока её базовая линия не ниже
+ * поля.
+ *
+ * - клетка: строка — два шага, 80 px; поле кадра 400 — на 380; базовые линии
+ *   40, 120, 200, 280, 360 — пять строк, шестая, 440, ниже поля;
+ * - линейка: строка — шаг, 40 px; поле кадра 418 — на 398; базовые линии 40, 80,
+ *   …, 360 — девять строк, десятая, 400, ниже поля.
+ */
+const BOTTOM_CASES: BottomCase[] = [
+  {
+    sheet: {
+      sheetId: 'grid-bottom',
+      calibration: buildCalibration(40, { width: 400, height: 400 }, 'grid'),
+    },
+    lineCount: 5,
+  },
+  {
+    sheet: {
+      sheetId: 'lined-bottom',
+      calibration: buildCalibration(40, { width: 400, height: 418 }, 'lined'),
+    },
+    lineCount: 9,
+  },
+];
+
+/**
+ * Насколько Linux Chromium раскладывает строку шире её замера в долях кегля,
+ * умноженного на кегль: наибольшее расхождение, снятое на пресетном шрифте.
+ */
+const BROWSER_WIDTH_EXCESS = 0.009;
 
 /**
  * Символ — половина кегля: на шаге 40 символ занимает 20 пикселей и блок
@@ -190,17 +249,58 @@ describe('paginate', () => {
     expect(widthOf(pages[1], 30)).toBeGreaterThan(FRAME.width * 0.8);
   });
 
-  it('базовая линия последней строки полной страницы ближе шага строк к нижнему полю', () => {
-    const pages = paginate(LONG_TEXT, buildOptions());
+  it('оставляет строке запас на ширину, которую браузер раскладывает шире замера', () => {
+    /**
+     * Слова в 9 и 10 символов: пара с пробелом — ровно 20 символов, ровно
+     * ширина блока на шаге 40. Без запаса такая строка встала бы вплотную к
+     * краю блока, и браузер, разложивший её шире замера, вывел бы её за край.
+     */
+    const text = Array.from({ length: 12 }, (_word, index) => {
+      return index % 2 === 0 ? 'а'.repeat(9) : 'б'.repeat(10);
+    }).join(' ');
+    const pages = paginate(
+      text,
+      buildOptions({
+        getPageSheet: () => {
+          return WIDE_STEP_SHEET;
+        },
+      })
+    );
 
-    pages.slice(0, -1).forEach((page, pageIndex) => {
-      const { calibration } = alternateSheets(pageIndex);
-      const geometry = deriveGeometry(calibration, METRICS);
-      const baseline = getBaselineY(geometry, METRICS, page.lines.length - 1);
+    for (const { lines } of pages) {
+      for (const { text: lineText } of lines) {
+        expect(
+          lineText.length * 0.5 * 40 * (1 + BROWSER_WIDTH_EXCESS)
+        ).toBeLessThanOrEqual(FRAME.width);
+      }
+    }
+  });
+
+  it('добирает строку до нижнего поля на клетке и на линейке, не опуская базовую линию под поле', () => {
+    for (const { sheet, lineCount } of BOTTOM_CASES) {
+      const { calibration } = sheet;
+      const pages = paginate(
+        LONG_TEXT,
+        buildOptions({
+          metrics: TALL_METRICS,
+          getPageSheet: () => {
+            return sheet;
+          },
+        })
+      );
+      const geometry = deriveGeometry(calibration, TALL_METRICS);
       const bottomLine = calibration.height - calibration.ruling.margins.bottom;
 
-      expect(bottomLine - baseline).toBeLessThan(getLineStep(geometry, METRICS));
-    });
+      expect(pages.length).toBeGreaterThan(1);
+
+      for (const page of pages.slice(0, -1)) {
+        const baseline = getBaselineY(geometry, TALL_METRICS, page.lines.length - 1);
+
+        expect(page.lines).toHaveLength(lineCount);
+        expect(baseline).toBeLessThanOrEqual(bottomLine);
+        expect(bottomLine - baseline).toBeLessThan(getLineStep(geometry, TALL_METRICS));
+      }
+    }
   });
 
   it('слово шире блока занимает свою строку, и разбивка не зацикливается', () => {
@@ -228,7 +328,8 @@ describe('paginate', () => {
 
   it('строка, не помещающаяся даже на пустую страницу, всё равно занимает свою', () => {
     /**
-     * (50 − 0 − 20) / 40 = 0,75 — ни одной строки по формуле.
+     * Первая базовая линия — 40, нижнее поле — на 50 − 20 = 30: ни одной строки
+     * по формуле.
      */
     const tiny: PageSheet = {
       sheetId: 'tiny',

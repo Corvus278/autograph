@@ -109,14 +109,11 @@ export type PhotoSize = {
 export type PaperSheetProfiles = Record<string, PaperSheet[]>;
 
 /**
- * Экземпляр в том виде, в каком его пишет скрипт сборки: шаг, фаза и наклон
- * лежат только в разлиновке, иначе артефакт нёс бы их в двух местах, и места
- * могли бы разойтись.
+ * Экземпляр в том виде, в каком его пишет скрипт сборки. Форма та же, что у
+ * экземпляра в приложении: артефакт разбирается тем же разборщиком, что и
+ * локальное хранилище, и расхождение форм означало бы второй разборщик.
  */
-export type PaperSheetProfile = Omit<
-  PaperSheet,
-  'skewAngle' | 'measuredStep' | 'normalizeScale' | 'firstLinePhase'
->;
+export type PaperSheetProfile = PaperSheet;
 
 /**
  * Артефакт `public/paper/profiles.json`: то, что скрипт сборки посчитал по

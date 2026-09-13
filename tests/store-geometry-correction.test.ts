@@ -59,15 +59,6 @@ const FAMILY: PaperFamily = {
   id: 'lined',
   label: 'Линейка',
   kind: 'lined',
-  width: 1600,
-  height: 2000,
-  ruling: {
-    kind: 'lined',
-    step: 40,
-    firstLineOffset: 80,
-    margins: { top: 80, right: 60, bottom: 80, left: 60 },
-    marginLineX: null,
-  },
   sheets: [NARROW_SHEET, WIDE_SHEET],
 };
 
@@ -302,10 +293,12 @@ describe('запас снизу', () => {
 
       const lineStep = getLineStep(pageGeometry, METRICS);
 
+      const firstBaselineDepth = METRICS.fontAscent * pageGeometry.fontSizePx;
+
       const countLines = (bottomMargin: number): number => {
-        return Math.floor(
-          deriveTextHeight(calibration, pageGeometry, bottomMargin) / lineStep
-        );
+        const textHeight = deriveTextHeight(calibration, pageGeometry, bottomMargin);
+
+        return Math.floor((textHeight - firstBaselineDepth) / lineStep) + 1;
       };
 
       expect(countLines(0) - countLines(store().bottomMargin)).toBe(reserve);

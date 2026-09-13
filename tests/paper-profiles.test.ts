@@ -1,5 +1,5 @@
 import { buildPaperFamilies } from '@pages/Generator/config/paperFamilies';
-import { deriveGeometry, deriveTextHeight } from '@pages/Generator/lib/calibrate';
+import { deriveGeometry } from '@pages/Generator/lib/calibrate';
 import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
 import { MARGIN_FALLBACK_STEPS } from '@pages/Generator/lib/paper';
 import { getPageCalibration } from '@pages/Generator/model/geometrySelectors';
@@ -9,7 +9,7 @@ import {
 } from '@pages/Generator/model/paperProfiles';
 import { describe, expect, it } from 'vitest';
 
-import { getLineStep } from './helpers/baseline-model';
+import { getBaselineY, getLineStep } from './helpers/baseline-model';
 
 /**
  * Разлиновка экземпляра в пикселях его фотографии: поля несимметричны и линия
@@ -27,7 +27,7 @@ const PROFILE_RULING = {
 
 /**
  * Экземпляр в том виде, в каком его пишет скрипт сборки: разлиновка целиком в
- * `ruling`, наклона, шага и нормировки на верхнем уровне нет, карта текстуры —
+ * `ruling`, наклона, шага и фазы на верхнем уровне нет, карта текстуры —
  * путь к файлу рядом с фотографией, а не data URL.
  */
 const buildProfile = (id: string) => {
@@ -69,14 +69,6 @@ describe('разбор артефакта профилей', () => {
     const profiles = parsePaperProfiles(buildArtifact());
 
     expect(profiles.grid?.[0]?.ruling).toEqual(PROFILE_RULING);
-  });
-
-  it('устаревшие поля листа заполняет из разлиновки, а не с верхнего уровня', () => {
-    const [sheet] = parsePaperProfiles(buildArtifact()).grid || [];
-
-    expect(sheet?.measuredStep).toBe(PROFILE_RULING.step);
-    expect(sheet?.skewAngle).toBe(PROFILE_RULING.skewAngle);
-    expect(sheet?.firstLinePhase).toBe(PROFILE_RULING.firstLinePhase);
   });
 
   it('принимает карту текстуры, заданную путём к файлу', () => {
@@ -154,9 +146,9 @@ describe('сборка предустановленных семей', () => {
           const calibration = getPageCalibration(family, sheet, pageIndex);
           const geometry = deriveGeometry(calibration, FALLBACK_FONT_METRICS);
           const lineStep = getLineStep(geometry, FALLBACK_FONT_METRICS);
-          const capacity = Math.floor(
-            deriveTextHeight(calibration, geometry, 0) / lineStep
-          );
+          const bottomLine = calibration.height - calibration.ruling.margins.bottom;
+          const firstBaseline = getBaselineY(geometry, FALLBACK_FONT_METRICS, 0);
+          const capacity = Math.floor((bottomLine - firstBaseline) / lineStep) + 1;
 
           expect(geometry.blockWidth).toBeGreaterThan(0);
           expect(geometry.leftPadding).toBeGreaterThanOrEqual(0);

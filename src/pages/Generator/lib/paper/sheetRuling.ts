@@ -2,8 +2,9 @@ import type { PaperMargins, SheetRuling, SheetRulingSource } from './paper.types
 
 /**
  * На сколько шагов разлиновки блок отступает от края кадра с той стороны, где
- * поле не нашлось. Полтора шага на пресет-паке — около восьмидесяти пикселей:
- * столько же, сколько отступали поля по прежним канонам семей.
+ * поле не нашлось. Отступ задан шагами, а не пикселями: масштаб у каждой
+ * фотографии свой, и только доля шага даёт одинаковое поле на любом снимке.
+ * Полтора шага на пресет-паке — около восьмидесяти пикселей.
  */
 export const MARGIN_FALLBACK_STEPS = 1.5;
 
@@ -17,14 +18,15 @@ const LINE_SNAP_EPSILON = 1e-6;
 const NO_MARGINS: PaperMargins = { top: 0, right: 0, bottom: 0, left: 0 };
 
 /**
- * Первая линия разлиновки, лежащая не выше заданной высоты.
+ * Первая линия разлиновки, лежащая на заданной высоте или ниже неё по листу.
+ * Высота в кадре растёт вниз, поэтому число округляется вверх.
  *
  * @param y — высота в пикселях кадра
  * @param step — шаг разлиновки, больше нуля
  * @param phase — высота любой линии разлиновки
  * @returns высота линии в пикселях кадра
  */
-const snapDownToLine = (y: number, step: number, phase: number): number => {
+const ceilToLine = (y: number, step: number, phase: number): number => {
   return phase + Math.ceil((y - phase) / step - LINE_SNAP_EPSILON) * step;
 };
 
@@ -43,7 +45,7 @@ export const resolveFirstLine = (ruling: SheetRuling): number => {
     return margins.top;
   }
 
-  return snapDownToLine(margins.top, step, firstLinePhase);
+  return ceilToLine(margins.top, step, firstLinePhase);
 };
 
 /**
@@ -86,7 +88,7 @@ export const buildSheetRuling = (source: SheetRulingSource): SheetRuling => {
   return {
     ...ruling,
     margins: {
-      top: margins.top || snapDownToLine(fallback, step, firstLinePhase),
+      top: margins.top || ceilToLine(fallback, step, firstLinePhase),
       right: margins.right || fallback,
       bottom: margins.bottom || fallback,
       left: margins.left || fallback,

@@ -1,7 +1,6 @@
 /**
  * @vitest-environment jsdom
  */
-import { GRID_RULING } from '@pages/Generator/config';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -220,7 +219,9 @@ describe('группа «Геометрия»', () => {
 
     const fontSize = screen.getByRole('slider', { name: 'Размер шрифта' });
     const topOffset = screen.getByRole('slider', { name: 'Вертикальный сдвиг' });
-    const bottomMargin = screen.getByRole('slider', { name: 'Высота нижнего поля' });
+    const bottomMargin = screen.getByRole('slider', {
+      name: 'Запас снизу в шагах разлиновки',
+    });
 
     expect(fontSize.getAttribute('aria-valuemax')).toBe('0.25');
     expect(topOffset.getAttribute('aria-valuemin')).toBe('-2');
@@ -326,7 +327,6 @@ describe('группа «Бумага»', () => {
 
     expect(readUserSheet()?.ruling.step).toBe(25);
     expect(readUserSheet()?.ruling.firstLinePhase).toBe(40);
-    expect(readUserSheet()?.normalizeScale).toBeCloseTo(GRID_RULING.step / 25, 6);
   });
 
   it('найденную разлиновку показывает в форме и даёт поправить', async () => {
@@ -365,7 +365,6 @@ describe('группа «Бумага»', () => {
     await applyRuling(user, '32', '60');
 
     expect(readUserSheet()?.ruling.step).toBe(32);
-    expect(readUserSheet()?.normalizeScale).toBeCloseTo(GRID_RULING.step / 32, 6);
   });
 
   it('удаляет свой лист из списка', async () => {

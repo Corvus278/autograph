@@ -28,7 +28,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { findCalls, getCanvasFrame } from './helpers/canvas-recorder';
 import type { MonospaceMeasurerFactory } from './helpers/monospace-measurer';
 import { createMonospaceMeasurerFactory } from './helpers/monospace-measurer';
-import { buildRenderFamily, buildSheet } from './helpers/paper-family';
+import {
+  buildRenderFamily,
+  buildSheet,
+  RENDER_SHEET_RULING,
+} from './helpers/paper-family';
 
 /**
  * Повторяет сборку экрана генератора, но с измерителем-моделью: настоящих
@@ -68,10 +72,11 @@ const CHAR_WIDTH = 0.2;
 
 /**
  * Запас снизу в шагах разлиновки, оставляющий на странице ровно две строки:
- * верхний отступ блока у семьи-модели нулевой, нижнего поля нет, шаг строк на
- * линейке равен шагу разлиновки — (400 − 0 − 0 − 8 · 40) / 40 = 2.
+ * нижнего поля у семьи-модели нет, базовые линии стоят на 41,25, 81,25 и
+ * 121,25, а запас в семь шагов поднимает низ листа до 400 − 7 · 40 = 120 — две
+ * строки встают, третья оказалась бы ниже.
  */
-const TWO_LINE_BOTTOM_MARGIN = 8;
+const TWO_LINE_BOTTOM_MARGIN = 7;
 
 /**
  * Поправка кегля в долях шага: четверть шага семьи-модели — десять пикселей.
@@ -227,7 +232,7 @@ describe('разворот чётных страниц', () => {
     useGeneratorStore.setState({ bottomMargin: TWO_LINE_BOTTOM_MARGIN });
     await renderHarness(factory);
 
-    expect(getBlockLeftPadding()).toBeCloseTo(FAMILY.ruling.margins.left);
+    expect(getBlockLeftPadding()).toBeCloseTo(RENDER_SHEET_RULING.margins.left);
 
     act(() => {
       useGeneratorStore.getState().goToPage(1);
@@ -238,7 +243,7 @@ describe('разворот чётных страниц', () => {
      * сколько на нечётной странице оставалось справа.
      */
     await waitFor(() => {
-      expect(getBlockLeftPadding()).toBeCloseTo(FAMILY.ruling.margins.right);
+      expect(getBlockLeftPadding()).toBeCloseTo(RENDER_SHEET_RULING.margins.right);
     });
   });
 });

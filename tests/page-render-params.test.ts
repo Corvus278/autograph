@@ -67,10 +67,6 @@ const SHEET: PaperSheet = {
     marginLineX: MARGIN_LINE_X,
     marginLineSide: 'left',
   },
-  skewAngle: SKEW_ANGLE,
-  measuredStep: RULING_STEP,
-  normalizeScale: 1,
-  firstLinePhase: 100,
   lighting: null,
   texture: null,
 };
@@ -93,24 +89,12 @@ const TILTED_SHEET: PaperSheet = {
     marginLineX: null,
     marginLineSide: null,
   },
-  skewAngle: -1.17,
-  measuredStep: 53.7,
-  firstLinePhase: 21.3,
 };
 
 const FAMILY: PaperFamily = {
   id: 'lined',
   label: 'В линейку',
   kind: 'lined',
-  width: 200,
-  height: 400,
-  ruling: {
-    kind: 'lined',
-    step: RULING_STEP,
-    firstLineOffset: 100,
-    margins: { top: 100, right: 100, bottom: 0, left: 0 },
-    marginLineX: MARGIN_LINE_X,
-  },
   sheets: [SHEET, TILTED_SHEET],
 };
 

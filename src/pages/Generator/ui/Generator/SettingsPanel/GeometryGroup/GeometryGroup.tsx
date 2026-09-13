@@ -129,7 +129,7 @@ export const GeometryGroup: FC = () => {
       />
 
       <Slider
-        label="Высота нижнего поля"
+        label="Запас снизу в шагах разлиновки"
         value={bottomMargin}
         min={BOTTOM_MARGIN_RANGE.min}
         max={BOTTOM_MARGIN_RANGE.max}

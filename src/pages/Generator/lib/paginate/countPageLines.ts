@@ -4,13 +4,16 @@ import type { FontMetrics } from '../measure/measure.types';
 import { FALLBACK_FONT_METRICS } from '../measure/measureFontMetrics';
 
 /**
- * Сколько строк помещается на листе страницы: высота под текст — кадр без
- * верхнего отступа блока, нижнего поля и запаса снизу — делится на шаг строк.
+ * Сколько строк помещается на листе страницы: строка ставится, если её
+ * базовая линия лежит не ниже нижнего поля листа, поднятого на запас снизу.
+ * Хвосты букв последней строки при этом могут зайти в поле — зато у низа листа
+ * не остаётся пустой полосы высотой в строку.
  *
- * Шаг строк — тот же, по которому отрисовка ставит базовые линии:
- * `fontSizePx * lineHeight + lineSpacing`, с тем же запасным `lineHeight`,
- * когда метрика не измерена. Разойдись формулы — страница набиралась бы на
- * одно число строк, а рисовалась бы с другим шагом и уезжала за нижнее поле.
+ * Базовые линии считаются по той же модели, по которой их ставит отрисовка:
+ * первая — на подъём строчного бокса ниже верха блока, следующие — через шаг
+ * строк `fontSizePx * lineHeight + lineSpacing`, с теми же запасными метриками,
+ * когда они не измерены. Разойдись формулы — страница набиралась бы на одно
+ * число строк, а рисовалась бы с другим шагом и уезжала за нижнее поле.
  *
  * @param sheet — лист страницы
  * @param geometry — геометрия блока на этом листе
@@ -24,8 +27,12 @@ export const countPageLines = (
   metrics: FontMetrics,
   bottomMargin: number
 ): number => {
+  const { fontSizePx, lineSpacing } = geometry;
   const lineHeight = metrics.lineHeight || FALLBACK_FONT_METRICS.lineHeight;
-  const lineStep = geometry.fontSizePx * lineHeight + geometry.lineSpacing;
+  const fontAscent = metrics.fontAscent || FALLBACK_FONT_METRICS.fontAscent;
+  const lineStep = fontSizePx * lineHeight + lineSpacing;
+  const baselineRoom =
+    deriveTextHeight(sheet, geometry, bottomMargin) - fontAscent * fontSizePx;
 
-  return Math.floor(deriveTextHeight(sheet, geometry, bottomMargin) / lineStep);
+  return Math.floor(baselineRoom / lineStep) + 1;
 };

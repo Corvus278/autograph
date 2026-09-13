@@ -10,14 +10,7 @@ export {
   resolveLightingGrid,
 } from './extractLighting';
 export { extractTexture } from './extractTexture';
-export { fitSheetToPage } from './fitSheetToPage';
 export { mirrorSheetRuling } from './mirrorSheetRuling';
-export {
-  buildNormalizedSheet,
-  computeNormalizeScale,
-  toCanonicalLength,
-  toPhotoLength,
-} from './normalizeSheet';
 export type {
   ExtractLightingOptions,
   ExtractTextureOptions,
@@ -26,13 +19,11 @@ export type {
   MarginLineSide,
   PaperFamily,
   PaperMargins,
-  PaperRuling,
   PaperSheet,
   PaperTexture,
   RulingDetection,
   RulingKind,
   SheetImageData,
-  SheetPlacement,
   SheetRuling,
   SheetRulingSource,
   TextureMap,

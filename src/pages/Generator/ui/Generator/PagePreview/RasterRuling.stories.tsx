@@ -7,7 +7,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { GRID_FAMILY_ID, HANDWRITING_FONTS, LINED_FAMILY_ID } from '../../../config';
 import { GRID_ROW_STEPS } from '../../../lib/calibrate/deriveGeometry';
 import { loadFontMetrics } from '../../../lib/measure/measureFontMetrics';
-import type { PaperFamily } from '../../../lib/paper';
+import type { PaperFamily, PaperSheet } from '../../../lib/paper';
 import type { PageRenderParams, RenderImage } from '../../../lib/render';
 import { loadRenderImage } from '../../../lib/render';
 import { drawPage, measurePageImage } from '../../../model/drawPage';
@@ -35,18 +35,36 @@ type RasterProbe = {
   sheetId: string;
 
   /**
+   * Лист, под который разложена показанная страница. Раскладка под новый лист
+   * пересчитывается асинхронно и до того отстаёт от выбора в сторе.
+   */
+  layoutSheetId: string;
+
+  /**
+   * Число страниц раскладки: по нему видно, что раскладка пересчитана под
+   * текущий текст, а не осталась от прежнего на том же листе.
+   */
+  pageCount: number;
+
+  /**
    * Номер показанной страницы: у соседних половин разворота параметры разные,
    * а экземпляр один и тот же.
    */
   pageIndex: number;
 
   /**
-   * Параметры отрисовки страницы в канонических пикселях семьи.
+   * Экземпляр листа страницы: его кадр — размер страницы, его разлиновка — то,
+   * с чем сверяется растр.
+   */
+  sheet: PaperSheet;
+
+  /**
+   * Параметры отрисовки страницы в пикселях кадра листа.
    */
   params: PageRenderParams;
 
   /**
-   * Семья листов: её канон — то, с чем сверяется разлиновка на растре.
+   * Семья листов: её вид задаёт, сколько шагов разлиновки занимает строка.
    */
   family: PaperFamily;
 };
@@ -158,9 +176,9 @@ const BLUE_WEIGHT = 0.0722;
 const BACKGROUND_WINDOW = 151;
 
 /**
- * Границы перебора шага разлиновки в пикселях растра. Канонические шаги семей
- * лежат внутри с запасом в обе стороны, поэтому неверный масштаб фотографии
- * не выпадает из перебора, а находится с неправильным шагом — это и нужно
+ * Границы перебора шага разлиновки в пикселях растра. Шаги пресет-пака лежат
+ * внутри с запасом в обе стороны, поэтому неверный масштаб фотографии не
+ * выпадает из перебора, а находится с неправильным шагом — это и нужно
  * увидеть.
  */
 const MIN_PERIOD = 20;
@@ -186,7 +204,7 @@ const TANGENT_STEP = 0.004;
 const DRIFT_TOLERANCE = 0.1;
 
 /**
- * Допустимое расхождение измеренного шага с каноном семьи в долях шага.
+ * Допустимое расхождение измеренного шага с шагом разлиновки листа в долях шага.
  * Растровый замер грубее расчёта: линия занимает несколько пикселей, и
  * положение её середины гуляет на доли пикселя.
  */
@@ -260,6 +278,24 @@ const TEXT = [
 ].join(' ');
 
 /**
+ * Строка для набора разворота. Уже блока на любом листе пресет-пака — не
+ * переносится, — и длиннее трети кадра: чернила заходят в полосу замера.
+ */
+const ROW_TEXT = 'рукописные строки на листе';
+
+/**
+ * Сколько строк набирается, чтобы снять вместимость первой страницы: больше,
+ * чем вмещает страница любого листа пресет-пака.
+ */
+const PROBE_ROW_COUNT = 60;
+
+/**
+ * Сколько строк уходит на вторую страницу разворота: хватает на замер низа
+ * строк, и под ними остаётся полоса без чернил.
+ */
+const SECOND_PAGE_ROW_COUNT = 3;
+
+/**
  * Шрифт проверки: тот, с которым генератор открывается.
  */
 const DEFAULT_FONT = HANDWRITING_FONTS[0]?.family || '';
@@ -283,7 +319,15 @@ const RasterRulingProbe: FC = () => {
   const sheet = family ? findSheet(family, sheetId) : undefined;
   const probe: RasterProbe | null =
     family && sheet && params?.background
-      ? { sheetId: sheet.id, pageIndex, params, family }
+      ? {
+          sheetId: sheet.id,
+          layoutSheetId: pages[pageIndex]?.sheetId || '',
+          pageCount: pages.length,
+          sheet,
+          pageIndex,
+          params,
+          family,
+        }
       : null;
 
   /**
@@ -309,20 +353,20 @@ const RasterRulingProbe: FC = () => {
  *
  * Фотография подставляется своя, а не та, что держит хук предпросмотра: хук
  * оставляет прежнюю картинку, пока грузится новая, и проверка успевала бы
- * снять чужой лист с новой укладкой. Всё остальное — укладка, геометрия,
- * искажения — приходит из настоящего пути отрисовки.
+ * снять чужой лист с новой геометрией. Всё остальное — размер страницы,
+ * геометрия, искажения — приходит из настоящего пути отрисовки.
  *
  * @param probe — проба страницы
  * @param image — фотография выбранного экземпляра
  * @returns растр страницы
  */
 const renderProbeRaster = (probe: RasterProbe, image: RenderImage): PageRaster => {
-  const { family } = probe;
+  const { sheet } = probe;
   const params: PageRenderParams = {
     ...probe.params,
     background: probe.params.background ? { ...probe.params.background, image } : null,
   };
-  const size = measurePageImage(family.width, family.height, params.scale);
+  const size = measurePageImage(sheet.width, sheet.height, params.scale);
   const canvas = document.createElement('canvas');
 
   canvas.width = size.width;
@@ -725,14 +769,13 @@ const measureInkOffset = (
 
 /**
  * Полоса без чернил внутри фотографии: ниже последней строки и выше нижнего
- * края листа. Столбцы берутся из середины фотографии — там нет ни линии поля,
- * ни полосы подложки.
+ * края листа. Столбцы берутся из середины фотографии — там нет линии поля.
  *
  * @param probe — проба страницы
  * @returns участок для замера; `null` — полосы не осталось
  */
 const buildEmptyBand = (probe: RasterProbe): RasterBand | null => {
-  const { params, family } = probe;
+  const { params, sheet } = probe;
   const { background, geometry } = params;
   const { fontSizePx, lineSpacing, topOffset, fontMetrics } = geometry;
 
@@ -746,16 +789,16 @@ const buildEmptyBand = (probe: RasterProbe): RasterBand | null => {
     fontMetrics.fontAscent * fontSizePx +
     Math.max(0, params.page.lines.length - 1) * lineStep;
   const top = Math.ceil(Math.max(0, lastBaseline + lineStep));
-  const limit = Math.floor(Math.min(family.height, background.height));
-  const bottom = Math.min(limit, top + MAX_BAND_STEPS * family.ruling.step);
+  const limit = Math.floor(Math.min(sheet.height, background.height));
+  const bottom = Math.min(limit, top + MAX_BAND_STEPS * sheet.ruling.step);
   const left = Math.round(background.width * BAND_LEFT_SHARE);
   const right = Math.round(background.width * BAND_RIGHT_SHARE);
 
-  if (bottom - top < MIN_BAND_STEPS * family.ruling.step || right - left < 2) {
+  if (bottom - top < MIN_BAND_STEPS * sheet.ruling.step || right - left < 2) {
     return null;
   }
 
-  return { left: Math.max(0, left), right: Math.min(family.width, right), top, bottom };
+  return { left: Math.max(0, left), right: Math.min(sheet.width, right), top, bottom };
 };
 
 /**
@@ -763,9 +806,14 @@ const buildEmptyBand = (probe: RasterProbe): RasterBand | null => {
  *
  * @param sheetId — ожидаемый экземпляр листа
  * @param pageIndex — ожидаемая страница
+ * @param pageCount — ожидаемое число страниц раскладки; ноль — любое
  * @returns проба страницы
  */
-const waitForProbe = async (sheetId: string, pageIndex: number): Promise<RasterProbe> => {
+const waitForProbe = async (
+  sheetId: string,
+  pageIndex: number,
+  pageCount = 0
+): Promise<RasterProbe> => {
   /**
    * Ожидание идёт по метрикам шрифта: пока начертание не загрузилось,
    * геометрия считается по запасным пропорциям, строк на странице выходит
@@ -776,6 +824,8 @@ const waitForProbe = async (sheetId: string, pageIndex: number): Promise<RasterP
   await waitFor(
     async () => {
       await expect(lastProbe?.sheetId).toBe(sheetId);
+      await expect(lastProbe?.layoutSheetId).toBe(sheetId);
+      await expect(lastProbe?.pageCount).toBe(pageCount || lastProbe?.pageCount);
       await expect(lastProbe?.pageIndex).toBe(pageIndex);
       await expect(lastProbe?.params.fontFamily).toBe(DEFAULT_FONT);
       await expect(lastProbe?.params.geometry.fontMetrics.fontAscent).toBeCloseTo(
@@ -800,7 +850,7 @@ const waitForProbe = async (sheetId: string, pageIndex: number): Promise<RasterP
 
 /**
  * Проверяет по растру нарисованной страницы, что разлиновка фотографии
- * совпадает с каноном семьи, а базовые линии сидят на линиях.
+ * совпадает с разлиновкой листа, а базовые линии сидят на линиях.
  *
  * @param probe — проба страницы
  * @param image — фотография выбранного экземпляра
@@ -809,7 +859,7 @@ const expectRasterOnRuling = async (
   probe: RasterProbe,
   image: RenderImage
 ): Promise<void> => {
-  const { family } = probe;
+  const { family, sheet } = probe;
   const band = buildEmptyBand(probe);
 
   if (!band) {
@@ -826,14 +876,11 @@ const expectRasterOnRuling = async (
   await expect(ruling.contrast).toBeGreaterThan(MIN_CONTRAST);
 
   /**
-   * Шаг разлиновки на растре — канонический шаг семьи. Растяни отрисовка
-   * фотографию под размер страницы, шаг ушёл бы на проценты, а строки — с
-   * линий.
+   * Шаг разлиновки на растре — шаг разлиновки листа: страница равна кадру.
+   * Растяни отрисовка фотографию, шаг ушёл бы на проценты, а строки — с линий.
    */
-  await expect(ruling.period).toBeGreaterThan(
-    family.ruling.step * (1 - PERIOD_TOLERANCE)
-  );
-  await expect(ruling.period).toBeLessThan(family.ruling.step * (1 + PERIOD_TOLERANCE));
+  await expect(ruling.period).toBeGreaterThan(sheet.ruling.step * (1 - PERIOD_TOLERANCE));
+  await expect(ruling.period).toBeLessThan(sheet.ruling.step * (1 + PERIOD_TOLERANCE));
 
   /**
    * Наклон линий на растре — наклон блока текста. На отражённой странице
@@ -850,7 +897,7 @@ const expectRasterOnRuling = async (
    * что на листе в клетку строка занимает две клетки.
    */
   const baselines = buildBaselines(probe, band, ruling);
-  const rowSteps = family.ruling.kind === 'grid' ? GRID_ROW_STEPS : 1;
+  const rowSteps = family.kind === 'grid' ? GRID_ROW_STEPS : 1;
   const lineStep =
     probe.params.geometry.fontSizePx * probe.params.geometry.fontMetrics.lineHeight +
     probe.params.geometry.lineSpacing;
@@ -889,25 +936,69 @@ const expectRasterOnRuling = async (
  * @param familyId — семья листов
  * @param sheetId — экземпляр листа
  * @param pageIndex — номер страницы, считая с нуля
+ * @param text — текст генератора
  */
 const applySheet = (
   families: PaperFamily[],
   familyId: string,
   sheetId: string,
-  pageIndex: number
+  pageIndex: number,
+  text: string
 ): void => {
   lastProbe = null;
   clearLayoutCache();
   useGeneratorStore.setState({
     ...DEFAULT_GENERATOR_STATE,
     presetFamilies: families,
-    text: TEXT,
+    text,
     familyId,
     sheetId,
     isSheetPinned: true,
     pageIndex,
     hasContourVariance: false,
   });
+};
+
+/**
+ * Текст из одинаковых строк, каждая — отдельным абзацем.
+ *
+ * @param count — число строк
+ * @returns текст генератора
+ */
+const buildRowsText = (count: number): string => {
+  return Array.from({ length: count }, () => {
+    return ROW_TEXT;
+  }).join('\n');
+};
+
+/**
+ * Текст, при котором проверяемая страница существует, а снизу у неё остаётся
+ * полоса без чернил. Нечётной странице хватает пары строк. Чётная появляется,
+ * только когда текст не влез в первую, а вместимость у каждого листа своя:
+ * она снимается раскладкой первой страницы, и на вторую уходит несколько
+ * строк сверх неё.
+ *
+ * @param families — предустановленные семьи с измерениями
+ * @param familyId — семья листов
+ * @param sheetId — экземпляр листа
+ * @param pageIndex — номер проверяемой страницы, считая с нуля
+ * @returns текст генератора
+ */
+const resolvePageText = async (
+  families: PaperFamily[],
+  familyId: string,
+  sheetId: string,
+  pageIndex: number
+): Promise<string> => {
+  if (pageIndex === 0) {
+    return TEXT;
+  }
+
+  applySheet(families, familyId, sheetId, 0, buildRowsText(PROBE_ROW_COUNT));
+
+  const { params } = await waitForProbe(sheetId, 0);
+
+  return buildRowsText(params.page.lines.length + SECOND_PAGE_ROW_COUNT);
 };
 
 /**
@@ -927,16 +1018,26 @@ const checkFamily = async (familyId: string, pageIndex: number): Promise<void> =
   }
 
   /**
-   * Экземпляры обязаны быть измеренными: у листов без измерений нормировка
-   * одна на всю семью, и проверка выродилась бы.
+   * Экземпляры обязаны быть измеренными — у листов без измерений разлиновка
+   * одна на всю семью, и шаги не различались бы. Среди них обязан быть
+   * наклонный лист, у которого наклон во всю ширину кадра сдвигает линию больше
+   * чем на допуск: только на таком отражение, потерявшее поправку на наклон,
+   * выводит строки с линий.
    */
-  const scales = family.sheets.reduce<Set<number>>((acc, sheet) => {
-    acc.add(sheet.normalizeScale);
+  const steps = family.sheets.reduce<Set<number>>((acc, sheet) => {
+    acc.add(sheet.ruling.step);
 
     return acc;
   }, new Set<number>());
+  const hasTiltedSheet = family.sheets.some((sheet) => {
+    const { skewAngle, step } = sheet.ruling;
+    const shift = Math.abs(Math.tan((skewAngle * Math.PI) / 180) * sheet.width);
 
-  await expect(scales.size).toBe(family.sheets.length);
+    return shift > DRIFT_TOLERANCE * step;
+  });
+
+  await expect(steps.size).toBe(family.sheets.length);
+  await expect(hasTiltedSheet).toBe(true);
 
   const isMirrored = pageIndex % 2 === 1;
 
@@ -946,9 +1047,17 @@ const checkFamily = async (familyId: string, pageIndex: number): Promise<void> =
       ? mirrorRenderImage(photo, sheet.width, sheet.height)
       : photo;
 
-    applySheet(families, familyId, sheet.id, pageIndex);
+    const text = await resolvePageText(families, familyId, sheet.id, pageIndex);
 
-    await expectRasterOnRuling(await waitForProbe(sheet.id, pageIndex), image);
+    applySheet(families, familyId, sheet.id, pageIndex, text);
+
+    /**
+     * Проверяемая страница — последняя в раскладке: под её строками и остаётся
+     * полоса для замера разлиновки.
+     */
+    const probe = await waitForProbe(sheet.id, pageIndex, pageIndex + 1);
+
+    await expectRasterOnRuling(probe, image);
   }
 };
 
@@ -961,8 +1070,8 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Растр нечётной страницы в клетку: разлиновка фотографии совпадает с каноном
- * семьи, а базовые линии сидят на линиях — на всех экземплярах семьи.
+ * Растр нечётной страницы в клетку: шаг и наклон линий на растре — разлиновка
+ * листа, а базовые линии сидят на линиях — на всех экземплярах семьи.
  */
 export const GridRasterRuling: Story = {
   play: async () => {
@@ -971,7 +1080,9 @@ export const GridRasterRuling: Story = {
 };
 
 /**
- * То же на чётной странице: лист отражён, разлиновка вместе с ним.
+ * То же на чётной странице: лист отражён, разлиновка вместе с ним. Базовые
+ * линии сверяются с линиями, найденными на растре отражённой фотографии, в том
+ * числе на наклонном `grid-1`.
  */
 export const MirroredGridRasterRuling: Story = {
   play: async () => {

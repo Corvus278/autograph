@@ -3,7 +3,6 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { deriveGeometry } from '../lib/calibrate/deriveGeometry';
 
-import { buildBlockGeometry } from './buildPageRenderParams';
 import { getPageCalibration } from './geometrySelectors';
 import type { PageGeometryView } from './pageRender.types';
 import { findFamily, findSheet, mergeFamilySheets } from './paperSelectors';
@@ -76,7 +75,6 @@ export const usePageGeometry = (pageIndex?: number): PageGeometryView => {
     sheet,
     ruling: calibration?.ruling || null,
     metrics,
-    geometry: family ? buildBlockGeometry({ family, metrics, correction }) : null,
     sheetGeometry: calibration ? deriveGeometry(calibration, metrics, correction) : null,
     correction,
     fontFamily: activeFontFamily,

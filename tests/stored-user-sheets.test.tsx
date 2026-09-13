@@ -28,10 +28,6 @@ const SHEET: PaperSheet = {
     marginLineX: 1080,
     marginLineSide: 'right',
   },
-  skewAngle: -1.2,
-  measuredStep: 64,
-  normalizeScale: 1.25,
-  firstLinePhase: 71.5,
   lighting: null,
   texture: null,
 };
@@ -57,8 +53,7 @@ describe('восстановление своих листов при откры
     const [restored] = useGeneratorStore.getState().userSheets;
 
     expect(restored?.sheet.id).toBe(SHEET.id);
-    expect(restored?.sheet.measuredStep).toBe(SHEET.measuredStep);
-    expect(restored?.sheet.normalizeScale).toBe(SHEET.normalizeScale);
+    expect(restored?.sheet.ruling).toEqual(SHEET.ruling);
   });
 
   it('не ставит восстановленный лист в очередь на повторный анализ', () => {

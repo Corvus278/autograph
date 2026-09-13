@@ -34,14 +34,19 @@ const PRESET_STEP_RANGES: Record<string, [number, number]> = {
 };
 
 /**
- * Поля листа, которые разлиновка экземпляра заменила: в артефакте их быть не
- * должно, иначе шаг, фаза и наклон читались бы из двух мест.
+ * Всё, что несёт экземпляр в артефакте. Список закрытый: лишний ключ на
+ * верхнем уровне означал бы, что шаг, фаза или наклон читаются не только из
+ * разлиновки.
  */
-const DEPRECATED_SHEET_KEYS = [
-  'measuredStep',
-  'normalizeScale',
-  'skewAngle',
-  'firstLinePhase',
+const SHEET_KEYS = [
+  'height',
+  'id',
+  'label',
+  'lighting',
+  'ruling',
+  'src',
+  'texture',
+  'width',
 ];
 
 /**
@@ -113,17 +118,13 @@ describe('пресет-пак', () => {
     }
   });
 
-  it('в артефакте нет полей, которые заменила разлиновка экземпляра', () => {
+  it('в артефакте у экземпляра нет ничего сверх разлиновки, кадра и внешности', () => {
     const sheets = readRawSheets();
 
     expect(sheets.length).toBeGreaterThan(0);
 
     for (const sheet of sheets) {
-      expect(sheet).toHaveProperty('ruling');
-
-      for (const key of DEPRECATED_SHEET_KEYS) {
-        expect(sheet).not.toHaveProperty(key);
-      }
+      expect(Object.keys(sheet).sort()).toEqual(SHEET_KEYS);
     }
   });
 

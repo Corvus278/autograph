@@ -26,7 +26,7 @@ const store = () => {
 const PHOTO_SRC = 'data:image/jpeg;base64,0123456789';
 
 /**
- * Лист с посчитанными характеристиками: заметный наклон, нормировка не единица
+ * Лист с посчитанными характеристиками: заметный наклон, несимметричные поля
  * и своя фаза первой линии — по ним видно, что после перезагрузки вернулись
  * именно измерения, а не значения по умолчанию.
  */
@@ -45,10 +45,6 @@ const buildMeasuredSheet = (id: string): PaperSheet => {
       marginLineX: 1080,
       marginLineSide: 'right',
     },
-    skewAngle: -1.4,
-    measuredStep: 64,
-    normalizeScale: 1.25,
-    firstLinePhase: 73.5,
     lighting: {
       gridWidth: 2,
       gridHeight: 2,
@@ -168,7 +164,7 @@ const seedStorage = (entry: Record<string, unknown>) => {
 };
 
 describe('форма записи в хранилище', () => {
-  it('пишет разлиновку целиком и не дублирует её устаревшими полями', () => {
+  it('пишет разлиновку целиком и ничего, что повторяло бы её вне разлиновки', () => {
     const record = buildRecord('user-1');
 
     store().addUserSheet(record);
@@ -176,12 +172,18 @@ describe('форма записи в хранилище', () => {
     const [entry] = JSON.parse(globalThis.localStorage.getItem(INDEX_KEY) || '[]');
 
     expect(entry.ruling).toEqual(record.sheet.ruling);
-    expect(entry).not.toHaveProperty('measuredStep');
-    expect(entry).not.toHaveProperty('skewAngle');
-    expect(entry).not.toHaveProperty('firstLinePhase');
+    expect(Object.keys(entry).sort()).toEqual([
+      'familyId',
+      'height',
+      'id',
+      'isAnalyzed',
+      'label',
+      'ruling',
+      'width',
+    ]);
   });
 
-  it('берёт шаг, фазу и наклон записи новой формы из её разлиновки', () => {
+  it('читает разлиновку записи новой формы целиком', () => {
     const ruling = {
       step: 58,
       firstLinePhase: 21,
@@ -205,9 +207,6 @@ describe('форма записи в хранилище', () => {
     const [restored] = store().userSheets;
 
     expect(restored?.sheet.ruling).toEqual(ruling);
-    expect(restored?.sheet.measuredStep).toBe(ruling.step);
-    expect(restored?.sheet.firstLinePhase).toBe(ruling.firstLinePhase);
-    expect(restored?.sheet.skewAngle).toBe(ruling.skewAngle);
   });
 
   it('оставляет в списке запись прежней формы с приблизительной разлиновкой', () => {
@@ -220,7 +219,6 @@ describe('форма записи в хранилище', () => {
       height: 1600,
       skewAngle: -0.6,
       measuredStep: 48,
-      normalizeScale: 1.04,
       firstLinePhase: 30,
     });
     store().restoreUserSheets();

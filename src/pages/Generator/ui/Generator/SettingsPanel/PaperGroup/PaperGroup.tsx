@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { PaperSheet } from '../../../../lib/paper';
-import { buildSheetRuling, computeNormalizeScale } from '../../../../lib/paper';
+import { buildSheetRuling } from '../../../../lib/paper';
 import { selectPageSheetId } from '../../../../model/recipeSelectors';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
 import type { UserSheetRecord } from '../../../../model/userSheetsStorage.types';
@@ -127,19 +127,7 @@ export const PaperGroup: FC = () => {
 
     addUserSheet({
       familyId: activeFamily.id,
-      sheet: {
-        ...activeSheet,
-        ruling,
-        /**
-         * Поля верхнего уровня повторяют разлиновку, нормировка — от канона
-         * семьи: их ещё читает отрисовка по канону
-         * (`@deprecated sheet-native-ruling`).
-         */
-        skewAngle: ruling.skewAngle,
-        measuredStep: ruling.step,
-        normalizeScale: computeNormalizeScale(ruling.step, activeFamily.ruling.step),
-        firstLinePhase: ruling.firstLinePhase,
-      },
+      sheet: { ...activeSheet, ruling },
       isAnalyzed: true,
     });
   };

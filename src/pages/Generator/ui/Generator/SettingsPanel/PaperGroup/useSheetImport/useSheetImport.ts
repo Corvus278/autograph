@@ -8,7 +8,6 @@ import type {
 } from '../../../../../lib/paper';
 import {
   buildSheetRuling,
-  computeNormalizeScale,
   detectRuling,
   detectSkewAngle,
   encodeTextureMap,
@@ -124,6 +123,12 @@ export const useSheetImport = (): SheetImport => {
         ...(measurement?.detection || MISSING_RULING),
         skewAngle: measurement?.skewAngle || 0,
       });
+      /**
+       * Кадр неразобранной фотографии неизвестен, а сама она не отбрасывается:
+       * берётся кадр первого листа семьи. Без него страница такого листа
+       * вышла бы нулевого размера, а разлиновку к нему всё равно задают руками.
+       */
+      const frame = image || family.sheets[0];
 
       addUserSheet({
         familyId: family.id,
@@ -131,18 +136,9 @@ export const useSheetImport = (): SheetImport => {
           id: nextSheetId(),
           label: toSheetLabel(file.name),
           src,
-          width: image?.width || family.width,
-          height: image?.height || family.height,
+          width: frame?.width || 0,
+          height: frame?.height || 0,
           ruling,
-          /**
-           * Поля верхнего уровня повторяют разлиновку, нормировка — от канона
-           * семьи: их ещё читает отрисовка по канону
-           * (`@deprecated sheet-native-ruling`).
-           */
-          skewAngle: ruling.skewAngle,
-          measuredStep: ruling.step,
-          normalizeScale: computeNormalizeScale(ruling.step, family.ruling.step),
-          firstLinePhase: ruling.firstLinePhase,
           lighting,
           texture,
         },

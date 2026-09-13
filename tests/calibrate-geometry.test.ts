@@ -4,7 +4,6 @@ import {
   deriveTextHeight,
   GRID_ROW_STEPS,
 } from '@pages/Generator/lib/calibrate';
-import { deriveCanonGeometry } from '@pages/Generator/lib/calibrate/deriveGeometry';
 import type { FontMetrics } from '@pages/Generator/lib/measure/measure.types';
 import type { SheetRuling } from '@pages/Generator/lib/paper';
 import { describe, expect, it } from 'vitest';
@@ -411,22 +410,5 @@ describe('deriveTextHeight', () => {
       height - geometry.topOffset - ruling.margins.bottom - 2.5 * ruling.step,
       9
     );
-  });
-});
-
-describe('deriveCanonGeometry', () => {
-  it('переводит поправку в пиксели по шагу канона семьи', () => {
-    const canon = {
-      kind: 'lined' as const,
-      step: 80,
-      firstLineOffset: 160,
-      margins: { top: 160, right: 80, bottom: 120, left: 120 },
-      marginLineX: null,
-      pageWidth: 1600,
-    };
-    const base = deriveCanonGeometry(canon, METRICS);
-    const corrected = deriveCanonGeometry(canon, METRICS, { topOffset: 0.5 });
-
-    expect(corrected.topOffset - base.topOffset).toBeCloseTo(40, 9);
   });
 });

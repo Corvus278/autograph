@@ -1,13 +1,12 @@
 import { SUBSTITUTE_FONTS } from '../config';
-import type { BlockGeometry } from '../lib/calibrate/calibrate.types';
-import { deriveCanonGeometry, deriveGeometry } from '../lib/calibrate/deriveGeometry';
+import { deriveGeometry } from '../lib/calibrate/deriveGeometry';
 import type { Page } from '../lib/paginate/paginate.types';
 import { buildDistortions } from '../lib/randomize/buildDistortions';
 import { buildLineDistortions } from '../lib/randomize/buildLineDistortions';
 import type { LineDistortion, WordDistortion } from '../lib/randomize/randomize.types';
 import type { PageRenderParams, RenderLine, RenderPage } from '../lib/render';
 
-import type { CanonGeometryInput, PageRenderInput } from './pageRender.types';
+import type { PageRenderInput } from './pageRender.types';
 
 /**
  * Пустые искажения: нужны, когда слов или строк на странице больше, чем
@@ -104,24 +103,6 @@ const buildRenderPage = (page: Page, input: PageRenderInput): RenderPage => {
   });
 
   return { lines };
-};
-
-/**
- * Геометрия блока по разлиновке семьи, метрикам шрифта и ручной поправке.
- * Поправка в долях шага переводится в пиксели по шагу канона семьи.
- *
- * @param input — семья, метрики и поправка
- * @returns геометрия блока в канонических пикселях семьи
- * @deprecated sheet-native-ruling — геометрия страницы: `selectBlockGeometry`
- */
-export const buildBlockGeometry = (input: CanonGeometryInput): BlockGeometry => {
-  const { family, metrics, correction } = input;
-
-  return deriveCanonGeometry(
-    { ...family.ruling, pageWidth: family.width },
-    metrics,
-    correction
-  );
 };
 
 /**

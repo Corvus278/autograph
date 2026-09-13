@@ -5,7 +5,7 @@ import type { PaperFamily, RulingDetection } from '../../../../../lib/paper';
  */
 export type SheetImportOptions = {
   /**
-   * Семья, к канону которой приводится экземпляр.
+   * Семья, в которую добавляется экземпляр.
    */
   family: PaperFamily;
 

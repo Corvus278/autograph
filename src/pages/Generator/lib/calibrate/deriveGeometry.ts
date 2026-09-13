@@ -5,7 +5,6 @@ import { resolveFirstLine } from '../paper/sheetRuling';
 
 import type {
   BlockGeometry,
-  CalibrationRuling,
   GeometryBasis,
   GeometryCorrection,
   SheetCalibration,
@@ -237,32 +236,5 @@ export const deriveTextHeight = (
     geometry.topOffset -
     ruling.margins.bottom -
     bottomMargin * resolveStep(ruling.step)
-  );
-};
-
-/**
- * Геометрия блока по канону семьи. Поправка в долях шага переводится в
- * пиксели по шагу канона.
- *
- * @param ruling — каноническая разлиновка семьи с шириной листа
- * @param metrics — метрики шрифта в долях кегля
- * @param correction — дельты поверх вычисленного в долях шага
- * @returns геометрия блока в канонических пикселях семьи
- * @deprecated sheet-native-ruling — геометрия считается по листу страницы: `deriveGeometry`
- */
-export const deriveCanonGeometry = (
-  ruling: CalibrationRuling,
-  metrics: FontMetrics,
-  correction: GeometryCorrection = {}
-): BlockGeometry => {
-  const { kind, firstLineOffset, margins, marginLineX, pageWidth } = ruling;
-  const step = resolveStep(ruling.step);
-  const left =
-    marginLineX === null ? margins.left : marginLineX + step * MARGIN_LINE_GAP_SHARE;
-
-  return buildGeometry(
-    { kind, step, firstLine: firstLineOffset, left, right: pageWidth - margins.right },
-    metrics,
-    correction
   );
 };
