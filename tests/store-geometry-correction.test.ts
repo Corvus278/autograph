@@ -1,7 +1,8 @@
-import { deriveTextHeight } from '@pages/Generator/lib/calibrate';
+import { deriveGeometry, deriveTextHeight } from '@pages/Generator/lib/calibrate';
 import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
 import type { PaperFamily, PaperSheet, SheetRuling } from '@pages/Generator/lib/paper';
 import {
+  getPageCalibration,
   selectBlockGeometry,
   selectBlockSkewAngle,
   selectCalibrationRuling,
@@ -60,6 +61,30 @@ const FAMILY: PaperFamily = {
   label: 'Линейка',
   kind: 'lined',
   sheets: [NARROW_SHEET, WIDE_SHEET],
+};
+
+/**
+ * Лист другой семьи: клетка с иным шагом, полями и наклоном, чтобы геометрия
+ * после смены семьи не могла совпасть с прежней случайно.
+ */
+const GRID_SHEET = buildSheet(
+  'grid-only',
+  {
+    step: 53,
+    firstLinePhase: 12,
+    skewAngle: 0.4,
+    margins: { top: 96, right: 80, bottom: 80, left: 80 },
+    marginLineX: 1400,
+    marginLineSide: 'right',
+  },
+  { width: 1600, height: 2050 }
+);
+
+const GRID_FAMILY: PaperFamily = {
+  id: 'grid',
+  label: 'Клетка',
+  kind: 'grid',
+  sheets: [GRID_SHEET],
 };
 
 /**
@@ -333,6 +358,30 @@ describe('поправка при смене листа', () => {
 
     expect(step).toBeGreaterThan(0);
     expect(geometry(0)?.topOffset).toBeCloseTo((derived?.topOffset || 0) + 0.5 * step);
+  });
+});
+
+describe('смена семьи листов', () => {
+  it('пересчитывает геометрию под разлиновку листа новой семьи', () => {
+    useGeneratorStore.setState({
+      presetFamilies: [FAMILY, GRID_FAMILY],
+      familyId: FAMILY.id,
+      sheetId: NARROW_SHEET.id,
+    });
+
+    const previous = geometry(0);
+
+    store().selectFamily(GRID_FAMILY.id);
+
+    const expected = deriveGeometry(
+      getPageCalibration(GRID_FAMILY, GRID_SHEET, 0),
+      METRICS,
+      store().geometryCorrection
+    );
+
+    expect(selectPageSheetId(store(), 0)).toBe(GRID_SHEET.id);
+    expect(geometry(0)).not.toEqual(previous);
+    expect(geometry(0)).toEqual(expected);
   });
 });
 

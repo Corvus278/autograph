@@ -55,6 +55,15 @@ const GRID_STEP_TOLERANCE = 0.1;
 const RULING_REGION_LEVEL = 0.5;
 
 /**
+ * Доля шага, на которую линия может уйти от арифметической гребёнки и всё ещё
+ * считаться своей. У края кадра лист тянет объектив или изгиб страницы: на
+ * снимках линейки пресет-пака нижние линии стоят на восьмую шага выше
+ * предсказанного места. Шестая доля — запас сверх этого и всё ещё далеко от
+ * половины шага, где окно доставало бы соседнюю линию.
+ */
+const LINE_SEARCH_SHARE = 1 / 6;
+
+/**
  * Доля ширины кадра, в которой ищется вертикальная линия поля. Поле печатается
  * слева и занимает от силы четверть листа; поиск по всей ширине начал бы
  * принимать за линию поля правый край области письма.
@@ -181,6 +190,17 @@ type RuledSpan = {
    * Координата последней линии.
    */
   last: number;
+
+  /**
+   * Цепочка начинается с первой линии, попавшей в профиль: выше неё профиль
+   * кончается раньше, чем уместилась бы ещё одна линия.
+   */
+  isAtProfileStart: boolean;
+
+  /**
+   * Цепочка кончается последней линией, попавшей в профиль.
+   */
+  isAtProfileEnd: boolean;
 };
 
 const computeQuantile = (values: number[], quantile: number): number => {
@@ -230,6 +250,28 @@ const isDepthPeak = (depth: Float64Array, index: number): boolean => {
     (depth[index] || 0) >= (depth[index - 1] || 0) &&
     (depth[index] || 0) > (depth[index + 1] || 0)
   );
+};
+
+/**
+ * Глубина самого тёмного бина в окне вокруг предсказанной линии.
+ *
+ * @param detrended — профиль без фона: линия в нём — отрицательный провал
+ * @param bin — бин предсказанной линии
+ * @param reach — полуширина окна в бинах
+ * @returns глубина провала; ноль — в окне нет ничего темнее фона
+ */
+const measureLineDepth = (
+  detrended: Float64Array,
+  bin: number,
+  reach: number
+): number => {
+  let depth = 0;
+
+  for (let offset = -reach; offset <= reach; offset += 1) {
+    depth = Math.max(depth, -(detrended[bin + offset] || 0));
+  }
+
+  return depth;
 };
 
 /**
@@ -354,10 +396,15 @@ const findMarginLine = (
  * темнее фона. Опрос по предсказанию, а не поиск провалов подряд: шаг и фаза
  * уже известны, и по ним видно не только где линии есть, но и где их не стало.
  *
+ * Глубина линии берётся в окне вокруг предсказанного положения, а не в самом
+ * бине: линии у края кадра уходят с гребёнки, и без окна цепочка рвалась бы
+ * перед ними — край разлиновки выглядел бы найденным полем.
+ *
  * @param profile — профиль средней яркости
  * @param step — шаг разлиновки в пикселях
  * @param phase — смещение линий по модулю шага
- * @returns координаты первой и последней линии; `null` — линий меньше трёх
+ * @returns координаты первой и последней линии и то, упёрлась ли цепочка в край
+ * профиля; `null` — линий меньше трёх
  */
 const findRuledSpan = (
   profile: ShearedProfile,
@@ -374,6 +421,7 @@ const findRuledSpan = (
     return null;
   }
 
+  const reach = Math.max(1, Math.round(step * LINE_SEARCH_SHARE));
   const positions: number[] = [];
   const depths: number[] = [];
 
@@ -382,13 +430,7 @@ const findRuledSpan = (
     const bin = Math.round(coordinate) - origin;
 
     positions.push(coordinate);
-    depths.push(
-      Math.max(
-        -(detrended[bin] || 0),
-        -(detrended[bin - 1] || 0),
-        -(detrended[bin + 1] || 0)
-      )
-    );
+    depths.push(measureLineDepth(detrended, bin, reach));
   }
 
   const sorted = [...depths].sort((left, right) => {
@@ -426,7 +468,12 @@ const findRuledSpan = (
     return null;
   }
 
-  return { first: positions[bestStart] || 0, last: positions[bestEnd] || 0 };
+  return {
+    first: positions[bestStart] || 0,
+    last: positions[bestEnd] || 0,
+    isAtProfileStart: bestStart === 0,
+    isAtProfileEnd: bestEnd === depths.length - 1,
+  };
 };
 
 const isSameStep = (first: number, second: number): boolean => {
@@ -505,13 +552,24 @@ export const detectRuling = (
     RULING_REGION_LEVEL
   );
   const marginLine = findMarginLine(columns, period.step, image.width);
+  /**
+   * Сторона, где разлиновка дошла до края профиля, — не найденное поле, а
+   * ноль. Профиль начинается не с края кадра, а с защитной полосы, и край
+   * области там означает только «линии идут дальше, чем видно»: поле, равное
+   * полосе или первой видимой линии, выдало бы за поле обрезку кадра, и блок
+   * встал бы вплотную к краю. Ноль отдаёт такую сторону фолбэку.
+   */
   const margins: PaperMargins = {
-    top: ruledSpan ? ruledSpan.first : 0,
-    bottom: ruledSpan ? image.height - ruledSpan.last : 0,
-    left: columnRegion ? columnResponse.origin + columnRegion.start : 0,
-    right: columnRegion
-      ? image.width - (columnResponse.origin + columnRegion.end + 1)
-      : 0,
+    top: ruledSpan && !ruledSpan.isAtProfileStart ? ruledSpan.first : 0,
+    bottom: ruledSpan && !ruledSpan.isAtProfileEnd ? image.height - ruledSpan.last : 0,
+    left:
+      columnRegion && columnRegion.start > 0
+        ? columnResponse.origin + columnRegion.start
+        : 0,
+    right:
+      columnRegion && columnRegion.end < columnResponse.values.length - 1
+        ? image.width - (columnResponse.origin + columnRegion.end + 1)
+        : 0,
   };
 
   return {

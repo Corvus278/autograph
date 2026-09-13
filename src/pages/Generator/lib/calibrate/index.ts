@@ -8,4 +8,5 @@ export {
   deriveGeometry,
   deriveTextHeight,
   GRID_ROW_STEPS,
+  MARGIN_LINE_GAP_SHARE,
 } from './deriveGeometry';

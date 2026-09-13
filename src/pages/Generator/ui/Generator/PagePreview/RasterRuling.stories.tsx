@@ -5,12 +5,14 @@ import { expect, waitFor } from 'storybook/test';
 import { useShallow } from 'zustand/react/shallow';
 
 import { GRID_FAMILY_ID, HANDWRITING_FONTS, LINED_FAMILY_ID } from '../../../config';
-import { GRID_ROW_STEPS } from '../../../lib/calibrate/deriveGeometry';
+import { GRID_ROW_STEPS, MARGIN_LINE_GAP_SHARE } from '../../../lib/calibrate';
+import { contourBounds } from '../../../lib/glyph';
 import { loadFontMetrics } from '../../../lib/measure/measureFontMetrics';
 import type { PaperFamily, PaperSheet } from '../../../lib/paper';
 import type { PageRenderParams, RenderImage } from '../../../lib/render';
 import { loadRenderImage } from '../../../lib/render';
 import { drawPage, measurePageImage } from '../../../model/drawPage';
+import { getPageRuling } from '../../../model/geometrySelectors';
 import { clearLayoutCache } from '../../../model/measureLayout';
 import { mirrorRenderImage } from '../../../model/mirrorRenderImage';
 import { loadPaperFamilies } from '../../../model/paperProfiles';
@@ -296,6 +298,35 @@ const PROBE_ROW_COUNT = 60;
 const SECOND_PAGE_ROW_COUNT = 3;
 
 /**
+ * Абзац на всю ширину блока: короткие слова одним абзацем, поэтому строки
+ * набираются почти до правого края блока. Повторов столько, что текст не
+ * влезает в две страницы ни одного листа пресет-пака — и чётная страница тоже
+ * набрана целиком.
+ */
+const WIDE_TEXT = Array.from({ length: 250 }, () => {
+  return 'и снова до поля';
+}).join(' ');
+
+/**
+ * Нечётная и зеркальная половины разворота.
+ */
+const SPREAD_PAGES = [0, 1];
+
+/**
+ * Погрешность растра в пикселях: пиксель сверяется центром, а после поворота
+ * на наклон блока его край отстоит от центра до половины диагонали.
+ */
+const RASTER_TOLERANCE = 1;
+
+/**
+ * Насколько край текста может не доставать до края блока, в шагах разлиновки.
+ * Строка переносится целым словом, но из десятка строк хоть одна доходит до
+ * края ближе двух шагов — иначе текст не на всю ширину, и проверка краёв
+ * ничего бы не сказала.
+ */
+const FILL_TOLERANCE_STEPS = 2;
+
+/**
  * Шрифт проверки: тот, с которым генератор открывается.
  */
 const DEFAULT_FONT = HANDWRITING_FONTS[0]?.family || '';
@@ -362,10 +393,22 @@ const RasterRulingProbe: FC = () => {
  */
 const renderProbeRaster = (probe: RasterProbe, image: RenderImage): PageRaster => {
   const { sheet } = probe;
-  const params: PageRenderParams = {
+
+  return rasterizePage(sheet, {
     ...probe.params,
     background: probe.params.background ? { ...probe.params.background, image } : null,
-  };
+  });
+};
+
+/**
+ * Рисует страницу настоящим путём отрисовки в кадре листа и снимает
+ * полутоновую выжимку.
+ *
+ * @param sheet — лист страницы: его кадр — размер страницы
+ * @param params — параметры отрисовки
+ * @returns растр страницы
+ */
+const rasterizePage = (sheet: PaperSheet, params: PageRenderParams): PageRaster => {
   const size = measurePageImage(sheet.width, sheet.height, params.scale);
   const canvas = document.createElement('canvas');
 
@@ -927,6 +970,318 @@ const expectRasterOnRuling = async (
 };
 
 /**
+ * Левый и правый края в координатах наклонного блока.
+ */
+type PaperBounds = {
+  /**
+   * Левый край в пикселях кадра.
+   */
+  left: number;
+
+  /**
+   * Правый край в пикселях кадра.
+   */
+  right: number;
+};
+
+/**
+ * Чернила страницы в координатах наклонного блока.
+ */
+type InkExtent = {
+  /**
+   * Самый левый столбец чернил страницы в пикселях кадра; бесконечность —
+   * чернил нет.
+   */
+  left: number;
+
+  /**
+   * Самый левый столбец чернил вне свеса первых букв строк в пикселях кадра;
+   * бесконечность — все чернила внутри свеса.
+   */
+  bareLeft: number;
+
+  /**
+   * Самый правый столбец чернил страницы в пикселях кадра.
+   */
+  right: number;
+
+  /**
+   * Есть ли чернила в верхнем ряду растра: там их срезал бы край кадра.
+   */
+  hasInkOnTopEdge: boolean;
+};
+
+/**
+ * Габарит первой буквы строки, свешенной левее пера, в координатах наклонного
+ * блока.
+ */
+type OverhangBox = {
+  /**
+   * Левый край контура буквы в пикселях кадра.
+   */
+  left: number;
+
+  /**
+   * Верх контура буквы в пикселях кадра.
+   */
+  top: number;
+
+  /**
+   * Низ контура буквы в пикселях кадра.
+   */
+  bottom: number;
+};
+
+/**
+ * Лежит ли точка внутри свеса первой буквы какой-нибудь строки. Правый край
+ * габарита не нужен: правее пера чернила и так на бумаге.
+ *
+ * @param boxes — габариты свешенных первых букв
+ * @param across — координата поперёк строк
+ * @param along — координата вдоль строк
+ * @returns `true` — точка принадлежит свесу
+ */
+const isInsideOverhang = (
+  boxes: OverhangBox[],
+  across: number,
+  along: number
+): boolean => {
+  return boxes.some((box) => {
+    return (
+      across >= box.left - RASTER_TOLERANCE &&
+      along >= box.top - RASTER_TOLERANCE &&
+      along <= box.bottom + RASTER_TOLERANCE
+    );
+  });
+};
+
+/**
+ * Чернила страницы в координатах наклонного блока. Пиксель поворачивается на
+ * наклон блока в обратную сторону: блок повёрнут вокруг угла кадра, и в
+ * повёрнутых координатах поля и линия поля листа стоят отвесно, а строки
+ * лежат горизонтально.
+ *
+ * К строке пиксель не приписывается: на линейке строчный бокс выше шага строк,
+ * и хвост первой буквы одной строки лежит в боксе следующей. Вместо этого
+ * отдельно считается левый край чернил вне габаритов свешенных первых букв.
+ *
+ * @param raster — растр страницы
+ * @param params — параметры отрисовки страницы
+ * @param boxes — габариты первых букв строк, свешенных левее пера
+ * @returns края чернил и срез сверху
+ */
+const measureInkExtent = (
+  raster: PageRaster,
+  params: PageRenderParams,
+  boxes: OverhangBox[]
+): InkExtent => {
+  const { geometry, scale } = params;
+  const radians = (geometry.blockRotate * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  let left = Number.POSITIVE_INFINITY;
+  let bareLeft = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  let hasInkOnTopEdge = false;
+
+  for (let y = 0; y < raster.height; y += 1) {
+    const row = y * raster.width;
+    const centerY = (y + 0.5) / scale;
+
+    for (let x = 0; x < raster.width; x += 1) {
+      if ((raster.luminance[row + x] || 0) < INK_LEVEL) {
+        const centerX = (x + 0.5) / scale;
+        const across = centerX * cos + centerY * sin;
+        const along = centerY * cos - centerX * sin;
+
+        left = Math.min(left, across);
+        right = Math.max(right, across);
+        hasInkOnTopEdge = hasInkOnTopEdge || y === 0;
+
+        if (across < bareLeft && !isInsideOverhang(boxes, across, along)) {
+          bareLeft = across;
+        }
+      }
+    }
+  }
+
+  return { left, bareLeft, right, hasInkOnTopEdge };
+};
+
+/**
+ * Края, за которые текст на странице выходить не должен: поля листа, сужённые
+ * линией поля с её стороны на зазор.
+ *
+ * @param probe — проба страницы
+ * @returns левый и правый края в пикселях кадра
+ */
+const resolvePaperBounds = (probe: RasterProbe): PaperBounds => {
+  const { sheet, pageIndex } = probe;
+  const { step, margins, marginLineX, marginLineSide } = getPageRuling(sheet, pageIndex);
+  const gap = step * MARGIN_LINE_GAP_SHARE;
+  const left = margins.left;
+  const right = sheet.width - margins.right;
+
+  if (marginLineX === null) {
+    return { left, right };
+  }
+
+  switch (marginLineSide) {
+    case 'left': {
+      return { left: Math.max(left, marginLineX + gap), right };
+    }
+
+    case 'right': {
+      return { left, right: Math.min(right, marginLineX - gap) };
+    }
+
+    default: {
+      return { left, right };
+    }
+  }
+};
+
+/**
+ * Габариты первых букв строк, которые рисунок шрифта свешивает левее пера.
+ * Рукописный шрифт рисует часть букв с хвостом влево от точки, куда их ставит
+ * перо: у «д» в шрифте по умолчанию хвост уходит на 0.156 em. Строка при этом
+ * начинается на краю блока, а чернила свешиваются за него — это рисунок
+ * буквы, а не положение блока.
+ *
+ * Габарит берётся у каждой строки свой — по её первой букве, её базовой линии
+ * и перу на краю блока, — и считается по контурам самого шрифта, а не по
+ * растру: иначе проверка мерила бы допуск тем же, что проверяет.
+ *
+ * @param params — параметры отрисовки страницы с загруженными контурами шрифта
+ * @returns габариты свешенных букв; строки без свеса в список не попадают
+ */
+const buildOverhangBoxes = (params: PageRenderParams): OverhangBox[] => {
+  const { glyphs, page, geometry } = params;
+
+  if (!glyphs) {
+    throw new Error('Контуры шрифта страницы не загрузились');
+  }
+
+  const { source } = glyphs;
+  const { fontSizePx, lineSpacing, topOffset, leftPadding, fontMetrics } = geometry;
+  const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
+  const unit = fontSizePx / source.unitsPerEm;
+
+  return page.lines.reduce<OverhangBox[]>((acc, line, index) => {
+    const char = line.words[0]?.text[0] || '';
+    const outline = char ? source.getGlyph(char) : null;
+
+    if (!outline || outline.commands.length === 0) {
+      return acc;
+    }
+
+    const { minX, minY, maxY } = contourBounds(outline.commands);
+    const baseline = topOffset + fontMetrics.fontAscent * fontSizePx + index * lineStep;
+
+    if (minX < 0) {
+      acc.push({
+        left: leftPadding + minX * unit,
+        top: baseline - maxY * unit,
+        bottom: baseline - minY * unit,
+      });
+    }
+
+    return acc;
+  }, []);
+};
+
+/**
+ * Проверяет по растру нарисованной страницы, что текст на всю ширину не
+ * выходит ни за левое поле, ни за правое поле или линию поля листа страницы.
+ *
+ * Справа граница строгая: правый край самой длинной строки не заходит ни за
+ * поле, ни за зазор до линии поля. Слева граница — край блока, с которого
+ * начинаются строки: левее него допускаются только чернила внутри контура
+ * первой буквы той строки, которую рисунок шрифта свешивает за перо. Общий
+ * свес на всю страницу пропустил бы строку без свеса, уехавшую влево.
+ *
+ * Сверху строчный бокс первой строки по метрикам настоящего шрифта не выше
+ * края кадра, и край кадра не срезал ни одного пикселя чернил.
+ *
+ * Фон скрыт: линия поля на фотографии темнее порога чернил и сошла бы за
+ * текст, а размер и геометрия страницы от фона не зависят.
+ *
+ * @param probe — проба страницы
+ */
+const expectTextOnPaper = async (probe: RasterProbe): Promise<void> => {
+  const { sheet, params, pageIndex } = probe;
+  const raster = rasterizePage(sheet, { ...params, background: null });
+  const ink = measureInkExtent(raster, params, buildOverhangBoxes(params));
+  const bounds = resolvePaperBounds(probe);
+  const fill = FILL_TOLERANCE_STEPS * getPageRuling(sheet, pageIndex).step;
+
+  if (!Number.isFinite(ink.left) || !Number.isFinite(ink.right)) {
+    throw new Error(`На странице нет чернил: ${probe.sheetId}, ${pageIndex}`);
+  }
+
+  await expect(params.geometry.topOffset).toBeGreaterThanOrEqual(0);
+  await expect(ink.hasInkOnTopEdge).toBe(false);
+  await expect(ink.bareLeft).toBeGreaterThanOrEqual(bounds.left - RASTER_TOLERANCE);
+  await expect(ink.right).toBeLessThanOrEqual(bounds.right + RASTER_TOLERANCE);
+
+  /**
+   * Текст и правда во всю ширину: иначе край, до которого чернила не
+   * добрались, проверку прошёл бы сам собой.
+   */
+  await expect(ink.left).toBeLessThanOrEqual(bounds.left + fill);
+  await expect(ink.right).toBeGreaterThanOrEqual(bounds.right - fill);
+};
+
+/**
+ * Прогоняет проверку полей по всем экземплярам семьи на обеих половинах
+ * разворота.
+ *
+ * @param familyId — семья листов
+ */
+const checkTextOnPaper = async (familyId: string): Promise<void> => {
+  const families = await loadPaperFamilies();
+  const family = families.find((item) => {
+    return item.id === familyId;
+  });
+
+  if (!family) {
+    throw new Error(`Семья не нашлась: ${familyId}`);
+  }
+
+  for (const sheet of family.sheets) {
+    for (const pageIndex of SPREAD_PAGES) {
+      applySheet(families, familyId, sheet.id, pageIndex, WIDE_TEXT);
+
+      await waitForProbe(sheet.id, pageIndex);
+
+      /**
+       * Контуры шрифта доезжают отдельно от метрик, а без них свес первых букв
+       * строк не посчитать.
+       */
+      await waitFor(
+        async () => {
+          await expect(lastProbe?.params.glyphs).toBeTruthy();
+        },
+        { timeout: 15_000 }
+      );
+
+      const probe = lastProbe;
+
+      if (!probe) {
+        throw new Error(`Проба не снялась: ${sheet.id}, ${pageIndex}`);
+      }
+
+      /**
+       * Страница не последняя в раскладке — значит, набрана до низа, а не
+       * парой строк.
+       */
+      await expect(probe.pageCount).toBeGreaterThan(pageIndex + 1);
+      await expectTextOnPaper(probe);
+    }
+  }
+};
+
+/**
  * Ставит стор на известный лист и половину разворота.
  *
  * Искажения почерка выключены: они двигают слова и строки нарочно, а проверке
@@ -1105,5 +1460,25 @@ export const LinedRasterRuling: Story = {
 export const MirroredLinedRasterRuling: Story = {
   play: async () => {
     await checkFamily(LINED_FAMILY_ID, 1);
+  },
+};
+
+/**
+ * Текст на всю ширину остаётся на бумаге: на растре нечётной и зеркальной
+ * страниц чернила не выходят за поля и линию поля — на всех экземплярах
+ * клетки.
+ */
+export const GridTextStaysOnPaper: Story = {
+  play: async () => {
+    await checkTextOnPaper(GRID_FAMILY_ID);
+  },
+};
+
+/**
+ * То же на всех экземплярах линейки.
+ */
+export const LinedTextStaysOnPaper: Story = {
+  play: async () => {
+    await checkTextOnPaper(LINED_FAMILY_ID);
   },
 };

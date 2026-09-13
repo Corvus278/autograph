@@ -86,6 +86,18 @@ export type SyntheticSheetParams = {
    * Seed шума: без него каждый прогон давал бы другое зерно.
    */
   seed?: number;
+
+  /**
+   * Координата вдоль разлиновки, начиная с которой горизонтальные линии уходят
+   * с арифметической гребёнки. Не задана — все линии на гребёнке.
+   */
+  driftFrom?: number;
+
+  /**
+   * На сколько пикселей уходят линии от `driftFrom` и ниже: так у края кадра
+   * лист тянет объектив или изгиб страницы.
+   */
+  drift?: number;
 };
 
 const DEFAULT_MARGINS: PaperMargins = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -113,7 +125,9 @@ const computeCombInk = (
   phase: number,
   sigma: number,
   from: number,
-  to: number
+  to: number,
+  driftFrom = Number.POSITIVE_INFINITY,
+  drift = 0
 ): number => {
   const center = Math.round((coordinate - phase) / step) * step + phase;
 
@@ -121,7 +135,9 @@ const computeCombInk = (
     return 0;
   }
 
-  return computeInk(coordinate - center, sigma);
+  const shift = center >= driftFrom ? drift : 0;
+
+  return computeInk(coordinate - center - shift, sigma);
 };
 
 /**
@@ -151,6 +167,8 @@ export const createSyntheticSheet = (
     noise = 0,
     lighting = 0,
     seed = 1,
+    driftFrom = Number.POSITIVE_INFINITY,
+    drift = 0,
   } = params;
   const tangent = Math.tan(angle * DEGREES_TO_RADIANS);
   const random = mulberry32(seed);
@@ -176,7 +194,16 @@ export const createSyntheticSheet = (
         if (isAcrossInside) {
           value -=
             lineDarkness *
-            computeCombInk(alongLines, step, phase, sigma, topEdge, bottomEdge);
+            computeCombInk(
+              alongLines,
+              step,
+              phase,
+              sigma,
+              topEdge,
+              bottomEdge,
+              driftFrom,
+              drift
+            );
         }
 
         if (kind === 'grid' && alongLines >= topEdge && alongLines <= bottomEdge) {

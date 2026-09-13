@@ -1,12 +1,32 @@
 import { readFileSync } from 'node:fs';
 
 import { buildPaperFamilies } from '@pages/Generator/config';
+import { deriveGeometry } from '@pages/Generator/lib/calibrate';
+import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
+import { MARGIN_FALLBACK_STEPS } from '@pages/Generator/lib/paper';
+import { getPageCalibration } from '@pages/Generator/model/geometrySelectors';
 import {
   PAPER_PROFILES_VERSION,
   parsePaperProfiles,
 } from '@pages/Generator/model/paperProfiles';
 import { isJsonRecord } from '@pages/Generator/model/paperSheetJson';
 import { describe, expect, it } from 'vitest';
+
+/**
+ * Метрики запасные, а не измеренные: в node шрифт не разобрать, а границы
+ * блока от метрик не зависят — от них зависит только верх строчного бокса.
+ */
+const METRICS = FALLBACK_FONT_METRICS;
+
+/**
+ * Погрешность сравнения пикселей: в отражении разлиновки участвует тангенс.
+ */
+const PX_EPSILON = 1e-6;
+
+/**
+ * Нечётная и чётная страницы: на чётной лист отражён, и поля меняются местами.
+ */
+const SPREAD_PAGES = [0, 1];
 
 /**
  * Артефакт пресет-пака, посчитанный `npm run build:paper`. Тест читает именно
@@ -105,15 +125,41 @@ describe('пресет-пак', () => {
       const [stepMin, stepMax] = PRESET_STEP_RANGES[family.id] || [0, 0];
 
       for (const sheet of family.sheets) {
-        const { step, margins, marginLineX, marginLineSide } = sheet.ruling;
+        const { step, marginLineX, marginLineSide } = sheet.ruling;
 
         expect(step).toBeGreaterThanOrEqual(stepMin);
         expect(step).toBeLessThanOrEqual(stepMax);
         expect(marginLineSide).toBe('right');
         expect(marginLineX).toBeGreaterThan(sheet.width / 2);
-        expect(
-          Math.min(margins.top, margins.right, margins.bottom, margins.left)
-        ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  /**
+   * На снимках пресет-пака разлиновка по бокам доходит до края кадра, и поле
+   * там берётся фолбэком; найденное поле — верх линейки, линия поля — шире
+   * фолбэка. Поэтому граница одна на все стороны: край блока не ближе полутора
+   * шагов к краю кадра. Верх строчного бокса обязан остаться в кадре, иначе
+   * первая строка срезается.
+   */
+  it('блок текста на обеих половинах разворота в кадре и не ближе полутора шагов к краю', () => {
+    for (const family of families) {
+      for (const sheet of family.sheets) {
+        for (const pageIndex of SPREAD_PAGES) {
+          const calibration = getPageCalibration(family, sheet, pageIndex);
+          const fallback = MARGIN_FALLBACK_STEPS * calibration.ruling.step;
+          const geometry = deriveGeometry(calibration, METRICS);
+          const blockRight = geometry.leftPadding + geometry.blockWidth;
+          const label = `${sheet.id}, страница ${pageIndex}`;
+
+          expect(geometry.topOffset, label).toBeGreaterThanOrEqual(0);
+          expect(geometry.leftPadding, label).toBeGreaterThanOrEqual(
+            fallback - PX_EPSILON
+          );
+          expect(sheet.width - blockRight, label).toBeGreaterThanOrEqual(
+            fallback - PX_EPSILON
+          );
+        }
       }
     }
   });

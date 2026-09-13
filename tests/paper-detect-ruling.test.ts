@@ -293,6 +293,98 @@ describe('detectRuling на повёрнутом листе', () => {
   });
 });
 
+/**
+ * Лист, разлинованный до самого края кадра, как снимки пресет-пака: полей у
+ * разлиновки нет ни с одной стороны. Наклон и зерно — чтобы край профиля
+ * отстоял от края кадра на защитную полосу, а не совпадал с ним.
+ */
+const EDGE_TO_EDGE_SHEET = {
+  width: 420,
+  height: 560,
+  step: 23.5,
+  phase: 8,
+  angle: 1.3,
+  noise: 0.05,
+};
+
+const NO_MARGINS = { top: 0, right: 0, bottom: 0, left: 0 };
+
+describe('detectRuling на листе, разлинованном до края кадра', () => {
+  it('на линейке до края возвращает нули и сохраняет линию поля', () => {
+    const detection = detectRuling(
+      createSyntheticSheet({ ...EDGE_TO_EDGE_SHEET, marginLineX: RIGHT_MARGIN_LINE_X })
+    );
+
+    expect(detection.isDetected).toBe(true);
+    expect(detection.margins).toEqual(NO_MARGINS);
+    expect(detection.marginLineSide).toBe('right');
+    expect(
+      Math.abs((detection.marginLineX || 0) - RIGHT_MARGIN_LINE_X)
+    ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+  });
+
+  it('на клетке до края возвращает нули и сохраняет линию поля', () => {
+    const detection = detectRuling(
+      createSyntheticSheet({
+        ...EDGE_TO_EDGE_SHEET,
+        kind: 'grid',
+        step: 28,
+        angle: -1.1,
+        marginLineX: 366,
+        marginLineDarkness: 0.8,
+      })
+    );
+
+    expect(detection.kind).toBe('grid');
+    expect(detection.margins).toEqual(NO_MARGINS);
+    expect(detection.marginLineSide).toBe('right');
+    expect(Math.abs((detection.marginLineX || 0) - 366)).toBeLessThanOrEqual(
+      MARGIN_TOLERANCE
+    );
+  });
+
+  /**
+   * Так устроены снимки линейки пресет-пака: две нижние линии у края кадра
+   * ушли с арифметической гребёнки на восьмую шага. Шаг крупный, чтобы уход в
+   * пикселях был тем же, что на фотографиях.
+   */
+  it('доводит линейку до нижнего края, даже если нижние линии ушли с гребёнки', () => {
+    const { margins } = detectRuling(
+      createSyntheticSheet({
+        width: 420,
+        height: 700,
+        step: 48,
+        phase: 20,
+        margins: { top: 116, right: 0, bottom: 0, left: 0 },
+        driftFrom: 640,
+        drift: -7,
+        noise: 0.05,
+      })
+    );
+
+    expect(Math.abs(margins.top - 116)).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+    expect(margins.bottom).toBe(0);
+  });
+
+  it('обнуляет только стороны, где разлиновка дошла до края', () => {
+    const { margins } = detectRuling(
+      createSyntheticSheet({
+        ...EDGE_TO_EDGE_SHEET,
+        margins: { ...LINED_SHEET.margins, right: 0, left: 0 },
+      })
+    );
+
+    expect(Math.abs(margins.top - LINED_FIRST_LINE)).toBeLessThanOrEqual(
+      MARGIN_TOLERANCE
+    );
+    expect(
+      Math.abs(margins.bottom - (LINED_SHEET.height - LINED_LAST_LINE))
+    ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+    expect(margins.left).toBe(0);
+    expect(margins.right).toBe(0);
+  });
+});
+
 describe('detectRuling на листе без разлиновки', () => {
   it('сообщает о неудаче, а не выдумывает шаг', () => {
     const detection = detectRuling(
