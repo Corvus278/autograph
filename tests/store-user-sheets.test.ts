@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { PaperSheet } from '@pages/Generator/lib/paper';
+import type { PaperSheet, RulingBend } from '@pages/Generator/lib/paper';
 import {
   selectPaperFamilies,
   selectPendingUserSheets,
@@ -129,6 +129,29 @@ describe('переживание перезагрузки', () => {
     store().restoreUserSheets();
 
     expect(store().userSheets).toEqual([record]);
+  });
+
+  it('возвращает изгиб линий строго равным исходному', () => {
+    const record = buildRecord('user-1');
+    const { sheet } = record;
+    const bend: RulingBend = {
+      columnOrigin: 75,
+      columnSpacing: 150,
+      columnCount: 2,
+      rowOrigin: 73.5,
+      rowSpacing: 64,
+      rowCount: 3,
+      offsets: [0.5, -1.25, 2.75, 0, -0.01, 3.1],
+    };
+
+    store().addUserSheet({
+      ...record,
+      sheet: { ...sheet, ruling: { ...sheet.ruling, bend } },
+    });
+    reload();
+    store().restoreUserSheets();
+
+    expect(store().userSheets[0]?.sheet.ruling.bend).toStrictEqual(bend);
   });
 
   it('не запускает повторный анализ восстановленного листа', () => {

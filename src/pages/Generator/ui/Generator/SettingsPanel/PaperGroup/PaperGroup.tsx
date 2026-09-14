@@ -17,6 +17,23 @@ import { UserSheetList } from './UserSheetList';
 import { useSheetImport } from './useSheetImport';
 
 /**
+ * Сколько долей пикселя различает форма разлиновки: она показывает длины
+ * округлёнными до сотых.
+ */
+const FORM_LENGTH_PRECISION = 100;
+
+/**
+ * Длина так, как её показала бы форма разлиновки (`RulingForm`): применённое
+ * без правки поле возвращает ровно это число.
+ *
+ * @param length — длина в пикселях фотографии
+ * @returns длина, округлённая до сотых
+ */
+const toFormPrecision = (length: number): number => {
+  return Math.round(length * FORM_LENGTH_PRECISION) / FORM_LENGTH_PRECISION;
+};
+
+/**
  * Свои листы, добавленные в семью. Отдельным проходом, а не поиском по всем
  * семьям: панель показывает экземпляры только выбранной.
  *
@@ -112,7 +129,17 @@ export const PaperGroup: FC = () => {
       return;
     }
 
-    const { skewAngle, marginLineX, marginLineSide } = activeSheet.ruling;
+    const { step, firstLinePhase, skewAngle, marginLineX, marginLineSide, bend } =
+      activeSheet.ruling;
+    /**
+     * Смещения изгиба отсчитаны от прямой гребёнки с прежними шагом и фазой: с
+     * другими те же числа описывали бы отход от других прямых, и строки встали
+     * бы мимо линий. Сравниваем с тем, что показала форма, а не с измеренным:
+     * `47,93` из формы против `47,9312` стирало бы изгиб при правке одних полей.
+     */
+    const isCombKept =
+      manual.step === toFormPrecision(step) &&
+      manual.firstLinePhase === toFormPrecision(firstLinePhase);
     /**
      * Наклон и линию поля форма не правит — они остаются найденными: иначе
      * правка полей молча стирала бы линию поля, и блок текста заезжал бы на
@@ -123,6 +150,7 @@ export const PaperGroup: FC = () => {
       skewAngle,
       marginLineX,
       marginLineSide,
+      bend: isCombKept ? bend : null,
     });
 
     addUserSheet({

@@ -2,6 +2,8 @@
  * @vitest-environment jsdom
  */
 import type { LayoutPage } from '@pages/Generator/lib/paginate/paginate.types';
+import type { RulingBend } from '@pages/Generator/lib/paper';
+import { buildSheetRuling } from '@pages/Generator/lib/paper';
 import { clearLayoutCache } from '@pages/Generator/model/measureLayout';
 import {
   DEFAULT_GENERATOR_STATE,
@@ -275,5 +277,96 @@ describe('ручная правка разлиновки', () => {
     expect(stored?.sheet.ruling.margins.right).toBe(EDITED_MARGINS.right);
     expect(stored?.sheet.ruling.margins.left).toBe(EDITED_MARGINS.left);
     expect(stored?.sheet.ruling.marginLineX).not.toBeNull();
+  });
+});
+
+/**
+ * Изгиб своего листа. Числа произвольные, но ненулевые: по ним видно, что
+ * после правки остался именно он.
+ */
+const SHEET_BEND: RulingBend = {
+  columnOrigin: 60,
+  columnSpacing: 120,
+  columnCount: 3,
+  rowOrigin: 19.26,
+  rowSpacing: 47.93,
+  rowCount: 2,
+  offsets: [0, 1.5, 2.25, -0.75, 1, 0.5],
+};
+
+/**
+ * Кладёт в стор свой изогнутый лист с дробными шагом и фазой: форма покажет
+ * их округлёнными до сотых, и правка одних полей не должна принять это
+ * округление за правку шага.
+ */
+const seedBentSheet = () => {
+  useGeneratorStore.getState().addUserSheet({
+    familyId: DEFAULT_GENERATOR_STATE.familyId,
+    isAnalyzed: true,
+    sheet: {
+      id: 'user-bent',
+      label: 'Изогнутый лист',
+      src: 'data:image/jpeg;base64,0123456789',
+      width: 480,
+      height: 640,
+      ruling: buildSheetRuling({
+        step: 47.9312,
+        firstLinePhase: 19.2587,
+        skewAngle: 0.4,
+        margins: { top: 70, right: 40, bottom: 50, left: 45 },
+        bend: SHEET_BEND,
+      }),
+      lighting: null,
+      texture: null,
+    },
+  });
+};
+
+describe('изгиб при ручной правке разлиновки', () => {
+  it('правка одного поля оставляет прежний изгиб', async () => {
+    const user = userEvent.setup();
+
+    seedBentSheet();
+    render(<PaperGroup />);
+
+    await fillField(user, 'Левое поле, px', 70);
+    await applyRuling(user);
+
+    expect(readUserRuling()?.margins.left).toBe(70);
+    expect(readUserRuling()?.bend).toStrictEqual(SHEET_BEND);
+  });
+
+  it('правка шага даёт ровный лист', async () => {
+    const user = userEvent.setup();
+
+    seedBentSheet();
+    render(<PaperGroup />);
+
+    /**
+     * Без изгиба у посеянного листа проверка ниже прошла бы и на форме,
+     * которая изгиб не переносит вовсе.
+     */
+    expect(readUserRuling()?.bend).not.toBeNull();
+
+    await fillField(user, 'Шаг строк, px', 48);
+    await applyRuling(user);
+
+    expect(readUserRuling()?.step).toBe(48);
+    expect(readUserRuling()?.bend).toBeNull();
+  });
+
+  it('правка фазы даёт ровный лист', async () => {
+    const user = userEvent.setup();
+
+    seedBentSheet();
+    render(<PaperGroup />);
+
+    expect(readUserRuling()?.bend).not.toBeNull();
+
+    await fillField(user, 'Первая строка от верха, px', 20);
+    await applyRuling(user);
+
+    expect(readUserRuling()?.firstLinePhase).toBe(20);
+    expect(readUserRuling()?.bend).toBeNull();
   });
 });

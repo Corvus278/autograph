@@ -4,6 +4,7 @@ import type {
   PaperMargins,
   PaperSheet,
   PaperTexture,
+  RulingBend,
   SheetRuling,
 } from '../lib/paper/paper.types';
 import { buildSheetRuling } from '../lib/paper/sheetRuling';
@@ -126,6 +127,96 @@ const parseMargins = (value: unknown): PaperMargins => {
 };
 
 /**
+ * Конечное число в JSON.
+ *
+ * @param value — разобранное значение
+ * @returns признак конечного числа
+ */
+const isFiniteNumber = (value: unknown): value is number => {
+  return typeof value === 'number' && Number.isFinite(value);
+};
+
+/**
+ * Интервал сетки: у узлов, стоящих в одной точке или в обратном порядке,
+ * выборка делила бы на ноль или читала узлы задом наперёд.
+ *
+ * @param value — разобранное значение
+ * @returns признак положительного конечного числа
+ */
+const isPositiveNumber = (value: unknown): value is number => {
+  return isFiniteNumber(value) && value > 0;
+};
+
+/**
+ * Размер сетки: дробное число узлов разошлось бы с плоским индексом смещений.
+ *
+ * @param value — разобранное значение
+ * @returns признак целого положительного числа
+ */
+const isNodeCount = (value: unknown): value is number => {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+};
+
+/**
+ * Изгиб линий из JSON. Испорченная сетка — размеры, не согласованные с числом
+ * смещений, неположительный интервал, нечисловое значение — читается как
+ * отсутствие изгиба: такой лист ровный, а не сломанный, и остаётся в списке.
+ * Частично годную сетку не чиним: смещения, прочитанные по неверным размерам,
+ * встали бы не в те узлы.
+ *
+ * @param value — разобранное значение
+ * @returns сетка изгиба; `null` — изгиба нет или он нечитаем
+ */
+const parseRulingBend = (value: unknown): RulingBend | null => {
+  if (!isJsonRecord(value)) {
+    return null;
+  }
+
+  const {
+    columnOrigin,
+    columnSpacing,
+    columnCount,
+    rowOrigin,
+    rowSpacing,
+    rowCount,
+    offsets,
+  } = value;
+
+  if (
+    !isFiniteNumber(columnOrigin) ||
+    !isFiniteNumber(rowOrigin) ||
+    !isPositiveNumber(columnSpacing) ||
+    !isPositiveNumber(rowSpacing) ||
+    !isNodeCount(columnCount) ||
+    !isNodeCount(rowCount) ||
+    !Array.isArray(offsets) ||
+    offsets.length !== columnCount * rowCount
+  ) {
+    return null;
+  }
+
+  const items: unknown[] = offsets;
+
+  if (
+    !items.every((item): item is number => {
+      return isFiniteNumber(item);
+    })
+  ) {
+    return null;
+  }
+
+  return {
+    columnOrigin,
+    columnSpacing,
+    columnCount,
+    rowOrigin,
+    rowSpacing,
+    rowCount,
+    offsets: items,
+  };
+};
+
+/**
  * Разлиновка экземпляра из JSON. Запись прежней формы разлиновки не несёт: шаг,
  * фаза и наклон берутся из полей самого экземпляра, поля и линия поля —
  * фолбэком.
@@ -151,6 +242,7 @@ const parseSheetRuling = (value: Record<string, unknown>): SheetRuling => {
     margins: parseMargins(ruling.margins),
     marginLineX: toFiniteNumber(ruling.marginLineX, 0) || null,
     marginLineSide: parseMarginLineSide(ruling.marginLineSide),
+    bend: parseRulingBend(ruling.bend),
   });
 };
 
