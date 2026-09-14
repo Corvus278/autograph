@@ -108,7 +108,7 @@
 
 ## 4. Отрисовка
 
-- [ ] 4.1 Добавить `bend` в `RenderGeometry` и передавать изгиб разлиновки страницы из `buildPageRenderParams`, на чётной странице — отражённый. Проставить `bend: null` в литералах геометрии отрисовки:
+- [x] 4.1 Добавить `bend` в `RenderGeometry` и передавать изгиб разлиновки страницы из `buildPageRenderParams`, на чётной странице — отражённый. Проставить `bend: null` в литералах геометрии отрисовки:
   - `ui/Generator/PagePreview/BaselineFit.stories.tsx`;
   - тесты `batch-export`, `ink-layer-render`, `page-render-params`, `page-render-worker`, `page-render`, `render-page-canvas`, `render-page-glyphs`, `save-bar`;
   - прочее — по выводу `npm run typecheck`.
@@ -116,7 +116,7 @@
   Проверка:
   - юнит-тест `page-render-params`: на нечётной странице в параметрах изгиб листа, на чётной — результат `mirrorSheetRuling`;
   - тест `page-render-worker`: записыватель порта кладёт `structuredClone(request)`, и изгиб в клоне равен исходному.
-- [ ] 4.2 Вести в `renderPageToCanvas` параллельную аффинную матрицу стека трансформаций (без `scale`) и рисовать точки контуров как `p + L⁻¹·(0, d(M·p))`, только при `bend !== null`. Наклон для выборки — `blockRotate`. Проверка:
+- [x] 4.2 Вести в `renderPageToCanvas` параллельную аффинную матрицу стека трансформаций (без `scale`) и рисовать точки контуров как `p + L⁻¹·(0, d(M·p))`, только при `bend !== null`. Наклон для выборки — `blockRotate`. Проверка:
   - тест по `tests/helpers/path-recorder.ts` на изогнутом листе: низ тела букв в каждом столбце строки лежит на линии разлиновки с изгибом с отклонением не больше десятой шага, включая длинное слово через подъём линии и строку с поворотом неровности почерка;
   - прежние тесты ленты вызовов (`render-page-canvas`, `render-page-glyphs`, `page-render-params`) проходят без правки ожиданий;
   - шпион на `sampleRulingBend` через `vi.mock` с `importOriginal` (образец — `tests/store-run-recipe.test.ts`) при `bend: null` не вызывается.

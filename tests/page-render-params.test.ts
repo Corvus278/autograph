@@ -4,6 +4,7 @@ import { PAGE_IMAGE_MIME } from '@pages/Generator/lib/export';
 import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
 import type { Page } from '@pages/Generator/lib/paginate/paginate.types';
 import type { PaperFamily, PaperSheet } from '@pages/Generator/lib/paper';
+import { mirrorSheetRuling } from '@pages/Generator/lib/paper';
 import type { PageRenderParams, RenderImage } from '@pages/Generator/lib/render';
 import { renderPageToCanvas } from '@pages/Generator/lib/render';
 import {
@@ -93,11 +94,33 @@ const TILTED_SHEET: PaperSheet = {
   },
 };
 
+/**
+ * Наклонный лист с изгибом. Узлы несимметричны и область узлов не по центру
+ * кадра: отражённый изгиб отличается от исходного и порядком узлов, и началом
+ * области.
+ */
+const BENT_SHEET: PaperSheet = {
+  ...TILTED_SHEET,
+  id: 'bent',
+  ruling: {
+    ...TILTED_SHEET.ruling,
+    bend: {
+      columnOrigin: 170,
+      columnSpacing: 400,
+      columnCount: 4,
+      rowOrigin: 21.3,
+      rowSpacing: 1000,
+      rowCount: 2,
+      offsets: [0, 3.5, -2.25, 1, 0.5, 1.75, -1, 0],
+    },
+  },
+};
+
 const FAMILY: PaperFamily = {
   id: 'lined',
   label: 'В линейку',
   kind: 'lined',
-  sheets: [SHEET, TILTED_SHEET],
+  sheets: [SHEET, TILTED_SHEET, BENT_SHEET],
 };
 
 const PAGE: Page = {
@@ -233,6 +256,7 @@ describe('адаптер параметров отрисовки', () => {
         ...deriveGeometry(calibration, FALLBACK_FONT_METRICS, CORRECTION),
         blockRotate: calibration.ruling.skewAngle,
         fontMetrics: FALLBACK_FONT_METRICS,
+        bend: null,
       });
     });
   });
@@ -290,6 +314,17 @@ describe('чётные страницы', () => {
 
     expect(straight.blockRotate).toBe(SKEW_ANGLE);
     expect(mirrored.blockRotate).toBe(-SKEW_ANGLE);
+  });
+
+  it('передаёт изгиб листа: на нечётной странице как есть, на чётной — отражённый', () => {
+    const straight = buildPageRenderParams(buildInput({}, 0, BENT_SHEET)).geometry;
+    const mirrored = buildPageRenderParams(buildInput({}, 1, BENT_SHEET)).geometry;
+
+    expect(straight.bend).toStrictEqual(BENT_SHEET.ruling.bend);
+    expect(mirrored.bend).toStrictEqual(
+      mirrorSheetRuling(BENT_SHEET.ruling, BENT_SHEET.width).bend
+    );
+    expect(mirrored.bend).not.toStrictEqual(straight.bend);
   });
 
   it('кладёт базовые линии на линии отражённой фотографии наклонного листа', () => {

@@ -1,6 +1,8 @@
 import { deformGlyphPath } from '../glyph/deformGlyphPath';
-import type { GlyphPathCommand } from '../glyph/glyph.types';
+import type { GlyphPathCommand, GlyphPoint } from '../glyph/glyph.types';
 import { FALLBACK_FONT_METRICS } from '../measure/measureFontMetrics';
+import type { RulingBend } from '../paper/paper.types';
+import { sampleRulingBend } from '../paper/sampleRulingBend';
 import type { LetterDistortion } from '../randomize/randomize.types';
 
 import type {
@@ -51,6 +53,237 @@ const INK_LAYER: PageLayers = { hasBackground: false, hasInk: true };
  */
 const toRadians = (degrees: number): number => {
   return degrees / DEGREES_IN_RADIAN;
+};
+
+/**
+ * Аффинное преобразование в форме аргументов `transform` канвы:
+ * `x′ = a·x + c·y + e`, `y′ = b·x + d·y + f`.
+ */
+type AffineMatrix = {
+  /**
+   * Горизонтальный масштаб.
+   */
+  a: number;
+
+  /**
+   * Вертикальный скос.
+   */
+  b: number;
+
+  /**
+   * Горизонтальный скос.
+   */
+  c: number;
+
+  /**
+   * Вертикальный масштаб.
+   */
+  d: number;
+
+  /**
+   * Сдвиг по горизонтали.
+   */
+  e: number;
+
+  /**
+   * Сдвиг по вертикали.
+   */
+  f: number;
+};
+
+const IDENTITY_MATRIX: AffineMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+/**
+ * Произведение преобразований: сначала применяется правое, потом левое — в том
+ * порядке, в каком их накапливает канва.
+ */
+const multiplyMatrices = (left: AffineMatrix, right: AffineMatrix): AffineMatrix => {
+  return {
+    a: left.a * right.a + left.c * right.b,
+    b: left.b * right.a + left.d * right.b,
+    c: left.a * right.c + left.c * right.d,
+    d: left.b * right.c + left.d * right.d,
+    e: left.a * right.e + left.c * right.f + left.e,
+    f: left.b * right.e + left.d * right.f + left.f,
+  };
+};
+
+/**
+ * Изгиб разлиновки вместе с преобразованием, которое канва применила бы к
+ * точке, — без масштаба отрисовки: изгиб задан в пикселях страницы.
+ */
+type BendTracker = {
+  /**
+   * Изгиб линий разлиновки страницы.
+   */
+  bend: RulingBend;
+
+  /**
+   * Наклон разлиновки в градусах, с которым выбирается изгиб.
+   */
+  skewAngle: number;
+
+  /**
+   * Текущее преобразование из системы рисования в пиксели страницы.
+   */
+  matrix: AffineMatrix;
+
+  /**
+   * Преобразования, запомненные на `save`.
+   */
+  stack: AffineMatrix[];
+};
+
+/**
+ * Точка в текущей системе рисования, образ которой на странице опущен на изгиб
+ * линии в образе исходной точки: `p + L⁻¹·(0, d(M·p))`, где `L` — линейная
+ * часть `M`.
+ *
+ * Сдвиг переводится обратной линейной частью, а не прибавляется к `y` как
+ * есть: поворот и скос строки и слова уже в преобразовании, и тот же сдвиг в
+ * системе буквы увёл бы точку на странице вбок. Стык соседних букв — одна и та
+ * же точка страницы, поэтому сдвиг у него один и соединение не рвётся.
+ *
+ * @param tracker — изгиб и текущее преобразование
+ * @param x — горизонталь точки в системе рисования
+ * @param y — вертикаль точки в системе рисования
+ * @returns сдвинутая точка в той же системе
+ */
+const bendPoint = (tracker: BendTracker, x: number, y: number): GlyphPoint => {
+  const { bend, skewAngle, matrix } = tracker;
+  const { a, b, c, d, e, f } = matrix;
+  const determinant = a * d - b * c;
+
+  if (determinant === 0) {
+    return { x, y };
+  }
+
+  const offset = sampleRulingBend(bend, skewAngle, a * x + c * y + e, b * x + d * y + f);
+
+  return {
+    x: x - (c * offset) / determinant,
+    y: y + (a * offset) / determinant,
+  };
+};
+
+/**
+ * Контекст, который рисует в `ctx` те же вызовы, но точки путей кладёт на
+ * изогнутые линии разлиновки.
+ *
+ * Рядом со стеком канвы ведётся своё преобразование с тем же порядком
+ * `rotate`, `translate`, `transform` и своим стеком на `save`/`restore`: снять
+ * преобразование с контекста нечем — `getTransform` нет ни у `RenderContext`,
+ * ни у записывающих контекстов тестов. Вызовы трансформаций поэтому остаются
+ * на месте, меняются только координаты точек, контрольные точки кривых — тем
+ * же полем.
+ *
+ * Преобразование начинается с единичного: контекст создаётся после масштаба
+ * отрисовки, и точки меряются в пикселях страницы.
+ *
+ * @param ctx — контекст, в который идут вызовы
+ * @param bend — изгиб линий разлиновки страницы
+ * @param skewAngle — наклон разлиновки в градусах
+ * @returns контекст рисования по изогнутым линиям
+ */
+const createBentContext = (
+  ctx: RenderContext,
+  bend: RulingBend,
+  skewAngle: number
+): RenderContext => {
+  const tracker: BendTracker = { bend, skewAngle, matrix: IDENTITY_MATRIX, stack: [] };
+
+  const apply = (next: AffineMatrix): void => {
+    tracker.matrix = multiplyMatrices(tracker.matrix, next);
+  };
+
+  return {
+    get fillStyle(): RenderContext['fillStyle'] {
+      return ctx.fillStyle;
+    },
+    set fillStyle(value: RenderContext['fillStyle']) {
+      ctx.fillStyle = value;
+    },
+    get font(): string {
+      return ctx.font;
+    },
+    set font(value: string) {
+      ctx.font = value;
+    },
+    get textBaseline(): CanvasTextBaseline {
+      return ctx.textBaseline;
+    },
+    set textBaseline(value: CanvasTextBaseline) {
+      ctx.textBaseline = value;
+    },
+    save: () => {
+      tracker.stack.push(tracker.matrix);
+      ctx.save();
+    },
+    restore: () => {
+      tracker.matrix = tracker.stack.pop() || IDENTITY_MATRIX;
+      ctx.restore();
+    },
+    scale: (x, y) => {
+      apply({ ...IDENTITY_MATRIX, a: x, d: y });
+      ctx.scale(x, y);
+    },
+    translate: (x, y) => {
+      apply({ ...IDENTITY_MATRIX, e: x, f: y });
+      ctx.translate(x, y);
+    },
+    rotate: (angle) => {
+      const sin = Math.sin(angle);
+      const cos = Math.cos(angle);
+
+      apply({ a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 });
+      ctx.rotate(angle);
+    },
+    transform: (a, b, c, d, e, f) => {
+      apply({ a, b, c, d, e, f });
+      ctx.transform(a, b, c, d, e, f);
+    },
+    drawImage: (image, dx, dy, dWidth, dHeight) => {
+      ctx.drawImage(image, dx, dy, dWidth, dHeight);
+    },
+    measureText: (text) => {
+      return ctx.measureText(text);
+    },
+    fillText: (text, x, y) => {
+      ctx.fillText(text, x, y);
+    },
+    beginPath: () => {
+      ctx.beginPath();
+    },
+    moveTo: (x, y) => {
+      const point = bendPoint(tracker, x, y);
+
+      ctx.moveTo(point.x, point.y);
+    },
+    lineTo: (x, y) => {
+      const point = bendPoint(tracker, x, y);
+
+      ctx.lineTo(point.x, point.y);
+    },
+    quadraticCurveTo: (cpx, cpy, x, y) => {
+      const control = bendPoint(tracker, cpx, cpy);
+      const end = bendPoint(tracker, x, y);
+
+      ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
+    },
+    bezierCurveTo: (cp1x, cp1y, cp2x, cp2y, x, y) => {
+      const first = bendPoint(tracker, cp1x, cp1y);
+      const second = bendPoint(tracker, cp2x, cp2y);
+      const end = bendPoint(tracker, x, y);
+
+      ctx.bezierCurveTo(first.x, first.y, second.x, second.y, end.x, end.y);
+    },
+    closePath: () => {
+      ctx.closePath();
+    },
+    fill: () => {
+      ctx.fill();
+    },
+  };
 };
 
 /**
@@ -500,6 +733,10 @@ const drawLine = (
 
 /**
  * Рисует перечисленные слои страницы в контекст.
+ *
+ * Чернила изогнутого листа рисуются через контекст изгиба, созданный после
+ * масштаба отрисовки: его преобразование ведётся в пикселях страницы. Ровный
+ * лист рисуется прямо в `ctx`, и выборка изгиба не вызывается вовсе.
  */
 const drawPage = (
   ctx: RenderContext,
@@ -515,6 +752,7 @@ const drawPage = (
     blockWidth,
     blockRotate,
     fontMetrics,
+    bend,
   } = geometry;
   const { fontAscent, lineHeight } = resolveMetrics(fontMetrics);
   const baseFont = buildFont(fontSizePx, fontFamily);
@@ -529,23 +767,25 @@ const drawPage = (
   if (layers.hasInk) {
     ctx.save();
 
+    const inkContext = bend === null ? ctx : createBentContext(ctx, bend, blockRotate);
+
     if (blockRotate !== 0) {
-      ctx.rotate(toRadians(blockRotate));
+      inkContext.rotate(toRadians(blockRotate));
     }
 
-    ctx.translate(leftPadding, topOffset);
+    inkContext.translate(leftPadding, topOffset);
 
-    ctx.fillStyle = inkColor;
-    ctx.textBaseline = 'alphabetic';
-    ctx.font = baseFont;
+    inkContext.fillStyle = inkColor;
+    inkContext.textBaseline = 'alphabetic';
+    inkContext.font = baseFont;
 
-    const spaceWidth = measureSpace(ctx, glyphs, fontSizePx);
+    const spaceWidth = measureSpace(inkContext, glyphs, fontSizePx);
     const lineStep = fontSizePx * lineHeight + lineSpacing;
     const firstBaselineY = fontAscent * fontSizePx;
 
     page.lines.forEach((line, index) => {
       drawLine(
-        ctx,
+        inkContext,
         line,
         firstBaselineY + index * lineStep,
         spaceWidth,

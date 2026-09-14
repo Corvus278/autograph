@@ -57,6 +57,7 @@ const TASK: PageRenderTask = {
       blockWidth: 100,
       blockRotate: 0,
       fontMetrics: { fontAscent: 0.8, lineHeight: 1.2 },
+      bend: null,
     },
     scale: FRAME_SCALE,
   },

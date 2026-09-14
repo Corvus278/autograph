@@ -93,6 +93,7 @@ const buildParams = (
       blockWidth: 0,
       blockRotate: 0,
       fontMetrics: FONT_METRICS,
+      bend: null,
     },
     scale: 1,
   };

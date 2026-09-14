@@ -1,5 +1,5 @@
 import type { GlyphSource } from '../glyph/glyph.types';
-import type { LightingField } from '../paper/paper.types';
+import type { LightingField, RulingBend } from '../paper/paper.types';
 import type { LineDistortion, WordDistortion } from '../randomize/randomize.types';
 
 /**
@@ -351,6 +351,16 @@ export type RenderGeometry = {
    * строку с разлиновки на сотни пикселей.
    */
   fontMetrics: RenderFontMetrics;
+
+  /**
+   * Изгиб линий разлиновки страницы в пикселях страницы; на чётной странице —
+   * уже отражённый. Выбирается с углом `blockRotate`: отдельного наклона в
+   * геометрии нет, а блок наклонён ровно на наклон той же разлиновки.
+   *
+   * `null` — лист ровный: точки контуров не сдвигаются, и отрисовка совпадает
+   * с отрисовкой без изгиба вызов в вызов.
+   */
+  bend: RulingBend | null;
 };
 
 /**

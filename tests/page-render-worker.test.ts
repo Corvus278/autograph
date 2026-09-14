@@ -38,6 +38,7 @@ const TASK: PageRenderTask = {
       blockWidth: 100,
       blockRotate: 0,
       fontMetrics: { fontAscent: 0.8, lineHeight: 1.2 },
+      bend: null,
     },
     scale: 3,
   },
@@ -79,7 +80,16 @@ type PortRecorder = {
   reply: (response: RenderPageResponse) => void;
 };
 
-const createPortRecorder = (): PortRecorder => {
+/**
+ * Записыватель порта.
+ *
+ * @param shouldClone — класть структурный клон задания, как его получит
+ * воркер. По умолчанию задание кладётся как есть: битмап-пустышка с функцией
+ * структурного клонирования не переживает, а настоящий битмап передаётся
+ * владением.
+ * @returns порт и запись отправленного
+ */
+const createPortRecorder = (shouldClone = false): PortRecorder => {
   const requests: RenderPageRequest[] = [];
   const transfers: Transferable[][] = [];
   const listeners: Array<(event: MessageEvent<RenderPageResponse>) => void> = [];
@@ -87,7 +97,7 @@ const createPortRecorder = (): PortRecorder => {
   return {
     port: {
       postMessage: (request, transfer) => {
-        requests.push(request);
+        requests.push(shouldClone ? structuredClone(request) : request);
         transfers.push(transfer);
       },
       addEventListener: (_type, listener) => {
@@ -142,6 +152,49 @@ describe('клиент отрисовки в воркере', () => {
     expect(request?.textureSrc).toBe('/texture.png');
     expect(request?.font?.url).toBe('/fonts/Abram.ttf');
     expect(recorder.transfers[0]).toEqual([BITMAP]);
+
+    recorder.reply({
+      requestId: request?.requestId || 0,
+      status: 'done',
+      page: new Blob(['page'], { type: 'image/jpeg' }),
+    });
+
+    await expect(page).resolves.toBeInstanceOf(Blob);
+  });
+
+  it('переносит изгиб разлиновки через структурное клонирование задания', async () => {
+    const bentTask: PageRenderTask = {
+      ...TASK,
+      sheet: null,
+      params: {
+        ...TASK.params,
+        geometry: {
+          ...TASK.params.geometry,
+          bend: {
+            columnOrigin: 12.5,
+            columnSpacing: 50,
+            columnCount: 3,
+            rowOrigin: 10,
+            rowSpacing: 100,
+            rowCount: 1,
+            offsets: [0.25, -1.5, 3],
+          },
+        },
+      },
+    };
+    const recorder = createPortRecorder(true);
+    const client = buildClient(recorder);
+    const page = client.render(bentTask);
+
+    await vi.waitFor(() => {
+      expect(recorder.requests).toHaveLength(1);
+    });
+
+    const [request] = recorder.requests;
+    const { bend } = bentTask.params.geometry;
+
+    expect(request?.params.geometry.bend).toStrictEqual(bend);
+    expect(request?.params.geometry.bend).not.toBe(bend);
 
     recorder.reply({
       requestId: request?.requestId || 0,

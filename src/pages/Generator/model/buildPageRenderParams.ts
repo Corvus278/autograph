@@ -118,7 +118,8 @@ const buildRenderPage = (page: Page, input: PageRenderInput): RenderPage => {
  * разлиновка приходит уже отражённой (`model/geometrySelectors.ts`), поэтому
  * отступ от перенесённой линии поля и сдвиг наклонных линий выходят из неё
  * сами. Блок наклоняется на угол той же разлиновки: фотография не
- * выправляется, текст выкладывается вдоль её наклона.
+ * выправляется, текст выкладывается вдоль её наклона. Изгиб линий берётся из
+ * неё же и на чётной странице отражён вместе с фотографией.
  *
  * Страница равна кадру листа, и фотография ложится на неё целиком — от угла до
  * угла, без масштаба и сдвига.
@@ -147,6 +148,7 @@ export const buildPageRenderParams = (input: PageRenderInput): PageRenderParams 
       blockWidth: geometry.blockWidth,
       blockRotate: calibration.ruling.skewAngle,
       fontMetrics: metrics,
+      bend: calibration.ruling.bend,
     },
     scale,
   };
