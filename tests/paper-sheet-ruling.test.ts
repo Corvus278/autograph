@@ -31,6 +31,7 @@ const buildDetection = (patch: Partial<RulingDetection> = {}): RulingDetection =
     margins: NO_MARGINS,
     marginLineX: null,
     marginLineSide: null,
+    bend: null,
     confidence: 0.9,
     ...patch,
   };
@@ -95,6 +96,7 @@ describe('сборка разлиновки экземпляра из резул
       margins,
       marginLineX: 1400,
       marginLineSide: 'right',
+      bend: null,
     });
   });
 

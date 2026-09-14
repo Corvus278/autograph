@@ -21,6 +21,7 @@ export type {
   PaperMargins,
   PaperSheet,
   PaperTexture,
+  RulingBend,
   RulingDetection,
   RulingKind,
   SheetImageData,
@@ -28,5 +29,6 @@ export type {
   SheetRulingSource,
   TextureMap,
 } from './paper.types';
+export { sampleRulingBend, sampleRulingBendSlope } from './sampleRulingBend';
 export { buildSheetRuling, MARGIN_FALLBACK_STEPS, resolveFirstLine } from './sheetRuling';
 export { synthesizeLighting } from './synthesizeLighting';

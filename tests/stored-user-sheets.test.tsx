@@ -27,6 +27,7 @@ const SHEET: PaperSheet = {
     margins: { top: 135.5, right: 90, bottom: 110, left: 120 },
     marginLineX: 1080,
     marginLineSide: 'right',
+    bend: null,
   },
   lighting: null,
   texture: null,

@@ -73,6 +73,11 @@ export const buildSheetRuling = (source: SheetRulingSource): SheetRuling => {
     margins,
     marginLineX: hasMarginLine ? marginLineX : null,
     marginLineSide: hasMarginLine ? marginLineSide : null,
+    /**
+     * Чистый лист и ручной ввод без шага не несут сетку изгиба: она описывает
+     * смещения гребёнки, которой у такого листа нет.
+     */
+    bend: step > 0 ? source.bend || null : null,
   };
 
   /**

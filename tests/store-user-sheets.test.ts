@@ -44,6 +44,7 @@ const buildMeasuredSheet = (id: string): PaperSheet => {
       margins: { top: 137.5, right: 90, bottom: 110, left: 120 },
       marginLineX: 1080,
       marginLineSide: 'right',
+      bend: null,
     },
     lighting: {
       gridWidth: 2,
@@ -206,7 +207,7 @@ describe('форма записи в хранилище', () => {
 
     const [restored] = store().userSheets;
 
-    expect(restored?.sheet.ruling).toEqual(ruling);
+    expect(restored?.sheet.ruling).toEqual({ ...ruling, bend: null });
   });
 
   it('оставляет в списке запись прежней формы с приблизительной разлиновкой', () => {
@@ -238,6 +239,7 @@ describe('форма записи в хранилище', () => {
       margins: { top: 78, right: 72, bottom: 72, left: 72 },
       marginLineX: null,
       marginLineSide: null,
+      bend: null,
     });
     expect(family?.sheets.at(-1)?.id).toBe('user-legacy');
   });

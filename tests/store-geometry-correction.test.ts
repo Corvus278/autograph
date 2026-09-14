@@ -39,6 +39,7 @@ const NARROW_SHEET = buildSheet(
     margins: { top: 80, right: 60, bottom: 80, left: 60 },
     marginLineX: 1540,
     marginLineSide: 'right',
+    bend: null,
   },
   { width: 1600, height: 2003 }
 );
@@ -52,6 +53,7 @@ const WIDE_SHEET = buildSheet(
     margins: { top: 140, right: 70, bottom: 90, left: 80 },
     marginLineX: 1500,
     marginLineSide: 'right',
+    bend: null,
   },
   { width: 1600, height: 2050 }
 );
@@ -76,6 +78,7 @@ const GRID_SHEET = buildSheet(
     margins: { top: 96, right: 80, bottom: 80, left: 80 },
     marginLineX: 1400,
     marginLineSide: 'right',
+    bend: null,
   },
   { width: 1600, height: 2050 }
 );
@@ -160,6 +163,7 @@ const getExpectedMirroredRuling = (sheet: PaperSheet): SheetRuling => {
     },
     marginLineX: marginLineX === null ? null : width - marginLineX,
     marginLineSide: 'left',
+    bend: null,
   };
 };
 

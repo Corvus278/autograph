@@ -66,6 +66,7 @@ const SHEET: PaperSheet = {
     margins: { top: 100, right: RIGHT_MARGIN, bottom: 0, left: 0 },
     marginLineX: MARGIN_LINE_X,
     marginLineSide: 'left',
+    bend: null,
   },
   lighting: null,
   texture: null,
@@ -88,6 +89,7 @@ const TILTED_SHEET: PaperSheet = {
     margins: { top: 130, right: 150, bottom: 90, left: 170 },
     marginLineX: null,
     marginLineSide: null,
+    bend: null,
   },
 };
 

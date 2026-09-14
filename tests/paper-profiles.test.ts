@@ -23,6 +23,7 @@ const PROFILE_RULING = {
   margins: { top: 94.7, right: 150, bottom: 90, left: 70 },
   marginLineX: 1450,
   marginLineSide: 'right',
+  bend: null,
 };
 
 /**

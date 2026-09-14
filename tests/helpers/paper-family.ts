@@ -13,6 +13,7 @@ const LINED_SHEET_RULING: SheetRuling = {
   margins: { top: 80, right: 40, bottom: 60, left: 60 },
   marginLineX: 60,
   marginLineSide: 'left',
+  bend: null,
 };
 
 const LINED_SHEET_SIZE: SheetSize = { width: 1600, height: 2000 };
@@ -29,6 +30,7 @@ export const RENDER_SHEET_RULING: SheetRuling = {
   margins: { top: 40, right: 100, bottom: 0, left: 0 },
   marginLineX: null,
   marginLineSide: null,
+  bend: null,
 };
 
 const RENDER_SHEET_SIZE: SheetSize = { width: 200, height: 400 };

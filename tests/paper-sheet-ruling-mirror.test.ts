@@ -26,6 +26,7 @@ const RULING: SheetRuling = {
   margins: { top: 180, right: 240, bottom: 150, left: 90 },
   marginLineX: 1360,
   marginLineSide: 'right',
+  bend: null,
 };
 
 /**

@@ -216,6 +216,7 @@ const toMissingDetection = (confidence: number): DetectedRuling => {
     margins: NO_MARGINS,
     marginLineX: null,
     marginLineSide: null,
+    bend: null,
     confidence,
   };
 };
@@ -841,6 +842,7 @@ export const detectRuling = (
     margins,
     marginLineX: marginLine && marginLine.x,
     marginLineSide: marginLine && marginLine.side,
+    bend: null,
     confidence: period.confidence,
   };
 };

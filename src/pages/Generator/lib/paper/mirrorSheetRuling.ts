@@ -1,4 +1,4 @@
-import type { MarginLineSide, SheetRuling } from './paper.types';
+import type { MarginLineSide, RulingBend, SheetRuling } from './paper.types';
 
 const DEGREES_IN_RADIAN = 180 / Math.PI;
 
@@ -37,6 +37,41 @@ const flipMarginLineSide = (side: MarginLineSide | null): MarginLineSide | null 
 };
 
 /**
+ * Сетка изгиба отражённой фотографии. Строки узлов сдвигаются на тот же наклон
+ * во всю ширину кадра, что и фаза: координата вдоль линий отсчитывается у
+ * левого края, а он после отражения — бывший правый. Первым узлом становится
+ * отражённый последний, поэтому у несимметричной области с линиями сетка
+ * ложится в другое место кадра.
+ *
+ * @param bend — сетка изгиба листа; `null` — линии прямые
+ * @param shift — наклон разлиновки во всю ширину кадра в пикселях
+ * @param width — ширина кадра фотографии в пикселях
+ * @returns сетка отражённой фотографии; `null` — линии прямые
+ */
+const mirrorRulingBend = (
+  bend: RulingBend | null,
+  shift: number,
+  width: number
+): RulingBend | null => {
+  if (!bend) {
+    return null;
+  }
+
+  const { columnOrigin, columnSpacing, columnCount, rowOrigin, offsets } = bend;
+
+  return {
+    ...bend,
+    columnOrigin: width - (columnOrigin + (columnCount - 1) * columnSpacing),
+    rowOrigin: rowOrigin + shift,
+    offsets: offsets.map((_, index) => {
+      const column = index % columnCount;
+
+      return offsets[index - column + columnCount - 1 - column] || 0;
+    }),
+  };
+};
+
+/**
  * Разлиновка того же листа, отражённого по горизонтали, — правой половины
  * разворота.
  *
@@ -72,5 +107,6 @@ export const mirrorSheetRuling = (ruling: SheetRuling, width: number): SheetRuli
     },
     marginLineX: marginLineX === null ? null : width - marginLineX,
     marginLineSide: flipMarginLineSide(marginLineSide),
+    bend: mirrorRulingBend(ruling.bend, shift, width),
   };
 };
