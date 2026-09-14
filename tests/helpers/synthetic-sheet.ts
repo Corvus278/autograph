@@ -98,6 +98,29 @@ export type SyntheticSheetParams = {
    * лист тянет объектив или изгиб страницы.
    */
   drift?: number;
+
+  /**
+   * На сколько пикселей концы горизонтальной линии у верхнего и нижнего края
+   * кадра расходятся с гребёнкой: концы уходят в разные стороны, у нижнего
+   * края — зеркально верхнему, у середины кадра линия ровная. Так ложится
+   * разлиновка на снимке телефоном, когда лист повёрнут к объективу.
+   */
+  perspective?: number;
+
+  /**
+   * Какую долю глубины теряют горизонтальные линии у верхнего и нижнего края
+   * кадра; к середине кадра потеря убывает до нуля. Так на снимке телефоном
+   * резкость и свет уходят от центра к краям.
+   */
+  fade?: number;
+
+  /**
+   * Левая и правая границы вертикальных линий клетки, если они уже области
+   * горизонтальных линий: так у тетради, где горизонтальные линии тянутся к
+   * краю листа дальше последней вертикальной. Не заданы — те же, что у
+   * горизонтальных линий.
+   */
+  columnMargins?: Pick<PaperMargins, 'left' | 'right'>;
 };
 
 const DEFAULT_MARGINS: PaperMargins = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -169,6 +192,9 @@ export const createSyntheticSheet = (
     seed = 1,
     driftFrom = Number.POSITIVE_INFINITY,
     drift = 0,
+    perspective = 0,
+    fade = 0,
+    columnMargins = margins,
   } = params;
   const tangent = Math.tan(angle * DEGREES_TO_RADIANS);
   const random = mulberry32(seed);
@@ -181,11 +207,14 @@ export const createSyntheticSheet = (
 
   for (let y = 0; y < height; y += 1) {
     const row = y * width;
+    const heightShare = (2 * y) / height - 1;
+    const rowDarkness = lineDarkness * (1 - fade * Math.abs(heightShare));
 
     for (let x = 0; x < width; x += 1) {
       const alongLines = y - x * tangent;
       const acrossLines = x + y * tangent;
       const shade = (x / width + y / height) / 2;
+      const perspectiveShift = perspective * heightShare * ((2 * x) / width - 1);
       let value = 1 - lighting * shade;
 
       if (kind !== 'blank') {
@@ -193,9 +222,9 @@ export const createSyntheticSheet = (
 
         if (isAcrossInside) {
           value -=
-            lineDarkness *
+            rowDarkness *
             computeCombInk(
-              alongLines,
+              alongLines - perspectiveShift,
               step,
               phase,
               sigma,
@@ -209,7 +238,14 @@ export const createSyntheticSheet = (
         if (kind === 'grid' && alongLines >= topEdge && alongLines <= bottomEdge) {
           value -=
             lineDarkness *
-            computeCombInk(acrossLines, step, phase, sigma, leftEdge, rightEdge);
+            computeCombInk(
+              acrossLines,
+              step,
+              phase,
+              sigma,
+              columnMargins.left,
+              width - columnMargins.right
+            );
         }
       }
 

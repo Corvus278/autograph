@@ -23,6 +23,7 @@ import {
   MARGIN_TOLERANCE,
   readUserRuling,
   RULED_PHOTO,
+  RULED_PHOTO_FOUND_MARGINS,
   TILTED_ANGLE,
   uploadUserPhoto,
 } from './helpers/user-sheet-photo';
@@ -137,16 +138,16 @@ describe('ручная правка разлиновки', () => {
     await uploadUserPhoto(user);
 
     expect(
-      Math.abs(readFieldNumber('Верхнее поле, px') - RULED_PHOTO.margins.top)
+      Math.abs(readFieldNumber('Верхнее поле, px') - RULED_PHOTO_FOUND_MARGINS.top)
     ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
     expect(
-      Math.abs(readFieldNumber('Правое поле, px') - RULED_PHOTO.margins.right)
+      Math.abs(readFieldNumber('Правое поле, px') - RULED_PHOTO_FOUND_MARGINS.right)
     ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
     expect(
-      Math.abs(readFieldNumber('Нижнее поле, px') - RULED_PHOTO.margins.bottom)
+      Math.abs(readFieldNumber('Нижнее поле, px') - RULED_PHOTO_FOUND_MARGINS.bottom)
     ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
     expect(
-      Math.abs(readFieldNumber('Левое поле, px') - RULED_PHOTO.margins.left)
+      Math.abs(readFieldNumber('Левое поле, px') - RULED_PHOTO_FOUND_MARGINS.left)
     ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
   });
 

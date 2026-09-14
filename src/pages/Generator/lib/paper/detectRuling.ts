@@ -5,6 +5,7 @@ import { measureProfilePeriod, type ProfilePeriod } from './profilePeriod';
 import {
   buildCombResponse,
   buildShearedProfile,
+  buildStripProfiles,
   closeProfileGaps,
   detrendProfile,
   findSignalRegion,
@@ -53,6 +54,48 @@ const GRID_STEP_TOLERANCE = 0.1;
  * область письма по бледной линии.
  */
 const RULING_REGION_LEVEL = 0.5;
+
+/**
+ * На сколько вертикальных полос режется кадр, когда ищутся верхний и нижний
+ * края разлиновки. На снимке телефоном крайние линии не прямые: перспектива и
+ * прогиб страницы разводят концы одной линии на полшага, и в профиле,
+ * усреднённом по всей ширине, её провал выходит почти втрое мельче, чем в
+ * узкой полосе. В восьмой доле ширины линия почти прямая. Глубина линии
+ * берётся медианой по полосам: полоса без линий — чистое поле или спираль
+ * тетради — медиану не сдвигает, пока линии есть в большинстве полос.
+ */
+const RULED_SPAN_STRIPS = 8;
+
+/**
+ * Доля от глубины линий, ниже которой линия у верхнего или нижнего края
+ * разлиновки считается отсутствующей. Над разлиновкой пресет-пака чистое поле
+ * не поднимается выше шести сотых от глубины линий, а крайние линии на снимке
+ * телефоном, мягче и бледнее средних, держатся от трети с лишним. Две десятых
+ * лежат в этом разрыве. Половинный порог, как у боковых границ, отрезал бы
+ * бледные верх и низ, и поле выросло бы до середины листа.
+ */
+const RULED_SPAN_LEVEL = 0.2;
+
+/**
+ * Зазор от найденной боковой границы разлиновки до края блока в долях шага.
+ * На листе без линии поля полем служит сама граница области с линиями — у
+ * тетради в клетку это крайняя линия сетки, — и блок, выложенный от неё,
+ * ставит первую букву на границу или за неё. Доля та же, что у зазора до линии
+ * поля (`MARGIN_LINE_GAP_SHARE` в `lib/calibrate`): граница играет её роль.
+ * Зазор кладётся в поле здесь, а не в раскладке: там уже не видно, найдено
+ * поле или взято фолбэком в полтора шага, которому зазор не нужен.
+ */
+const RULED_EDGE_GAP_SHARE = 0.2;
+
+/**
+ * Доля типичной глубины горизонтальных линий, начиная с которой вертикальная
+ * гребёнка с тем же шагом считается клеткой. Клетка печатается одной краской в
+ * обе стороны: на снимках пресет-пака и на фотографии тетради медиана глубины
+ * вертикальных линий — от трёх четвертей горизонтальных, а на линейке
+ * вертикальная гребёнка — шум в сотую долю: одиночная линия поля медиану по
+ * линиям не поднимает. Две десятых лежат в этом разрыве.
+ */
+const GRID_COLUMN_LEVEL = 0.2;
 
 /**
  * Доля шага, на которую линия может уйти от арифметической гребёнки и всё ещё
@@ -201,6 +244,42 @@ type RuledSpan = {
    * Цепочка кончается последней линией, попавшей в профиль.
    */
   isAtProfileEnd: boolean;
+
+  /**
+   * Типичная глубина линии — девятая децила по линиям профиля: с ней
+   * сравнивается гребёнка вертикальных линий клетки.
+   */
+  depth: number;
+};
+
+/**
+ * Линии гребёнки, опрошенные на профилях полос кадра.
+ */
+type CombDepths = {
+  /**
+   * Координаты линий, попавших в профиль, в пикселях фотографии.
+   */
+  positions: number[];
+
+  /**
+   * Глубина каждой линии — медиана по полосам.
+   */
+  depths: number[];
+};
+
+/**
+ * Крайние вертикальные линии клетки в пикселях фотографии.
+ */
+type GridColumns = {
+  /**
+   * Первая вертикальная линия; `null` — линии доходят до левого края профиля.
+   */
+  left: number | null;
+
+  /**
+   * Последняя вертикальная линия; `null` — линии доходят до правого края профиля.
+   */
+  right: number | null;
 };
 
 const computeQuantile = (values: number[], quantile: number): number => {
@@ -390,38 +469,40 @@ const findMarginLine = (
   return { x: origin + bestIndex + offset, side: isLeft ? 'left' : 'right' };
 };
 
+const detrendStrips = (strips: ShearedProfile[], step: number): Float64Array[] => {
+  return strips.map((strip) => {
+    return detrendProfile(strip.values, 2 * Math.round(step) + 1);
+  });
+};
+
+const toLineReach = (step: number): number => {
+  return Math.max(1, Math.round(step * LINE_SEARCH_SHARE));
+};
+
 /**
- * Границы области с линиями: профиль опрашивается в предсказанных положениях
- * линий, и берётся самая длинная непрерывная цепочка тех, что действительно
- * темнее фона. Опрос по предсказанию, а не поиск провалов подряд: шаг и фаза
- * уже известны, и по ним видно не только где линии есть, но и где их не стало.
+ * Опрашивает профили полос в предсказанных положениях линий гребёнки.
  *
  * Глубина линии берётся в окне вокруг предсказанного положения, а не в самом
  * бине: линии у края кадра уходят с гребёнки, и без окна цепочка рвалась бы
- * перед ними — край разлиновки выглядел бы найденным полем.
+ * перед ними. Окно меряется в каждой полосе отдельно, и глубиной линии служит
+ * медиана по полосам.
  *
- * @param profile — профиль средней яркости
- * @param step — шаг разлиновки в пикселях
+ * @param detrendedStrips — профили полос без фона с общими бинами
+ * @param origin — координата нулевого бина в пикселях фотографии
+ * @param step — шаг гребёнки в пикселях
  * @param phase — смещение линий по модулю шага
- * @returns координаты первой и последней линии и то, упёрлась ли цепочка в край
- * профиля; `null` — линий меньше трёх
+ * @returns координаты и глубины линий, попавших в профиль, по порядку
  */
-const findRuledSpan = (
-  profile: ShearedProfile,
+const measureCombDepths = (
+  detrendedStrips: Float64Array[],
+  origin: number,
   step: number,
   phase: number
-): RuledSpan | null => {
-  const { values, origin } = profile;
-  const size = values.length;
-  const detrended = detrendProfile(values, 2 * Math.round(step) + 1);
+): CombDepths => {
+  const size = detrendedStrips[0]?.length || 0;
   const firstLine = Math.ceil((origin - phase) / step);
   const lastLine = Math.floor((origin + size - 1 - phase) / step);
-
-  if (lastLine - firstLine < 2) {
-    return null;
-  }
-
-  const reach = Math.max(1, Math.round(step * LINE_SEARCH_SHARE));
+  const reach = toLineReach(step);
   const positions: number[] = [];
   const depths: number[] = [];
 
@@ -430,7 +511,161 @@ const findRuledSpan = (
     const bin = Math.round(coordinate) - origin;
 
     positions.push(coordinate);
-    depths.push(measureLineDepth(detrended, bin, reach));
+    depths.push(
+      computeMedian(
+        detrendedStrips.map((detrended) => {
+          return measureLineDepth(detrended, bin, reach);
+        })
+      )
+    );
+  }
+
+  return { positions, depths };
+};
+
+/**
+ * Положения линии в тех полосах, где она темнее порога: самый тёмный бин в
+ * окне вокруг предсказанного места, уточнённый по соседям.
+ *
+ * @param detrendedStrips — профили полос без фона с общими бинами
+ * @param origin — координата нулевого бина в пикселях фотографии
+ * @param coordinate — предсказанное положение линии
+ * @param reach — полуширина окна в бинах
+ * @param threshold — наименьшая глубина линии
+ * @returns положения линии в пикселях фотографии по полосам, где она нашлась
+ */
+const locateLineInStrips = (
+  detrendedStrips: Float64Array[],
+  origin: number,
+  coordinate: number,
+  reach: number,
+  threshold: number
+): number[] => {
+  const center = Math.round(coordinate) - origin;
+
+  return detrendedStrips.reduce<number[]>((located, detrended) => {
+    let peak = center;
+
+    for (let offset = -reach; offset <= reach; offset += 1) {
+      if (-(detrended[center + offset] || 0) > -(detrended[peak] || 0)) {
+        peak = center + offset;
+      }
+    }
+
+    const depth = -(detrended[peak] || 0);
+
+    if (depth > 0 && depth >= threshold) {
+      located.push(
+        origin +
+          peak +
+          refinePeakOffset(
+            -(detrended[peak - 1] || 0),
+            depth,
+            -(detrended[peak + 1] || 0)
+          )
+      );
+    }
+
+    return located;
+  }, []);
+};
+
+/**
+ * Ищет крайние вертикальные линии клетки.
+ *
+ * Шаг берётся у горизонтальных линий, а фаза подбирается перебором: клетка
+ * квадратная, а автокорреляцию столбцов на снимке тетради сбивают край листа и
+ * спираль — периода там не находится вовсе.
+ *
+ * Крайняя линия уточняется в каждой полосе, и берётся самое внутреннее её
+ * положение: на снимке телефоном вертикальная линия наклонена иначе, чем
+ * разлиновка в среднем, и граница по гребёнке у одного из краёв листа легла бы
+ * за линию.
+ *
+ * @param strips — профили столбцов по горизонтальным полосам кадра
+ * @param step — шаг горизонтальных линий в пикселях
+ * @param rowDepth — типичная глубина горизонтальной линии
+ * @returns крайние вертикальные линии; `null` — вертикальных линий клетки нет
+ */
+const findGridColumns = (
+  strips: ShearedProfile[],
+  step: number,
+  rowDepth: number
+): GridColumns | null => {
+  const origin = strips[0]?.origin || 0;
+  const detrendedStrips = detrendStrips(strips, step);
+  let best: CombDepths = { positions: [], depths: [] };
+  let bestScore = 0;
+
+  for (let phase = 0; phase < step; phase += 1) {
+    const comb = measureCombDepths(detrendedStrips, origin, step, phase);
+    const score = computeMedian(comb.depths);
+
+    if (score > bestScore) {
+      best = comb;
+      bestScore = score;
+    }
+  }
+
+  const { positions, depths } = best;
+  const region = findSignalRegion(Float64Array.from(depths), RULED_SPAN_LEVEL);
+
+  if (bestScore <= 0 || bestScore < rowDepth * GRID_COLUMN_LEVEL || !region) {
+    return null;
+  }
+
+  const reach = toLineReach(step);
+  const threshold = computeQuantile(depths, 0.9) * RULED_SPAN_LEVEL;
+  const firstLine = positions[region.start] || 0;
+  const lastLine = positions[region.end] || 0;
+  const firstLocated = locateLineInStrips(
+    detrendedStrips,
+    origin,
+    firstLine,
+    reach,
+    threshold
+  );
+  const lastLocated = locateLineInStrips(
+    detrendedStrips,
+    origin,
+    lastLine,
+    reach,
+    threshold
+  );
+
+  return {
+    left: region.start > 0 ? Math.max(firstLine - reach, ...firstLocated) : null,
+    right:
+      region.end < depths.length - 1 ? Math.min(lastLine + reach, ...lastLocated) : null,
+  };
+};
+
+/**
+ * Границы области с линиями: профиль опрашивается в предсказанных положениях
+ * линий, и берётся самая длинная непрерывная цепочка тех, что действительно
+ * темнее фона. Опрос по предсказанию, а не поиск провалов подряд: шаг и фаза
+ * уже известны, и по ним видно не только где линии есть, но и где их не стало.
+ *
+ * @param strips — профили средней яркости по полосам кадра с общими бинами
+ * @param step — шаг разлиновки в пикселях
+ * @param phase — смещение линий по модулю шага
+ * @returns координаты первой и последней линии, упёрлась ли цепочка в край
+ * профиля, и типичная глубина линии; `null` — линий меньше трёх
+ */
+const findRuledSpan = (
+  strips: ShearedProfile[],
+  step: number,
+  phase: number
+): RuledSpan | null => {
+  const { positions, depths } = measureCombDepths(
+    detrendStrips(strips, step),
+    strips[0]?.origin || 0,
+    step,
+    phase
+  );
+
+  if (depths.length < 3) {
+    return null;
   }
 
   const sorted = [...depths].sort((left, right) => {
@@ -442,7 +677,7 @@ const findRuledSpan = (
     return null;
   }
 
-  const threshold = reference * RULING_REGION_LEVEL;
+  const threshold = reference * RULED_SPAN_LEVEL;
   let bestStart = -1;
   let bestEnd = -1;
   let runStart = -1;
@@ -473,6 +708,7 @@ const findRuledSpan = (
     last: positions[bestEnd] || 0,
     isAtProfileStart: bestStart === 0,
     isAtProfileEnd: bestEnd === depths.length - 1,
+    depth: reference,
   };
 };
 
@@ -539,7 +775,18 @@ export const detectRuling = (
   const isGrid =
     columnPeriod.confidence >= confidenceThreshold &&
     isSameStep(period.step, columnPeriod.step);
-  const ruledSpan = findRuledSpan(rows, period.step, period.phase);
+  const ruledSpan = findRuledSpan(
+    buildStripProfiles(image, 'horizontal', skewAngle, guardAngle, RULED_SPAN_STRIPS),
+    period.step,
+    period.phase
+  );
+  const gridColumns =
+    ruledSpan &&
+    findGridColumns(
+      buildStripProfiles(image, 'vertical', skewAngle, guardAngle, RULED_SPAN_STRIPS),
+      period.step,
+      ruledSpan.depth
+    );
   const columnResponse = buildCombResponse(
     image,
     skewAngle,
@@ -558,18 +805,32 @@ export const detectRuling = (
    * области там означает только «линии идут дальше, чем видно»: поле, равное
    * полосе или первой видимой линии, выдало бы за поле обрезку кадра, и блок
    * встал бы вплотную к краю. Ноль отдаёт такую сторону фолбэку.
+   *
+   * Боковая граница — там, где кончаются горизонтальные линии, а у клетки,
+   * если вертикальные линии короче, — крайняя вертикальная: берётся более узкая
+   * из двух. Иначе строка уходит в полосу, где остались одни горизонтальные.
+   * Найденные боковые поля отступают от границы внутрь на зазор: граница без
+   * линии поля сама служит полем.
    */
+  const edgeGap = period.step * RULED_EDGE_GAP_SHARE;
+  const rowsLeft =
+    columnRegion && columnRegion.start > 0
+      ? columnResponse.origin + columnRegion.start
+      : 0;
+  const rowsRight =
+    columnRegion && columnRegion.end < columnResponse.values.length - 1
+      ? columnResponse.origin + columnRegion.end + 1
+      : image.width;
+  const leftBorder = Math.max(rowsLeft, (gridColumns && gridColumns.left) || 0);
+  const rightBorder = Math.min(
+    rowsRight,
+    (gridColumns && gridColumns.right) || image.width
+  );
   const margins: PaperMargins = {
     top: ruledSpan && !ruledSpan.isAtProfileStart ? ruledSpan.first : 0,
     bottom: ruledSpan && !ruledSpan.isAtProfileEnd ? image.height - ruledSpan.last : 0,
-    left:
-      columnRegion && columnRegion.start > 0
-        ? columnResponse.origin + columnRegion.start
-        : 0,
-    right:
-      columnRegion && columnRegion.end < columnResponse.values.length - 1
-        ? image.width - (columnResponse.origin + columnRegion.end + 1)
-        : 0,
+    left: leftBorder > 0 ? leftBorder + edgeGap : 0,
+    right: rightBorder < image.width ? image.width - rightBorder + edgeGap : 0,
   };
 
   return {

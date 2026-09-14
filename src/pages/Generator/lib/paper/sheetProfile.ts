@@ -187,6 +187,175 @@ export const buildShearedProfile = (
 };
 
 /**
+ * Раскладка полос по кадру. Бин точки `(x, y)` — `round(rowShifts[y] +
+ * columnShifts[x]) − guard`, отсчёт её полосы в общем массиве начинается с
+ * `rowStrips[y] + columnStrips[x]`: так внутренний цикл одинаков для обеих осей
+ * и не ветвится.
+ */
+type StripLayout = {
+  /**
+   * Полоса у краёв, отбрасываемая из профиля.
+   */
+  guard: number;
+
+  /**
+   * Число бинов в профиле одной полосы.
+   */
+  size: number;
+
+  /**
+   * Число полос.
+   */
+  count: number;
+
+  /**
+   * Вклад строки кадра в координату бина.
+   */
+  rowShifts: Float64Array;
+
+  /**
+   * Вклад столбца кадра в координату бина.
+   */
+  columnShifts: Float64Array;
+
+  /**
+   * Вклад строки кадра в начало полосы в общем массиве.
+   */
+  rowStrips: Float64Array;
+
+  /**
+   * Вклад столбца кадра в начало полосы в общем массиве.
+   */
+  columnStrips: Float64Array;
+};
+
+const buildStripLayout = (
+  image: SheetImageData,
+  axis: ProfileAxis,
+  tangent: number,
+  guardAngleDegrees: number,
+  stripCount: number
+): StripLayout => {
+  const { width, height } = image;
+
+  switch (axis) {
+    case 'horizontal': {
+      const guard = computeGuardBand(guardAngleDegrees, width);
+      const size = Math.max(0, height - 2 * guard);
+      const count = Math.min(width, Math.max(1, Math.floor(stripCount)));
+
+      return {
+        guard,
+        size,
+        count,
+        rowShifts: Float64Array.from({ length: height }, (_item, y) => {
+          return y;
+        }),
+        columnShifts: Float64Array.from({ length: width }, (_item, x) => {
+          return -x * tangent;
+        }),
+        rowStrips: new Float64Array(height),
+        columnStrips: Float64Array.from({ length: width }, (_item, x) => {
+          return Math.floor((x * count) / width) * size;
+        }),
+      };
+    }
+
+    case 'vertical': {
+      const guard = computeGuardBand(guardAngleDegrees, height);
+      const size = Math.max(0, width - 2 * guard);
+      const count = Math.min(height, Math.max(1, Math.floor(stripCount)));
+
+      return {
+        guard,
+        size,
+        count,
+        rowShifts: Float64Array.from({ length: height }, (_item, y) => {
+          return y * tangent;
+        }),
+        columnShifts: Float64Array.from({ length: width }, (_item, x) => {
+          return x;
+        }),
+        rowStrips: Float64Array.from({ length: height }, (_item, y) => {
+          return Math.floor((y * count) / height) * size;
+        }),
+        columnStrips: new Float64Array(width),
+      };
+    }
+
+    default: {
+      throw new Error(`Неизвестная ось профиля: ${axis}`);
+    }
+  }
+};
+
+/**
+ * Профили средней яркости вдоль наклонных линий, собранные отдельно по полосам
+ * кадра равной ширины, нарезанным поперёк линий: у горизонтальных линий полосы
+ * вертикальные, у вертикальных — горизонтальные.
+ *
+ * Отдельная функция, а не полоса как частный случай общего профиля: общий
+ * профиль строится и на каждом угле свипа наклона, и лишняя косвенность в его
+ * внутреннем цикле обошлась бы дороже, чем повтор нескольких строк.
+ *
+ * @param image — полутоновая выжимка
+ * @param axis — вдоль какой оси идут линии
+ * @param angleDegrees — наклон линий в градусах, положительный — вниз слева направо
+ * @param guardAngleDegrees — угол, по которому считается отбрасываемая полоса у краёв
+ * @param stripCount — число полос, не больше длины нарезаемой стороны кадра
+ * @returns профиль каждой полосы по порядку слева направо или сверху вниз; бины
+ * и `origin` у всех полос те же, что у общего профиля по той же оси и тому же
+ * углу; пустой список, если после отбрасывания полосы у краёв бинов не осталось
+ */
+export const buildStripProfiles = (
+  image: SheetImageData,
+  axis: ProfileAxis,
+  angleDegrees: number,
+  guardAngleDegrees: number,
+  stripCount: number
+): ShearedProfile[] => {
+  const { width, height, luminance } = image;
+  const { guard, size, count, rowShifts, columnShifts, rowStrips, columnStrips } =
+    buildStripLayout(image, axis, toTangent(angleDegrees), guardAngleDegrees, stripCount);
+
+  if (size < 2) {
+    return [];
+  }
+
+  const sums = new Float64Array(count * size);
+  const counts = new Float64Array(count * size);
+
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    const rowShift = rowShifts[y] || 0;
+    const rowStrip = rowStrips[y] || 0;
+
+    for (let x = 0; x < width; x += 1) {
+      const bin = Math.round(rowShift + (columnShifts[x] || 0)) - guard;
+
+      if (bin >= 0 && bin < size) {
+        const index = rowStrip + (columnStrips[x] || 0) + bin;
+
+        sums[index] = (sums[index] || 0) + (luminance[row + x] || 0);
+        counts[index] = (counts[index] || 0) + 1;
+      }
+    }
+  }
+
+  return Array.from({ length: count }, (_item, strip) => {
+    const from = strip * size;
+
+    return {
+      values: toMeans(
+        sums.subarray(from, from + size),
+        counts.subarray(from, from + size)
+      ),
+      origin: guard,
+    };
+  });
+};
+
+/**
  * Отклик поперёк горизонтальной разлиновки: для каждого столбца считается,
  * насколько его тёмные точки попадают в найденную гребёнку линий. Там, где
  * линии кончаются, отклик падает до нуля — по этому обрыву находятся левое и

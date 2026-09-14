@@ -1,3 +1,4 @@
+import { MARGIN_LINE_GAP_SHARE } from '@pages/Generator/lib/calibrate';
 import type { SheetRuling } from '@pages/Generator/lib/paper';
 import { useGeneratorStore } from '@pages/Generator/model/useGeneratorStore';
 import { screen, waitFor } from '@testing-library/react';
@@ -16,6 +17,17 @@ export const RULED_PHOTO = {
   phase: 8,
   margins: { top: 78.5, right: 36, bottom: 82, left: 60 },
   marginLineX: 96,
+};
+
+/**
+ * Поля, которые детектор находит на этом снимке: верх и низ — на крайних
+ * линиях, а бока отступают от границы области с линиями на зазор, как от линии
+ * поля, — граница сама служит полем.
+ */
+export const RULED_PHOTO_FOUND_MARGINS = {
+  ...RULED_PHOTO.margins,
+  right: RULED_PHOTO.margins.right + RULED_PHOTO.step * MARGIN_LINE_GAP_SHARE,
+  left: RULED_PHOTO.margins.left + RULED_PHOTO.step * MARGIN_LINE_GAP_SHARE,
 };
 
 /**

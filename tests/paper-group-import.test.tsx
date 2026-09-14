@@ -18,6 +18,7 @@ import {
   MARGIN_TOLERANCE,
   readUserRuling,
   RULED_PHOTO,
+  RULED_PHOTO_FOUND_MARGINS,
   STEP_TOLERANCE,
   TILTED_ANGLE,
   uploadUserPhoto,
@@ -81,7 +82,7 @@ describe('импорт фотографии листа', () => {
       STEP_TOLERANCE
     );
     expect(
-      ruling && measureMarginMiss(ruling.margins, RULED_PHOTO.margins)
+      ruling && measureMarginMiss(ruling.margins, RULED_PHOTO_FOUND_MARGINS)
     ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
     expect(ruling?.marginLineSide).toBe('left');
     expect(

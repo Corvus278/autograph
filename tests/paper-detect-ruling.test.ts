@@ -1,3 +1,6 @@
+import { deriveGeometry, MARGIN_LINE_GAP_SHARE } from '@pages/Generator/lib/calibrate';
+import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
+import { buildSheetRuling } from '@pages/Generator/lib/paper';
 import { detectRuling } from '@pages/Generator/lib/paper/detectRuling';
 import { describe, expect, it } from 'vitest';
 
@@ -58,6 +61,14 @@ const GRID_SHEET = {
   margins: { top: 56, right: 56, bottom: 56, left: 56 },
 };
 
+/**
+ * Зазор между боковой границей области с линиями и полем: граница без линии
+ * поля сама служит полем, и блок отступает от неё, как от линии поля.
+ */
+const LINED_EDGE_GAP = LINED_SHEET.step * MARGIN_LINE_GAP_SHARE;
+
+const GRID_EDGE_GAP = GRID_SHEET.step * MARGIN_LINE_GAP_SHARE;
+
 describe('detectRuling на листе в линейку', () => {
   it('находит шаг, фазу и вид разлиновки', () => {
     const detection = detectRuling(createSyntheticSheet(LINED_SHEET));
@@ -82,12 +93,12 @@ describe('detectRuling на листе в линейку', () => {
     expect(
       Math.abs(margins.bottom - (LINED_SHEET.height - LINED_LAST_LINE))
     ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
-    expect(Math.abs(margins.left - LINED_SHEET.margins.left)).toBeLessThanOrEqual(
-      MARGIN_TOLERANCE
-    );
-    expect(Math.abs(margins.right - LINED_SHEET.margins.right)).toBeLessThanOrEqual(
-      MARGIN_TOLERANCE
-    );
+    expect(
+      Math.abs(margins.left - (LINED_SHEET.margins.left + LINED_EDGE_GAP))
+    ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+    expect(
+      Math.abs(margins.right - (LINED_SHEET.margins.right + LINED_EDGE_GAP))
+    ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
   });
 
   it('находит вертикальную линию поля слева', () => {
@@ -169,12 +180,12 @@ describe('detectRuling на листе в клетку', () => {
     expect(Math.abs(margins.bottom - GRID_SHEET.margins.bottom)).toBeLessThanOrEqual(
       MARGIN_TOLERANCE
     );
-    expect(Math.abs(margins.left - GRID_SHEET.margins.left)).toBeLessThanOrEqual(
-      MARGIN_TOLERANCE
-    );
-    expect(Math.abs(margins.right - GRID_SHEET.margins.right)).toBeLessThanOrEqual(
-      MARGIN_TOLERANCE
-    );
+    expect(
+      Math.abs(margins.left - (GRID_SHEET.margins.left + GRID_EDGE_GAP))
+    ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+    expect(
+      Math.abs(margins.right - (GRID_SHEET.margins.right + GRID_EDGE_GAP))
+    ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
   });
 
   it('не принимает линию клетки за линию поля', () => {
@@ -240,9 +251,66 @@ describe('detectRuling на листе в клетку', () => {
       })
     );
 
-    expect(margins.left).toBeLessThanOrEqual(GRID_SHEET.margins.left + MARGIN_TOLERANCE);
+    expect(margins.left).toBeLessThanOrEqual(
+      GRID_SHEET.margins.left + GRID_EDGE_GAP + MARGIN_TOLERANCE
+    );
     expect(margins.right).toBeLessThanOrEqual(
-      GRID_SHEET.margins.right + MARGIN_TOLERANCE
+      GRID_SHEET.margins.right + GRID_EDGE_GAP + MARGIN_TOLERANCE
+    );
+  });
+
+  /**
+   * Так устроена тетрадь на спирали: слева и справа от сетки чистая полоса,
+   * красной линии нет, и поле задаёт сама граница сетки. Блок, выложенный от
+   * самой границы, ставит первую букву на неё или за неё.
+   */
+  it('выкладывает блок внутри сетки без линии поля с зазором, как от линии поля', () => {
+    const { width, height, margins, step } = GRID_SHEET;
+    const detection = detectRuling(createSyntheticSheet({ ...GRID_SHEET, noise: 0.05 }));
+    const ruling = buildSheetRuling({ ...detection, skewAngle: 0 });
+    const { leftPadding, blockWidth } = deriveGeometry(
+      { ruling, kind: 'grid', width, height },
+      FALLBACK_FONT_METRICS
+    );
+    const gap = step * MARGIN_LINE_GAP_SHARE;
+
+    expect(detection.marginLineX).toBeNull();
+    expect(Math.abs(leftPadding - (margins.left + gap))).toBeLessThanOrEqual(
+      MARGIN_TOLERANCE
+    );
+    expect(
+      Math.abs(leftPadding + blockWidth - (width - margins.right - gap))
+    ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+  });
+
+  /**
+   * Так устроена тетрадь пользователя: горизонтальные линии справа тянутся
+   * почти до края листа, а вертикальные кончаются на несколько клеток раньше.
+   * Граница сетки — последняя вертикальная линия: блок, выложенный по
+   * горизонтальным, уводит строку в полосу, где остались одни горизонтальные.
+   */
+  it('берёт боковую границу клетки по вертикальным линиям, если они короче горизонтальных', () => {
+    const { width, height, margins, step } = GRID_SHEET;
+    const lastColumnX = 308;
+    const detection = detectRuling(
+      createSyntheticSheet({
+        ...GRID_SHEET,
+        columnMargins: { left: margins.left, right: width - lastColumnX },
+        noise: 0.05,
+      })
+    );
+    const ruling = buildSheetRuling({ ...detection, skewAngle: 0 });
+    const { leftPadding, blockWidth } = deriveGeometry(
+      { ruling, kind: 'grid', width, height },
+      FALLBACK_FONT_METRICS
+    );
+    const gap = step * MARGIN_LINE_GAP_SHARE;
+
+    expect(Math.abs(leftPadding - (margins.left + gap))).toBeLessThanOrEqual(
+      MARGIN_TOLERANCE
+    );
+    expect(Math.abs(leftPadding + blockWidth - (lastColumnX - gap))).toBeLessThanOrEqual(
+      MARGIN_TOLERANCE
     );
   });
 });
@@ -309,6 +377,19 @@ const EDGE_TO_EDGE_SHEET = {
 
 const NO_MARGINS = { top: 0, right: 0, bottom: 0, left: 0 };
 
+/**
+ * Клетка до верхнего и нижнего края кадра, как на снимке тетради телефоном:
+ * крайние линии искажены, средние чёткие.
+ */
+const PHONE_GRID_SHEET = {
+  width: 420,
+  height: 560,
+  step: 28,
+  phase: 10,
+  kind: 'grid' as const,
+  noise: 0.05,
+};
+
 describe('detectRuling на листе, разлинованном до края кадра', () => {
   it('на линейке до края возвращает нули и сохраняет линию поля', () => {
     const detection = detectRuling(
@@ -363,6 +444,33 @@ describe('detectRuling на листе, разлинованном до края
     );
 
     expect(Math.abs(margins.top - 116)).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+    expect(margins.bottom).toBe(0);
+  });
+
+  /**
+   * На снимке телефоном крайние линии повёрнуты в разные стороны, и в
+   * профиле, усреднённом по всей ширине, их провал размазан на полшага: там
+   * цепочка линий рвалась посреди листа, и верх с низом выглядели полями.
+   */
+  it('доводит клетку до верха и низа кадра, даже если крайние линии повёрнуты перспективой', () => {
+    const { margins } = detectRuling(
+      createSyntheticSheet({ ...PHONE_GRID_SHEET, perspective: 12 })
+    );
+
+    expect(margins.top).toBe(0);
+    expect(margins.bottom).toBe(0);
+  });
+
+  /**
+   * Крайние линии на снимке телефоном теряют до двух третей глубины против
+   * средних — и всё равно остаются линиями, а не чистым полем.
+   */
+  it('доводит клетку до верха и низа кадра, даже если крайние линии бледнее', () => {
+    const { margins } = detectRuling(
+      createSyntheticSheet({ ...PHONE_GRID_SHEET, fade: 0.65 })
+    );
+
+    expect(margins.top).toBe(0);
     expect(margins.bottom).toBe(0);
   });
 
