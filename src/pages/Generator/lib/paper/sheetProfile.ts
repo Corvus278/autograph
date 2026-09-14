@@ -409,6 +409,186 @@ export const buildCombResponse = (
   return { values: toMeans(sums, counts), origin: guard };
 };
 
+/**
+ * Число отсчётов в таблицах косинуса и синуса фазы гребёнки на один шаг.
+ * Ошибка фазы при такой таблице — сотые доли радиана, и отклик от неё почти не
+ * меняется, а выборка из таблицы дешевле двух тригонометрических вызовов на
+ * каждую точку кадра.
+ */
+const PHASE_TABLE_SIZE = 1024;
+
+const COS_TABLE = Float64Array.from({ length: PHASE_TABLE_SIZE }, (_item, index) => {
+  return Math.cos((2 * Math.PI * index) / PHASE_TABLE_SIZE);
+});
+
+const SIN_TABLE = Float64Array.from({ length: PHASE_TABLE_SIZE }, (_item, index) => {
+  return Math.sin((2 * Math.PI * index) / PHASE_TABLE_SIZE);
+});
+
+/**
+ * Раскладка бинов одной полосы в общих массивах сумм.
+ */
+type BandLayout = {
+  /**
+   * Координата нулевого бина поперёк линий.
+   */
+  origin: number;
+
+  /**
+   * Число бинов полосы.
+   */
+  size: number;
+
+  /**
+   * Начало бинов полосы в общих массивах.
+   */
+  offset: number;
+};
+
+/**
+ * Бины полосы — только те координаты поперёк линий, на которых полоса целиком
+ * лежит в кадре: у частично срезанного бина суммы `cos` и `sin` набраны не по
+ * всей высоте полосы, и его отклик несравним с соседями. Срез зависит от
+ * высоты полосы и её места вдоль линий, а не от высоты кадра.
+ */
+const buildBandLayouts = (
+  width: number,
+  tangent: number,
+  alongEdges: number[]
+): BandLayout[] => {
+  const stretch = (width - 1) * (1 + tangent * tangent);
+  let offset = 0;
+
+  return alongEdges.slice(1).map((to, band) => {
+    const from = alongEdges[band] || 0;
+    const origin = Math.ceil(Math.max(from * tangent, to * tangent));
+    const end = Math.floor(stretch + Math.min(from * tangent, to * tangent));
+    const size = Math.max(0, end - origin + 1);
+    const layout = { origin, size, offset };
+
+    offset += size;
+
+    return layout;
+  });
+};
+
+/**
+ * Отклик горизонтальной гребёнки по полосам, нарезанным вдоль линий: для
+ * каждой полосы и каждого столбца поперёк линий — насколько яркость полосы
+ * повторяет гребёнку с шагом `step`.
+ *
+ * Полосы режутся по координате вдоль линий `u = y − x·tgθ`, а не по строкам
+ * кадра: полоса по строкам на наклонном листе ловит то одну, то две линии, и
+ * её отклик падает вдвое там, где линии никуда не делись.
+ *
+ * Отклик — модуль квадратур `√(C² + S²)`, а не одна косинусная сумма: изогнутая
+ * линия уходит с прямой гребёнки, и косинус с её фазой падает ниже порога
+ * области раньше, чем линия кончается. Модуль от сдвига фазы не зависит.
+ *
+ * Из яркости вычитается среднее бина по полосе, а не по кадру: на отрезке в
+ * несколько периодов `cos` и `sin` постоянный фон не гасят, и чистое поле,
+ * спираль или стол за концами линий дали бы отклик.
+ *
+ * @param image — полутоновая выжимка
+ * @param angleDegrees — наклон разлиновки в градусах
+ * @param step — шаг разлиновки в пикселях
+ * @param phase — смещение линий по модулю шага
+ * @param alongEdges — границы полос по координате вдоль линий, по возрастанию:
+ *   полоса `i` занимает `[alongEdges[i], alongEdges[i + 1])`
+ * @returns профиль отклика каждой полосы, пронумерованный поперёк линий;
+ *   `origin` — координата `x + y·tgθ` нулевого бина, у каждой полосы своя
+ */
+export const buildBandCombResponses = (
+  image: SheetImageData,
+  angleDegrees: number,
+  step: number,
+  phase: number,
+  alongEdges: number[]
+): ShearedProfile[] => {
+  const { width, height, luminance } = image;
+  const bandCount = alongEdges.length - 1;
+
+  if (bandCount < 1 || step <= 0) {
+    return [];
+  }
+
+  const tangent = toTangent(angleDegrees);
+  const layouts = buildBandLayouts(width, tangent, alongEdges);
+  const total = layouts.reduce((sum, { size }) => {
+    return sum + size;
+  }, 0);
+  const sums = new Float64Array(total);
+  const cosSums = new Float64Array(total);
+  const sinSums = new Float64Array(total);
+  const cosWeights = new Float64Array(total);
+  const sinWeights = new Float64Array(total);
+  const counts = new Float64Array(total);
+  const alongFrom = alongEdges[0] || 0;
+  const alongTo = alongEdges[bandCount] || 0;
+  let band = 0;
+
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    const across = y * tangent;
+
+    for (let x = 0; x < width; x += 1) {
+      const along = y - x * tangent;
+
+      if (along < alongFrom || along >= alongTo) {
+        continue;
+      }
+
+      while (band > 0 && along < (alongEdges[band] || 0)) {
+        band -= 1;
+      }
+
+      while (band < bandCount - 1 && along >= (alongEdges[band + 1] || 0)) {
+        band += 1;
+      }
+
+      const layout = layouts[band];
+      const bin = layout ? Math.round(x + across) - layout.origin : -1;
+
+      if (!layout || bin < 0 || bin >= layout.size) {
+        continue;
+      }
+
+      const cycles = (along - phase) / step;
+      const tableIndex = Math.floor((cycles - Math.floor(cycles)) * PHASE_TABLE_SIZE);
+      const cosine = COS_TABLE[tableIndex] || 0;
+      const sine = SIN_TABLE[tableIndex] || 0;
+      const value = luminance[row + x] || 0;
+      const index = layout.offset + bin;
+
+      sums[index] = (sums[index] || 0) + value;
+      cosSums[index] = (cosSums[index] || 0) + value * cosine;
+      sinSums[index] = (sinSums[index] || 0) + value * sine;
+      cosWeights[index] = (cosWeights[index] || 0) + cosine;
+      sinWeights[index] = (sinWeights[index] || 0) + sine;
+      counts[index] = (counts[index] || 0) + 1;
+    }
+  }
+
+  return layouts.map(({ origin, size, offset }) => {
+    const values = new Float64Array(size);
+
+    for (let bin = 0; bin < size; bin += 1) {
+      const index = offset + bin;
+      const count = counts[index] || 0;
+
+      if (count > 0) {
+        const mean = (sums[index] || 0) / count;
+        const cosPart = (cosSums[index] || 0) - mean * (cosWeights[index] || 0);
+        const sinPart = (sinSums[index] || 0) - mean * (sinWeights[index] || 0);
+
+        values[bin] = Math.hypot(cosPart, sinPart) / count;
+      }
+    }
+
+    return { values, origin };
+  });
+};
+
 const computeMean = (values: Float32Array): number => {
   let sum = 0;
 

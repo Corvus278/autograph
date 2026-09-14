@@ -3,6 +3,7 @@ import { ANALYSIS_IMAGE_SIZE } from './downsampleSheetImage';
 import type { PaperMargins, RulingDetection, SheetImageData } from './paper.types';
 import { measureProfilePeriod, type ProfilePeriod } from './profilePeriod';
 import {
+  buildBandCombResponses,
   buildCombResponse,
   buildShearedProfile,
   buildStripProfiles,
@@ -11,6 +12,7 @@ import {
   findSignalRegion,
   refinePeakOffset,
   type ShearedProfile,
+  toTangent,
 } from './sheetProfile';
 
 /**
@@ -105,6 +107,46 @@ const GRID_COLUMN_LEVEL = 0.2;
  * половины шага, где окно доставало бы соседнюю линию.
  */
 const LINE_SEARCH_SHARE = 1 / 6;
+
+/**
+ * Высота горизонтальной полосы, по которой прослеживается вертикальная
+ * граница, в шагах разлиновки. Полоса отдаёт среднее положение границы по
+ * своей высоте: у параболического изгиба с крайней точкой у края области
+ * крайняя из восьми полос на кадр набирает лишь 0,77 амплитуды, а в полосе в
+ * полтора шага недобор ничтожен.
+ */
+const TRACE_STRIP_STEPS = 1.5;
+
+/**
+ * Наименьшее число полос трассировки на кадр: при шаге, крупном для кадра,
+ * полос в полтора шага вышло бы меньше, чем нужно, чтобы увидеть изгиб.
+ */
+const MIN_TRACE_STRIPS = 8;
+
+/**
+ * Полуширина окна, в котором ищется старт трассировки, в долях шага. Окно
+ * стоит вокруг положения по профилю во всю высоту, а оно у изогнутой линии
+ * отстоит от самой внутренней точки на две трети амплитуды: при изгибе в три
+ * десятых шага это пятая часть шага — шире окна продолжения трассы.
+ */
+const TRACE_START_SHARE = 1 / 3;
+
+/**
+ * Доля глубины стартового узла, с которой принимается узел в следующей
+ * полосе. На клетке в окно трассы попадают обычные вертикали, а детектор
+ * гарантирует лишь, что линия поля в полтора раза глубже девятой децили
+ * вертикалей (`MARGIN_LINE_DEPTH_RATIO`), и десятая часть вертикалей глубже
+ * этой децили. Порог в две трети совпал бы с порогом детектора без запаса,
+ * тогда как узкая полоса шумнее профиля во всю высоту.
+ */
+const TRACE_DEPTH_SHARE = 0.8;
+
+/**
+ * Высота полосы вдоль линий, по которой ищутся концы горизонтальных линий, в
+ * шагах. Целое число шагов: на целом числе периодов `cos` и `sin` фазы
+ * гребёнки гасят постоянный фон.
+ */
+const LINE_END_BAND_STEPS = 2;
 
 /**
  * Доля ширины кадра, в которой ищется вертикальная линия поля. Поле печатается
@@ -525,50 +567,410 @@ const measureCombDepths = (
 };
 
 /**
- * Положения линии в тех полосах, где она темнее порога: самый тёмный бин в
- * окне вокруг предсказанного места, уточнённый по соседям.
- *
- * @param detrendedStrips — профили полос без фона с общими бинами
- * @param origin — координата нулевого бина в пикселях фотографии
- * @param coordinate — предсказанное положение линии
- * @param reach — полуширина окна в бинах
- * @param threshold — наименьшая глубина линии
- * @returns положения линии в пикселях фотографии по полосам, где она нашлась
+ * Глубина провала в бине профиля полосы: насколько бин темнее скользящей
+ * медианы окном в шаг. Медиана, а не среднее: узкий провал линии её не
+ * сдвигает, а горизонталь, пересекающая полосу, меняется по столбцам
+ * медленнее окна и уходит в фон.
  */
-const locateLineInStrips = (
-  detrendedStrips: Float64Array[],
-  origin: number,
-  coordinate: number,
+const measureStripDepth = (values: Float64Array, bin: number, window: number): number => {
+  const half = Math.max(1, Math.floor(window / 2));
+  const to = Math.min(values.length, bin + half + 1);
+  const slice: number[] = [];
+
+  for (let inner = Math.max(0, bin - half); inner < to; inner += 1) {
+    slice.push(values[inner] || 0);
+  }
+
+  return computeMedian(slice) - (values[bin] || 0);
+};
+
+/**
+ * Положение вертикальной линии в одной полосе.
+ */
+type TraceNode = {
+  /**
+   * Положение линии в пикселях фотографии.
+   */
+  position: number;
+
+  /**
+   * Глубина провала линии.
+   */
+  depth: number;
+};
+
+/**
+ * Самый глубокий провал в окне вокруг предсказанного положения линии,
+ * уточнённый по соседним бинам.
+ *
+ * @param strip — профиль столбцов одной полосы
+ * @param center — предсказанное положение линии в пикселях фотографии
+ * @param reach — полуширина окна в пикселях
+ * @param window — ширина окна фона в бинах
+ * @returns положение и глубина провала; `null` — в окне нет ничего темнее фона
+ */
+const findStripDip = (
+  strip: ShearedProfile,
+  center: number,
   reach: number,
-  threshold: number
+  window: number
+): TraceNode | null => {
+  const { values, origin } = strip;
+  const from = Math.max(1, Math.round(center - reach) - origin);
+  const to = Math.min(values.length - 2, Math.round(center + reach) - origin);
+  let peak = -1;
+  let depth = 0;
+
+  for (let bin = from; bin <= to; bin += 1) {
+    const binDepth = measureStripDepth(values, bin, window);
+
+    if (binDepth > depth) {
+      peak = bin;
+      depth = binDepth;
+    }
+  }
+
+  if (peak < 0) {
+    return null;
+  }
+
+  const offset = refinePeakOffset(
+    measureStripDepth(values, peak - 1, window),
+    depth,
+    measureStripDepth(values, peak + 1, window)
+  );
+
+  return { position: origin + peak + offset, depth };
+};
+
+/**
+ * Прослеживает вертикальную линию по горизонтальным полосам кадра. Старт — в
+ * полосе, где провал в окне `TRACE_START_SHARE` вокруг `center` глубже всего;
+ * дальше вверх и вниз окно `LINE_SEARCH_SHARE` идёт за положением в последней
+ * полосе, где линия нашлась. Полоса с провалом мельче `TRACE_DEPTH_SHARE`
+ * стартового не голосует, и трасса идёт дальше от последнего узла: у спирали
+ * и края листа линии может не быть, а на клетке в окно попадают обычные
+ * вертикали.
+ *
+ * @param strips — профили столбцов по полосам, сверху вниз
+ * @param center — положение линии по профилю во всю высоту
+ * @param step — шаг разлиновки в пикселях
+ * @param minDepth — наименьшая глубина стартового узла
+ * @returns положения линии в полосах, где она нашлась, сверху вниз; пустой
+ *   список — стартового узла нет
+ */
+const traceVerticalLine = (
+  strips: ShearedProfile[],
+  center: number,
+  step: number,
+  minDepth: number
 ): number[] => {
-  const center = Math.round(coordinate) - origin;
+  const window = Math.max(3, Math.round(step));
+  const starts = strips.map((strip) => {
+    return findStripDip(strip, center, step * TRACE_START_SHARE, window);
+  });
+  const startIndex = starts.reduce((best, node, index) => {
+    return node && node.depth > (starts[best]?.depth || 0) ? index : best;
+  }, 0);
+  const start = starts[startIndex];
 
-  return detrendedStrips.reduce<number[]>((located, detrended) => {
-    let peak = center;
+  if (!start || start.depth < minDepth) {
+    return [];
+  }
 
-    for (let offset = -reach; offset <= reach; offset += 1) {
-      if (-(detrended[center + offset] || 0) > -(detrended[peak] || 0)) {
-        peak = center + offset;
+  const reach = step * LINE_SEARCH_SHARE;
+  const threshold = start.depth * TRACE_DEPTH_SHARE;
+  const positions = strips.map((): number | null => {
+    return null;
+  });
+
+  positions[startIndex] = start.position;
+
+  for (const direction of [-1, 1]) {
+    let previous = start.position;
+
+    for (
+      let index = startIndex + direction;
+      index >= 0 && index < strips.length;
+      index += direction
+    ) {
+      const strip = strips[index];
+      const node = strip ? findStripDip(strip, previous, reach, window) : null;
+
+      if (node && node.depth >= threshold) {
+        positions[index] = node.position;
+        previous = node.position;
       }
     }
+  }
 
-    const depth = -(detrended[peak] || 0);
-
-    if (depth > 0 && depth >= threshold) {
-      located.push(
-        origin +
-          peak +
-          refinePeakOffset(
-            -(detrended[peak - 1] || 0),
-            depth,
-            -(detrended[peak + 1] || 0)
-          )
-      );
+  return positions.reduce<number[]>((found, position) => {
+    if (position !== null) {
+      found.push(position);
     }
 
-    return located;
+    return found;
   }, []);
+};
+
+/**
+ * Самое внутреннее положение границы по полосам. Перед выбором положение в
+ * каждой полосе заменяется медианой по ней и двум соседним: узкая полоса
+ * шумнее профиля во всю высоту, и одиночный выброс внутрь сузил бы блок на
+ * всей странице. У крайней полосы недостающим соседом служит она сама.
+ *
+ * @param positions — положения границы по порядку полос
+ * @param isLeftBorder — граница слева от области письма: самое внутреннее
+ *   положение — наибольшее, иначе наименьшее
+ * @returns самое внутреннее положение; `null` — ни одна полоса не голосовала
+ */
+const pickInnermost = (positions: number[], isLeftBorder: boolean): number | null => {
+  if (positions.length === 0) {
+    return null;
+  }
+
+  const last = positions.length - 1;
+  const smoothed = positions.map((position, index) => {
+    return computeMedian([
+      positions[Math.max(0, index - 1)] || 0,
+      position,
+      positions[Math.min(last, index + 1)] || 0,
+    ]);
+  });
+
+  return isLeftBorder ? Math.max(...smoothed) : Math.min(...smoothed);
+};
+
+/**
+ * Полосы трассировки, по высоте пересекающие область с линиями у столбца
+ * `lineX`: строк над разлиновкой и под ней нет, и граница, изогнутая только
+ * там, не должна сужать блок.
+ *
+ * @param strips — профили столбцов по полосам равной высоты, сверху вниз
+ * @param height — высота кадра
+ * @param span — область с линиями; `null` — не найдена, берутся все полосы
+ * @param tangent — тангенс наклона разлиновки
+ * @param lineX — столбец, у которого стоит прослеживаемая линия
+ * @returns полосы, пересекающие область, сверху вниз
+ */
+const selectSpanStrips = (
+  strips: ShearedProfile[],
+  height: number,
+  span: RuledSpan | null,
+  tangent: number,
+  lineX: number
+): ShearedProfile[] => {
+  if (!span || strips.length === 0) {
+    return strips;
+  }
+
+  const stripHeight = height / strips.length;
+  const from = Math.max(0, Math.floor((span.first + lineX * tangent) / stripHeight));
+  const to = Math.min(
+    strips.length,
+    Math.ceil((span.last + lineX * tangent) / stripHeight)
+  );
+
+  return strips.slice(from, Math.max(from + 1, to));
+};
+
+/**
+ * Уточняет линию поля трассировкой по полосам: берётся её самое внутреннее
+ * положение, но не наружу от положения по профилю во всю высоту. Профиль во
+ * всю высоту отдаёт среднее положение изогнутой линии, и блок, выложенный от
+ * него, заходил бы за линию там, где она изогнута внутрь.
+ *
+ * @param marginLine — линия поля по профилю во всю высоту
+ * @param strips — профили столбцов по полосам внутри области с линиями
+ * @param step — шаг разлиновки в пикселях
+ * @returns линия поля в самом внутреннем положении
+ */
+const refineMarginLine = (
+  marginLine: MarginLine,
+  strips: ShearedProfile[],
+  step: number
+): MarginLine => {
+  const { x, side } = marginLine;
+  const innermost = pickInnermost(
+    traceVerticalLine(strips, x, step, MARGIN_LINE_MIN_DEPTH),
+    side === 'left'
+  );
+
+  if (innermost === null) {
+    return marginLine;
+  }
+
+  switch (side) {
+    case 'left': {
+      return { x: Math.max(x, innermost), side };
+    }
+
+    case 'right': {
+      return { x: Math.min(x, innermost), side };
+    }
+
+    default: {
+      throw new Error(`Неизвестная сторона линии поля: ${side}`);
+    }
+  }
+};
+
+/**
+ * Боковые границы области с горизонтальными линиями в пикселях фотографии.
+ */
+type RowBorders = {
+  /**
+   * Левая граница; 0 — линии доходят до левого края.
+   */
+  left: number;
+
+  /**
+   * Правая граница; ширина кадра — линии доходят до правого края.
+   */
+  right: number;
+};
+
+const computePooledQuantile = (profiles: Float64Array[], quantile: number): number => {
+  const total = profiles.reduce((sum, values) => {
+    return sum + values.length;
+  }, 0);
+  const pooled = new Float64Array(total);
+  let offset = 0;
+
+  for (const values of profiles) {
+    pooled.set(values, offset);
+    offset += values.length;
+  }
+
+  pooled.sort();
+
+  return pooled[Math.min(total - 1, Math.floor(total * quantile))] || 0;
+};
+
+/**
+ * Есть ли на отрезке `[from, to)` ряда участок не короче `length` отсчётов
+ * подряд с уровнем не ниже `threshold`.
+ */
+const hasSignalRun = (
+  values: Float64Array,
+  from: number,
+  to: number,
+  threshold: number,
+  length: number
+): boolean => {
+  let run = 0;
+
+  for (let index = from; index < to; index += 1) {
+    run = (values[index] || 0) >= threshold ? run + 1 : 0;
+
+    if (run >= length) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+/**
+ * Уточняет боковые границы области с линиями по полосам вдоль линий высотой
+ * `LINE_END_BAND_STEPS` (`buildBandCombResponses`): граница берётся в каждой
+ * полосе, итог — самая внутренняя, но не наружу от границы по отклику во всю
+ * высоту. Отклик во всю высоту усредняет концы линий, и у линий, кончающихся на
+ * разном отступе, граница выходит между крайними концами.
+ *
+ * Обрыв в полосе голосует, только если за ним нет участка длиной в шаг с
+ * откликом не ниже половины девятой децили, общей для всех полос: бледное
+ * пятно на нескольких соседних полосах рвёт отклик каждой из них, и медиана по
+ * трём полосам его не снимает, но за пятном линии продолжаются. Участок короче
+ * шага — пятно спирали или ступень яркости у края стола — голосу не мешает.
+ *
+ * Полосы берутся только внутри области с линиями по высоте: над разлиновкой и
+ * под ней отклика нет, и там обрыв вышел бы на всю ширину. Сторона, где отклик
+ * во всю высоту дошёл до края профиля, тоже уточняется: защитная полоса
+ * наклона во всю высоту кадра шире, чем у полосы, и прячет концы у края кадра.
+ *
+ * @param image — полутоновая выжимка
+ * @param skewAngle — наклон разлиновки в градусах
+ * @param period — шаг и фаза горизонтальных линий
+ * @param span — область с линиями по высоте
+ * @param borders — границы по отклику во всю высоту
+ * @returns уточнённые границы
+ */
+const refineRowBorders = (
+  image: SheetImageData,
+  skewAngle: number,
+  period: ProfilePeriod,
+  span: RuledSpan | null,
+  borders: RowBorders
+): RowBorders => {
+  const { step, phase } = period;
+
+  if (!span) {
+    return borders;
+  }
+
+  const firstLine = Math.round((span.first - phase) / step);
+  const lastLine = Math.round((span.last - phase) / step);
+  const bandCount = Math.floor((lastLine - firstLine + 1) / LINE_END_BAND_STEPS);
+
+  if (bandCount < 1) {
+    return borders;
+  }
+
+  /**
+   * Границы полос — посередине между линиями: изгиб до трёх десятых шага их не
+   * пересекает. Остаток линий, не набравший полосы, уходит в последнюю.
+   */
+  const alongEdges = Array.from({ length: bandCount + 1 }, (_item, band) => {
+    const line =
+      band === bandCount ? lastLine + 1 : firstLine + band * LINE_END_BAND_STEPS;
+
+    return phase + (line - 0.5) * step;
+  });
+  const window = Math.max(1, Math.round(step));
+  const bands = buildBandCombResponses(image, skewAngle, step, phase, alongEdges).map(
+    ({ values, origin }) => {
+      return { values: closeProfileGaps(values, window), origin };
+    }
+  );
+  const threshold =
+    RULING_REGION_LEVEL *
+    computePooledQuantile(
+      bands.map(({ values }) => {
+        return values;
+      }),
+      0.9
+    );
+  const leftVotes: number[] = [];
+  const rightVotes: number[] = [];
+
+  for (const { values, origin } of bands) {
+    const region = findSignalRegion(values, RULING_REGION_LEVEL);
+
+    if (
+      region &&
+      region.start > 0 &&
+      !hasSignalRun(values, 0, region.start, threshold, window)
+    ) {
+      leftVotes.push(origin + region.start);
+    }
+
+    if (
+      region &&
+      region.end < values.length - 1 &&
+      !hasSignalRun(values, region.end + 1, values.length, threshold, window)
+    ) {
+      rightVotes.push(origin + region.end + 1);
+    }
+  }
+
+  const left = pickInnermost(leftVotes, true);
+  const right = pickInnermost(rightVotes, false);
+
+  return {
+    left: left === null ? borders.left : Math.max(borders.left, left),
+    right: right === null ? borders.right : Math.min(borders.right, right),
+  };
 };
 
 /**
@@ -578,20 +980,23 @@ const locateLineInStrips = (
  * квадратная, а автокорреляцию столбцов на снимке тетради сбивают край листа и
  * спираль — периода там не находится вовсе.
  *
- * Крайняя линия уточняется в каждой полосе, и берётся самое внутреннее её
- * положение: на снимке телефоном вертикальная линия наклонена иначе, чем
- * разлиновка в среднем, и граница по гребёнке у одного из краёв листа легла бы
- * за линию.
+ * Крайняя линия прослеживается по узким полосам (`traceVerticalLine`), и
+ * берётся самое внутреннее её положение, но не дальше окна `LINE_SEARCH_SHARE`
+ * наружу от прямой гребёнки: на снимке телефоном вертикальная линия наклонена
+ * или изогнута иначе, чем разлиновка в среднем, и граница по гребёнке у одного
+ * из краёв листа легла бы за линию.
  *
  * @param strips — профили столбцов по горизонтальным полосам кадра
  * @param step — шаг горизонтальных линий в пикселях
  * @param rowDepth — типичная глубина горизонтальной линии
+ * @param selectTraceStrips — полосы трассировки для линии у заданного столбца
  * @returns крайние вертикальные линии; `null` — вертикальных линий клетки нет
  */
 const findGridColumns = (
   strips: ShearedProfile[],
   step: number,
-  rowDepth: number
+  rowDepth: number,
+  selectTraceStrips: (lineX: number) => ShearedProfile[]
 ): GridColumns | null => {
   const origin = strips[0]?.origin || 0;
   const detrendedStrips = detrendStrips(strips, step);
@@ -615,29 +1020,38 @@ const findGridColumns = (
     return null;
   }
 
-  const reach = toLineReach(step);
   const threshold = computeQuantile(depths, 0.9) * RULED_SPAN_LEVEL;
   const firstLine = positions[region.start] || 0;
   const lastLine = positions[region.end] || 0;
-  const firstLocated = locateLineInStrips(
-    detrendedStrips,
-    origin,
-    firstLine,
-    reach,
-    threshold
-  );
-  const lastLocated = locateLineInStrips(
-    detrendedStrips,
-    origin,
-    lastLine,
-    reach,
-    threshold
-  );
+  const hasLeft = region.start > 0;
+  const hasRight = region.end < depths.length - 1;
+  const innermostLeft =
+    hasLeft &&
+    pickInnermost(
+      traceVerticalLine(selectTraceStrips(firstLine), firstLine, step, threshold),
+      true
+    );
+  const innermostRight =
+    hasRight &&
+    pickInnermost(
+      traceVerticalLine(selectTraceStrips(lastLine), lastLine, step, threshold),
+      false
+    );
+
+  /**
+   * Наружу граница уходит от прямой гребёнки не дальше, чем линия ещё считается
+   * своей гребёнке: на снимках клетки пресет-пака крайняя вертикаль стоит на
+   * четыре пикселя дальше гребёнки, и граница по самой гребёнке сузила бы блок.
+   */
+  const reach = toLineReach(step);
 
   return {
-    left: region.start > 0 ? Math.max(firstLine - reach, ...firstLocated) : null,
-    right:
-      region.end < depths.length - 1 ? Math.min(lastLine + reach, ...lastLocated) : null,
+    left: hasLeft
+      ? Math.max(firstLine - reach, innermostLeft || firstLine - reach)
+      : null,
+    right: hasRight
+      ? Math.min(lastLine + reach, innermostRight || lastLine + reach)
+      : null,
   };
 };
 
@@ -781,12 +1195,37 @@ export const detectRuling = (
     period.step,
     period.phase
   );
+  const tangent = toTangent(skewAngle);
+  /**
+   * Полосы трассировки строятся лишь раз и лишь тогда, когда есть что
+   * прослеживать: на линейке без линии поля проход по кадру не нужен.
+   */
+  let traceStrips: ShearedProfile[] | null = null;
+
+  const selectTraceStrips = (lineX: number): ShearedProfile[] => {
+    traceStrips =
+      traceStrips ||
+      buildStripProfiles(
+        image,
+        'vertical',
+        skewAngle,
+        guardAngle,
+        Math.max(
+          MIN_TRACE_STRIPS,
+          Math.round(image.height / (TRACE_STRIP_STEPS * period.step))
+        )
+      );
+
+    return selectSpanStrips(traceStrips, image.height, ruledSpan, tangent, lineX);
+  };
+
   const gridColumns =
     ruledSpan &&
     findGridColumns(
       buildStripProfiles(image, 'vertical', skewAngle, guardAngle, RULED_SPAN_STRIPS),
       period.step,
-      ruledSpan.depth
+      ruledSpan.depth,
+      selectTraceStrips
     );
   const columnResponse = buildCombResponse(
     image,
@@ -799,7 +1238,10 @@ export const detectRuling = (
     closeProfileGaps(columnResponse.values, Math.round(period.step)),
     RULING_REGION_LEVEL
   );
-  const marginLine = findMarginLine(columns, period.step, image.width);
+  const meanMarginLine = findMarginLine(columns, period.step, image.width);
+  const marginLine =
+    meanMarginLine &&
+    refineMarginLine(meanMarginLine, selectTraceStrips(meanMarginLine.x), period.step);
   /**
    * Сторона, где разлиновка дошла до края профиля, — не найденное поле, а
    * ноль. Профиль начинается не с края кадра, а с защитной полосы, и край
@@ -807,24 +1249,26 @@ export const detectRuling = (
    * полосе или первой видимой линии, выдало бы за поле обрезку кадра, и блок
    * встал бы вплотную к краю. Ноль отдаёт такую сторону фолбэку.
    *
-   * Боковая граница — там, где кончаются горизонтальные линии, а у клетки,
-   * если вертикальные линии короче, — крайняя вертикальная: берётся более узкая
-   * из двух. Иначе строка уходит в полосу, где остались одни горизонтальные.
-   * Найденные боковые поля отступают от границы внутрь на зазор: граница без
-   * линии поля сама служит полем.
+   * Боковая граница — там, где кончаются горизонтальные линии (самый
+   * внутренний конец по полосам), а у клетки, если вертикальные линии короче, —
+   * крайняя вертикальная: берётся более узкая из двух. Иначе строка уходит в
+   * полосу, где остались одни горизонтальные. Найденные боковые поля отступают
+   * от границы внутрь на зазор: граница без линии поля сама служит полем.
    */
   const edgeGap = period.step * RULED_EDGE_GAP_SHARE;
-  const rowsLeft =
-    columnRegion && columnRegion.start > 0
-      ? columnResponse.origin + columnRegion.start
-      : 0;
-  const rowsRight =
-    columnRegion && columnRegion.end < columnResponse.values.length - 1
-      ? columnResponse.origin + columnRegion.end + 1
-      : image.width;
-  const leftBorder = Math.max(rowsLeft, (gridColumns && gridColumns.left) || 0);
+  const rowBorders = refineRowBorders(image, skewAngle, period, ruledSpan, {
+    left:
+      columnRegion && columnRegion.start > 0
+        ? columnResponse.origin + columnRegion.start
+        : 0,
+    right:
+      columnRegion && columnRegion.end < columnResponse.values.length - 1
+        ? columnResponse.origin + columnRegion.end + 1
+        : image.width,
+  });
+  const leftBorder = Math.max(rowBorders.left, (gridColumns && gridColumns.left) || 0);
   const rightBorder = Math.min(
-    rowsRight,
+    rowBorders.right,
     (gridColumns && gridColumns.right) || image.width
   );
   const margins: PaperMargins = {
