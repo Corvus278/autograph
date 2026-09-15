@@ -5,7 +5,7 @@ import type { PaperMargins, RulingDetection, SheetImageData } from './paper.type
 import { measureProfilePeriod, type ProfilePeriod } from './profilePeriod';
 import {
   buildBandCombResponses,
-  buildCombResponse,
+  buildColumnProfiles,
   buildShearedProfile,
   buildStripProfiles,
   closeProfileGaps,
@@ -1240,7 +1240,13 @@ export const detectRuling = (
     return toMissingDetection(period.confidence);
   }
 
-  const columns = buildShearedProfile(image, 'vertical', skewAngle, guardAngle);
+  const { columns, response: columnResponse } = buildColumnProfiles(
+    image,
+    skewAngle,
+    guardAngle,
+    period.step,
+    period.phase
+  );
   const columnPeriod: ProfilePeriod = measureProfilePeriod(
     columns,
     minStep,
@@ -1286,13 +1292,6 @@ export const detectRuling = (
       ruledSpan.depth,
       selectTraceStrips
     );
-  const columnResponse = buildCombResponse(
-    image,
-    skewAngle,
-    guardAngle,
-    period.step,
-    period.phase
-  );
   const columnRegion = findSignalRegion(
     closeProfileGaps(columnResponse.values, Math.round(period.step)),
     RULING_REGION_LEVEL

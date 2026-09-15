@@ -365,6 +365,21 @@ export const buildStripProfiles = (
 const PHASE_WINDOW_STEPS = 4;
 
 /**
+ * Профили поперёк горизонтальной разлиновки, собранные одним проходом.
+ */
+export type ColumnProfiles = {
+  /**
+   * Профиль средней яркости вдоль вертикальных линий.
+   */
+  columns: ShearedProfile;
+
+  /**
+   * Отклик горизонтальной гребёнки по столбцам.
+   */
+  response: ShearedProfile;
+};
+
+/**
  * Отклик поперёк горизонтальной разлиновки: для каждого столбца считается,
  * насколько его тёмные точки попадают в найденную гребёнку линий. Там, где
  * линии кончаются, отклик падает до нуля — по этому обрыву находятся левое и
@@ -381,30 +396,36 @@ const PHASE_WINDOW_STEPS = 4;
  * отклик, и затягивание провалов пришило бы их к области. Проекция на фазу
  * соседних линий гасит такие пятна, как и косинусная сумма.
  *
+ * Профиль столбцов собирается тем же проходом по кадру, что и отклик: бины у
+ * них общие, а проход по фотографии — самая дорогая часть разбора. Суммы
+ * профиля набираются в том же порядке точек, что у `buildShearedProfile` по оси
+ * `vertical`, поэтому профиль побитово тот же.
+ *
  * @param image — полутоновая выжимка
  * @param angleDegrees — наклон разлиновки в градусах
  * @param guardAngleDegrees — угол, по которому считается отбрасываемая полоса у краёв
  * @param step — шаг разлиновки в пикселях
  * @param phase — смещение линий по модулю шага
- * @returns профиль отклика, пронумерованный поперёк линий
+ * @returns профиль столбцов и профиль отклика, пронумерованные поперёк линий
  */
-export const buildCombResponse = (
+export const buildColumnProfiles = (
   image: SheetImageData,
   angleDegrees: number,
   guardAngleDegrees: number,
   step: number,
   phase: number
-): ShearedProfile => {
+): ColumnProfiles => {
   const { width, height, luminance } = image;
   const guard = computeGuardBand(guardAngleDegrees, height);
   const size = width - 2 * guard;
 
-  if (size < 2 || step <= 0) {
-    return EMPTY_PROFILE;
+  if (size < 2) {
+    return { columns: EMPTY_PROFILE, response: EMPTY_PROFILE };
   }
 
   const tangent = toTangent(angleDegrees);
   const mean = computeMean(luminance);
+  const sums = new Float64Array(size);
   const cosSums = new Float64Array(size);
   const sinSums = new Float64Array(size);
   const counts = new Float64Array(size);
@@ -417,15 +438,23 @@ export const buildCombResponse = (
       const bin = Math.round(x + offset) - guard;
 
       if (bin >= 0 && bin < size) {
+        const value = luminance[row + x] || 0;
         const cycles = (y - x * tangent - phase) / step;
         const tableIndex = Math.floor((cycles - Math.floor(cycles)) * PHASE_TABLE_SIZE);
-        const deviation = mean - (luminance[row + x] || 0);
+        const deviation = mean - value;
 
+        sums[bin] = (sums[bin] || 0) + value;
         cosSums[bin] = (cosSums[bin] || 0) + deviation * (COS_TABLE[tableIndex] || 0);
         sinSums[bin] = (sinSums[bin] || 0) + deviation * (SIN_TABLE[tableIndex] || 0);
         counts[bin] = (counts[bin] || 0) + 1;
       }
     }
+  }
+
+  const columns = { values: toMeans(sums, counts), origin: guard };
+
+  if (step <= 0) {
+    return { columns, response: EMPTY_PROFILE };
   }
 
   const half = Math.max(1, Math.round((PHASE_WINDOW_STEPS * step) / 2));
@@ -454,7 +483,7 @@ export const buildCombResponse = (
     }
   }
 
-  return { values, origin: guard };
+  return { columns, response: { values, origin: guard } };
 };
 
 /**
@@ -521,6 +550,41 @@ const buildBandLayouts = (
 };
 
 /**
+ * Номер полосы, в которую попадает координата вдоль линий: `−1` — выше первой
+ * полосы, число полос — ниже последней. С координатой номер не убывает.
+ *
+ * @param alongEdges — границы полос по координате вдоль линий, по возрастанию
+ * @param along — координата вдоль линий
+ * @returns номер полосы `i`, у которой `alongEdges[i] ≤ along < alongEdges[i + 1]`
+ */
+const findBand = (alongEdges: number[], along: number): number => {
+  const bandCount = alongEdges.length - 1;
+
+  if (along < (alongEdges[0] || 0)) {
+    return -1;
+  }
+
+  if (along >= (alongEdges[bandCount] || 0)) {
+    return bandCount;
+  }
+
+  let low = 0;
+  let high = bandCount - 1;
+
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+
+    if (along >= (alongEdges[middle] || 0)) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  return low;
+};
+
+/**
  * Отклик горизонтальной гребёнки по полосам, нарезанным вдоль линий: для
  * каждой полосы и каждого столбца поперёк линий — насколько яркость полосы
  * повторяет гребёнку с шагом `step`.
@@ -571,49 +635,58 @@ export const buildBandCombResponses = (
   const cosWeights = new Float64Array(total);
   const sinWeights = new Float64Array(total);
   const counts = new Float64Array(total);
-  const alongFrom = alongEdges[0] || 0;
-  const alongTo = alongEdges[bandCount] || 0;
-  let band = 0;
 
+  /**
+   * Полоса точки не проверяется в каждой точке: координата вдоль линий монотонна
+   * по строке кадра, поэтому точки одной полосы идут в строке подряд, и конец
+   * отрезка ищется делением пополам по той же координате, что и полоса точки.
+   */
   for (let y = 0; y < height; y += 1) {
     const row = y * width;
     const across = y * tangent;
+    let start = 0;
 
-    for (let x = 0; x < width; x += 1) {
-      const along = y - x * tangent;
+    while (start < width) {
+      const band = findBand(alongEdges, y - start * tangent);
+      let last = start;
+      let end = width;
 
-      if (along < alongFrom || along >= alongTo) {
-        continue;
+      while (end - last > 1) {
+        const middle = Math.floor((last + end) / 2);
+
+        if (findBand(alongEdges, y - middle * tangent) === band) {
+          last = middle;
+        } else {
+          end = middle;
+        }
       }
 
-      while (band > 0 && along < (alongEdges[band] || 0)) {
-        band -= 1;
+      const layout = band >= 0 && band < bandCount ? layouts[band] : undefined;
+
+      for (let x = start; layout && x < end; x += 1) {
+        const bin = Math.round(x + across) - layout.origin;
+
+        if (bin < 0 || bin >= layout.size) {
+          continue;
+        }
+
+        const along = y - x * tangent;
+        const cycles = (along - phase) / step;
+        const tableIndex = Math.floor((cycles - Math.floor(cycles)) * PHASE_TABLE_SIZE);
+        const cosine = COS_TABLE[tableIndex] || 0;
+        const sine = SIN_TABLE[tableIndex] || 0;
+        const value = luminance[row + x] || 0;
+        const index = layout.offset + bin;
+
+        sums[index] = (sums[index] || 0) + value;
+        cosSums[index] = (cosSums[index] || 0) + value * cosine;
+        sinSums[index] = (sinSums[index] || 0) + value * sine;
+        cosWeights[index] = (cosWeights[index] || 0) + cosine;
+        sinWeights[index] = (sinWeights[index] || 0) + sine;
+        counts[index] = (counts[index] || 0) + 1;
       }
 
-      while (band < bandCount - 1 && along >= (alongEdges[band + 1] || 0)) {
-        band += 1;
-      }
-
-      const layout = layouts[band];
-      const bin = layout ? Math.round(x + across) - layout.origin : -1;
-
-      if (!layout || bin < 0 || bin >= layout.size) {
-        continue;
-      }
-
-      const cycles = (along - phase) / step;
-      const tableIndex = Math.floor((cycles - Math.floor(cycles)) * PHASE_TABLE_SIZE);
-      const cosine = COS_TABLE[tableIndex] || 0;
-      const sine = SIN_TABLE[tableIndex] || 0;
-      const value = luminance[row + x] || 0;
-      const index = layout.offset + bin;
-
-      sums[index] = (sums[index] || 0) + value;
-      cosSums[index] = (cosSums[index] || 0) + value * cosine;
-      sinSums[index] = (sinSums[index] || 0) + value * sine;
-      cosWeights[index] = (cosWeights[index] || 0) + cosine;
-      sinWeights[index] = (sinWeights[index] || 0) + sine;
-      counts[index] = (counts[index] || 0) + 1;
+      start = end;
     }
   }
 
@@ -788,40 +861,58 @@ export const refinePeakOffset = (
  * @returns ряд без узких провалов
  */
 export const closeProfileGaps = (values: Float64Array, window: number): Float64Array => {
-  const size = values.length;
   const half = Math.max(1, Math.floor(window / 2));
-  const dilated = new Float64Array(size);
-  const closed = new Float64Array(size);
+
+  return slideWindowExtremum(slideWindowExtremum(values, half, 1), half, -1);
+};
+
+/**
+ * Скользящий максимум (`sign = 1`) или минимум (`sign = −1`) по окну
+ * `[i − half, i + half]`, обрезанному краями ряда. Считается очередью
+ * кандидатов за один проход, а не перебором окна в каждой точке: окно
+ * затягивания — шаг разлиновки, и перебор обходился бы в сотню сравнений на
+ * отсчёт. Результат — сам отсчёт ряда, поэтому он тот же, что у перебора.
+ *
+ * @param values — ряд
+ * @param half — полуширина окна в отсчётах
+ * @param sign — `1` для максимума, `−1` для минимума
+ * @returns ряд экстремумов окна
+ */
+const slideWindowExtremum = (
+  values: Float64Array,
+  half: number,
+  sign: 1 | -1
+): Float64Array => {
+  const size = values.length;
+  const extremums = new Float64Array(size);
+  const queue = new Int32Array(size);
+  let head = 0;
+  let tail = 0;
+  let next = 0;
 
   for (let index = 0; index < size; index += 1) {
-    let peak = Number.NEGATIVE_INFINITY;
+    const to = Math.min(size, index + half + 1);
 
-    for (
-      let inner = Math.max(0, index - half);
-      inner < Math.min(size, index + half + 1);
-      inner += 1
-    ) {
-      peak = Math.max(peak, values[inner] || 0);
+    while (next < to) {
+      const weight = sign * (values[next] || 0);
+
+      while (tail > head && sign * (values[queue[tail - 1] || 0] || 0) <= weight) {
+        tail -= 1;
+      }
+
+      queue[tail] = next;
+      tail += 1;
+      next += 1;
     }
 
-    dilated[index] = peak;
-  }
-
-  for (let index = 0; index < size; index += 1) {
-    let valley = Number.POSITIVE_INFINITY;
-
-    for (
-      let inner = Math.max(0, index - half);
-      inner < Math.min(size, index + half + 1);
-      inner += 1
-    ) {
-      valley = Math.min(valley, dilated[inner] || 0);
+    while ((queue[head] || 0) < index - half) {
+      head += 1;
     }
 
-    closed[index] = valley;
+    extremums[index] = values[queue[head] || 0] || 0;
   }
 
-  return closed;
+  return extremums;
 };
 
 /**
