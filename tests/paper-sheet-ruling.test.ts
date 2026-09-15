@@ -32,6 +32,7 @@ const buildDetection = (patch: Partial<RulingDetection> = {}): RulingDetection =
     marginLineX: null,
     marginLineSide: null,
     bend: null,
+    perspective: null,
     confidence: 0.9,
     ...patch,
   };
@@ -97,6 +98,8 @@ describe('сборка разлиновки экземпляра из резул
       marginLineX: 1400,
       marginLineSide: 'right',
       bend: null,
+      perspective: null,
+      outline: null,
     });
   });
 

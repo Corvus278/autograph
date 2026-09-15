@@ -28,6 +28,8 @@ const SHEET: PaperSheet = {
     marginLineX: 1080,
     marginLineSide: 'right',
     bend: null,
+    perspective: null,
+    outline: null,
   },
   lighting: null,
   texture: null,

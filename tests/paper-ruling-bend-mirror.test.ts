@@ -46,6 +46,8 @@ const RULING: SheetRuling = {
   marginLineX: 1360,
   marginLineSide: 'right',
   bend: BEND,
+  perspective: null,
+  outline: null,
 };
 
 /**

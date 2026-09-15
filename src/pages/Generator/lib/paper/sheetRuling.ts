@@ -78,6 +78,8 @@ export const buildSheetRuling = (source: SheetRulingSource): SheetRuling => {
      * смещения гребёнки, которой у такого листа нет.
      */
     bend: step > 0 ? source.bend || null : null,
+    perspective: null,
+    outline: null,
   };
 
   /**

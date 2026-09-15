@@ -108,5 +108,7 @@ export const mirrorSheetRuling = (ruling: SheetRuling, width: number): SheetRuli
     marginLineX: marginLineX === null ? null : width - marginLineX,
     marginLineSide: flipMarginLineSide(marginLineSide),
     bend: mirrorRulingBend(ruling.bend, shift, width),
+    perspective: null,
+    outline: null,
   };
 };

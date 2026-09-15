@@ -25,11 +25,22 @@ export type {
   RulingBend,
   RulingDetection,
   RulingKind,
+  RulingPerspective,
+  RulingProjection,
   SheetImageData,
+  SheetOutline,
+  SheetPoint,
   SheetRuling,
   SheetRulingSource,
   TextureMap,
 } from './paper.types';
+export { resolveSheetBounds } from './resolveSheetBounds';
+export {
+  lineCoordinateAt,
+  lineHeightAt,
+  lineHeightScaleAt,
+  lineHeightSlopeAt,
+} from './rulingPerspective';
 export { sampleRulingBend, sampleRulingBendSlope } from './sampleRulingBend';
 export { buildSheetRuling, MARGIN_FALLBACK_STEPS, resolveFirstLine } from './sheetRuling';
 export { synthesizeLighting } from './synthesizeLighting';

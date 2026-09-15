@@ -275,6 +275,7 @@ const toMissingDetection = (confidence: number, skewAngle: number): DetectedRuli
     marginLineX: null,
     marginLineSide: null,
     bend: null,
+    perspective: null,
     bendFoundNodeShare: 0,
     confidence,
   };
@@ -1359,6 +1360,7 @@ export const detectRuling = (
     marginLineX: marginLine && marginLine.x,
     marginLineSide: marginLine && marginLine.side,
     bend: bendDetection.bend,
+    perspective: null,
     bendFoundNodeShare: bendDetection.foundNodeShare,
     confidence: period.confidence,
   };

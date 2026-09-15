@@ -1,20 +1,20 @@
 ## 1. Эталоны до правок
 
-- [ ] 1.1 Снять эталон пресет-пака до первой правки кода: по каждому листу из `public/paper/profiles.json` (`jq`) — `step`, `firstLinePhase`, `skewAngle`, `margins`, `marginLineX`, `marginLineSide`, наибольшее `|offsets|` изгиба, `lighting.contrast`, `lighting.isUsable`, `texture.amplitude`. Проверка — таблица записана в журнал прогона вместе с коммитом, на котором снята.
-- [ ] 1.2 Снять базовое время `detectRuling` на синтетике 3000×4000 (`tests/synthetic-sheet-detect-timing.test.ts`) до первой правки детектора. Проверка — время и коммит записаны в журнал.
+- [x] 1.1 Снять эталон пресет-пака до первой правки кода: по каждому листу из `public/paper/profiles.json` (`jq`) — `step`, `firstLinePhase`, `skewAngle`, `margins`, `marginLineX`, `marginLineSide`, наибольшее `|offsets|` изгиба, `lighting.contrast`, `lighting.isUsable`, `texture.amplitude`. Проверка — таблица записана в журнал прогона вместе с коммитом, на котором снята.
+- [x] 1.2 Снять базовое время `detectRuling` на синтетике 3000×4000 (`tests/synthetic-sheet-detect-timing.test.ts`) до первой правки детектора. Проверка — время и коммит записаны в журнал.
 
 ## 2. Модель: контур листа и перспектива
 
-- [ ] 2.1 Добавить в `lib/paper/paper.types.ts`:
+- [x] 2.1 Добавить в `lib/paper/paper.types.ts`:
   - типы `SheetOutline` (четыре угла `{ x, y }` в пикселях кадра) и `RulingPerspective` (`originX`, `originY`, `convergenceX`, `convergenceY`);
   - обязательные `outline: SheetOutline | null` и `perspective: RulingPerspective | null` в `SheetRuling`, необязательные — в `SheetRulingSource`, `perspective` — в `RulingDetection`.
 
   Проставить `null` во всех литералах разлиновки и детекции: `detectRuling.ts` (`toMissingDetection` и результат), `mirrorSheetRuling.ts`, `paperSheetJson.ts`, `useSheetImport.ts`, `PaperGroup.tsx`, `config/paperFamilies.ts`, stories `BaselineFit`/`RasterRuling`, `tests/helpers/paper-family.ts`, тесты — по выводу `npm run typecheck`. Проверка — `npm run typecheck` и `npm test` проходят без правки ожиданий.
-- [ ] 2.2 Написать `resolveSheetBounds(outline, width, height)` в `lib/paper/`: вписанный прямоугольник отступами от краёв кадра, `null` — нулевые отступы. Проверка — юнит-тесты:
+- [x] 2.2 Написать `resolveSheetBounds(outline, width, height)` в `lib/paper/`: вписанный прямоугольник отступами от краёв кадра, `null` — нулевые отступы. Проверка — юнит-тесты:
   - `null` даёт нули;
   - у четырёхугольника, повёрнутого на 1,5°, с перспективным сужением 3 % каждая из 400 точек сетки внутри прямоугольника лежит внутри контура;
   - у прямоугольного контура отступы равны его сторонам.
-- [ ] 2.3 Написать в `lib/paper/rulingPerspective.ts` координату вдоль линий `U(ruling, x, y)`, обратную высоту `Y(ruling, x, U)` и производные `∂Y/∂x` при постоянной `U` и `∂Y/∂U` по формулам design («Перспектива — дробно-линейная координата вдоль линий»). Проверка — юнит-тесты:
+- [x] 2.3 Написать в `lib/paper/rulingPerspective.ts` координату вдоль линий `U(ruling, x, y)`, обратную высоту `Y(ruling, x, U)` и производные `∂Y/∂x` при постоянной `U` и `∂Y/∂U` по формулам design («Перспектива — дробно-линейная координата вдоль линий»). Проверка — юнит-тесты:
   - при `perspective: null` `U = y − x·tgθ` и `Y = U + x·tgθ` точно;
   - `Y(x, U(x, y)) = y` с точностью 1e-6 на сетке точек кадра 3000×4000 при `p, q` дрейфа 8 %;
   - производные совпадают с конечными разностями;

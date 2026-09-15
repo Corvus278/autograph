@@ -72,7 +72,11 @@ describe('разбор артефакта профилей', () => {
   it('берёт разлиновку экземпляра как есть', () => {
     const profiles = parsePaperProfiles(buildArtifact());
 
-    expect(profiles.grid?.[0]?.ruling).toEqual(PROFILE_RULING);
+    expect(profiles.grid?.[0]?.ruling).toEqual({
+      ...PROFILE_RULING,
+      perspective: null,
+      outline: null,
+    });
   });
 
   it('принимает карту текстуры, заданную путём к файлу', () => {
@@ -128,7 +132,11 @@ describe('сборка предустановленных семей', () => {
 
     expect(grid?.sheets).toHaveLength(1);
     expect(grid?.sheets[0]?.id).toBe('1');
-    expect(grid?.sheets[0]?.ruling).toEqual(PROFILE_RULING);
+    expect(grid?.sheets[0]?.ruling).toEqual({
+      ...PROFILE_RULING,
+      perspective: null,
+      outline: null,
+    });
     expect(lined?.sheets).toHaveLength(4);
   });
 

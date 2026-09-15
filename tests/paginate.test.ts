@@ -43,6 +43,8 @@ const buildCalibration = (
       marginLineX: null,
       marginLineSide: null,
       bend: null,
+      perspective: null,
+      outline: null,
     },
     kind,
     ...size,

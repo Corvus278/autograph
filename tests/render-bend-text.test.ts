@@ -135,6 +135,8 @@ const BENT_SHEET: PaperSheet = {
     marginLineX: null,
     marginLineSide: null,
     bend: BEND,
+    perspective: null,
+    outline: null,
   },
   lighting: null,
   texture: null,

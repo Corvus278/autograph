@@ -44,6 +44,8 @@ const buildRuling = (step: number): SheetRuling => {
     marginLineX: 90,
     marginLineSide: 'left',
     bend: null,
+    perspective: null,
+    outline: null,
   };
 };
 
