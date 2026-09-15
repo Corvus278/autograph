@@ -129,8 +129,16 @@ export const PaperGroup: FC = () => {
       return;
     }
 
-    const { step, firstLinePhase, skewAngle, marginLineX, marginLineSide, bend } =
-      activeSheet.ruling;
+    const {
+      step,
+      firstLinePhase,
+      skewAngle,
+      marginLineX,
+      marginLineSide,
+      bend,
+      perspective,
+      outline,
+    } = activeSheet.ruling;
     /**
      * Смещения изгиба отсчитаны от прямой гребёнки с прежними шагом и фазой: с
      * другими те же числа описывали бы отход от других прямых, и строки встали
@@ -145,13 +153,23 @@ export const PaperGroup: FC = () => {
      * правка полей молча стирала бы линию поля, и блок текста заезжал бы на
      * неё.
      */
-    const ruling = buildSheetRuling({
-      ...manual,
-      skewAngle,
-      marginLineX,
-      marginLineSide,
-      bend: isCombKept ? bend : null,
-    });
+    const ruling = buildSheetRuling(
+      {
+        ...manual,
+        skewAngle,
+        marginLineX,
+        marginLineSide,
+        bend: isCombKept ? bend : null,
+        /**
+         * Перспектива держится того же правила, что и изгиб: она описывает ту
+         * же гребёнку, и с другими шагом и фазой линии по ней встали бы мимо.
+         * Контур правка не трогает — он про края листа, а не про гребёнку.
+         */
+        perspective: isCombKept ? perspective : null,
+        outline,
+      },
+      activeSheet
+    );
 
     addUserSheet({
       familyId: activeFamily.id,

@@ -80,6 +80,12 @@ const buildBend = (): RulingBend => {
 
 const BEND = buildBend();
 
+/**
+ * Лист теста без наклона и без перспективы: строки узлов идут по вертикали
+ * кадра.
+ */
+const BEND_PROJECTION = { skewAngle: 0, perspective: null };
+
 const sources = new Map<string, GlyphSource>();
 
 /**
@@ -208,8 +214,8 @@ const measureMinLetterBendDrop = (family: string): number => {
       const right = (nextOffset === undefined ? offsetX + advance : nextOffset) * scale;
 
       return Math.abs(
-        sampleRulingBend(BEND, 0, right, BASELINE_Y) -
-          sampleRulingBend(BEND, 0, left, BASELINE_Y)
+        sampleRulingBend(BEND, BEND_PROJECTION, right, BASELINE_Y) -
+          sampleRulingBend(BEND, BEND_PROJECTION, left, BASELINE_Y)
       );
     })
   );

@@ -5,6 +5,7 @@ import type {
   PaperSheet,
   PaperTexture,
   RulingBend,
+  SheetFrame,
   SheetRuling,
 } from '../lib/paper/paper.types';
 import { buildSheetRuling } from '../lib/paper/sheetRuling';
@@ -222,28 +223,38 @@ const parseRulingBend = (value: unknown): RulingBend | null => {
  * фолбэком.
  *
  * @param value — разобранный экземпляр
+ * @param frame — кадр фотографии экземпляра: от него считается фолбэк полей
  * @returns разлиновка экземпляра
  */
-const parseSheetRuling = (value: Record<string, unknown>): SheetRuling => {
+const parseSheetRuling = (
+  value: Record<string, unknown>,
+  frame: SheetFrame
+): SheetRuling => {
   const { ruling } = value;
 
   if (!isJsonRecord(ruling)) {
-    return buildSheetRuling({
-      step: toFiniteNumber(value.measuredStep, 0),
-      firstLinePhase: toFiniteNumber(value.firstLinePhase, 0),
-      skewAngle: toFiniteNumber(value.skewAngle, 0),
-    });
+    return buildSheetRuling(
+      {
+        step: toFiniteNumber(value.measuredStep, 0),
+        firstLinePhase: toFiniteNumber(value.firstLinePhase, 0),
+        skewAngle: toFiniteNumber(value.skewAngle, 0),
+      },
+      frame
+    );
   }
 
-  return buildSheetRuling({
-    step: toFiniteNumber(ruling.step, 0),
-    firstLinePhase: toFiniteNumber(ruling.firstLinePhase, 0),
-    skewAngle: toFiniteNumber(ruling.skewAngle, 0),
-    margins: parseMargins(ruling.margins),
-    marginLineX: toFiniteNumber(ruling.marginLineX, 0) || null,
-    marginLineSide: parseMarginLineSide(ruling.marginLineSide),
-    bend: parseRulingBend(ruling.bend),
-  });
+  return buildSheetRuling(
+    {
+      step: toFiniteNumber(ruling.step, 0),
+      firstLinePhase: toFiniteNumber(ruling.firstLinePhase, 0),
+      skewAngle: toFiniteNumber(ruling.skewAngle, 0),
+      margins: parseMargins(ruling.margins),
+      marginLineX: toFiniteNumber(ruling.marginLineX, 0) || null,
+      marginLineSide: parseMarginLineSide(ruling.marginLineSide),
+      bend: parseRulingBend(ruling.bend),
+    },
+    frame
+  );
 };
 
 /**
@@ -268,13 +279,18 @@ export const parsePaperSheet = (value: unknown): PaperSheet | null => {
     return null;
   }
 
+  const frame = {
+    width: toFiniteNumber(value.width, 0),
+    height: toFiniteNumber(value.height, 0),
+  };
+
   return {
     id,
     label: toText(value.label) || id,
     src,
-    width: toFiniteNumber(value.width, 0),
-    height: toFiniteNumber(value.height, 0),
-    ruling: parseSheetRuling(value),
+    width: frame.width,
+    height: frame.height,
+    ruling: parseSheetRuling(value, frame),
     lighting: parseLighting(value.lighting),
     texture: parseTexture(value.texture),
   };

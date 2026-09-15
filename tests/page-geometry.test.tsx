@@ -89,7 +89,7 @@ describe('usePageGeometry', () => {
       throw new Error('У страницы нет листа');
     }
 
-    const ruling = mirrorSheetRuling(sheet.ruling, sheet.width);
+    const ruling = mirrorSheetRuling(sheet.ruling, sheet);
 
     expect(result.current.sheet?.id).toBe(sheet.id);
     expect(result.current.ruling).toEqual(ruling);

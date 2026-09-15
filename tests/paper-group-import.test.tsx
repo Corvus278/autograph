@@ -174,9 +174,7 @@ const measureRestoreError = (
         const straight = ruling.firstLinePhase + line * ruling.step + x * tangent;
         const restored =
           straight +
-          (ruling.bend
-            ? sampleRulingBend(ruling.bend, ruling.skewAngle, x, straight)
-            : 0);
+          (ruling.bend ? sampleRulingBend(ruling.bend, ruling, x, straight) : 0);
 
         miss = Math.max(miss, Math.abs(restored - lineY));
       }
@@ -412,9 +410,11 @@ describe('импорт фотографии листа', () => {
         throw new Error('Лист не добавлен');
       }
 
-      const flat = buildSheetRuling(detectRuling(createSyntheticSheet(flatPhoto)));
+      const flatImage = createSyntheticSheet(flatPhoto);
+      const flat = buildSheetRuling(detectRuling(flatImage), flatImage);
       const sweepRuling = buildSheetRuling(
-        detectRuling(image, { skewAngle: detectRowSkewAngle(image) })
+        detectRuling(image, { skewAngle: detectRowSkewAngle(image) }),
+        image
       );
       const restoreError = measureRestoreError(photo, ruling);
 

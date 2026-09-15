@@ -76,7 +76,7 @@ const buildPlainSheets = (
   step: number
 ): PaperSheet[] => {
   const sheets: PaperSheet[] = [];
-  const ruling = buildSheetRuling({ step, firstLinePhase: 0, skewAngle: 0 });
+  const ruling = buildSheetRuling({ step, firstLinePhase: 0, skewAngle: 0 }, size);
 
   for (let number = 1; number <= PRESET_SHEET_COUNT; number += 1) {
     sheets.push({

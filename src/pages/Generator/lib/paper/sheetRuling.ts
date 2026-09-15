@@ -1,4 +1,11 @@
-import type { PaperMargins, SheetRuling, SheetRulingSource } from './paper.types';
+import type {
+  PaperMargins,
+  SheetFrame,
+  SheetRuling,
+  SheetRulingSource,
+} from './paper.types';
+import { resolveSheetBounds } from './resolveSheetBounds';
+import { lineCoordinateAt, lineHeightAt } from './rulingPerspective';
 
 /**
  * На сколько шагов разлиновки блок отступает от края кадра с той стороны, где
@@ -51,16 +58,22 @@ export const resolveFirstLine = (ruling: SheetRuling): number => {
 /**
  * Собирает разлиновку экземпляра из результата детектора или из записи
  * прежней формы. Каждая ненайденная сторона — нулевое поле — получает отступ в
- * полтора шага от края кадра, верхнее поле при этом опускается до ближайшей
+ * полтора шага от стороны листа, верхнее поле при этом опускается до ближайшей
  * линии. Линия поля без стороны считается отсутствующей.
  *
  * Готовую разлиновку функция не меняет, поэтому её можно звать и на
  * перечитанном из хранилища листе.
  *
- * @param source — шаг, фаза, наклон и то, что нашлось из полей
+ * @param source — шаг, фаза, наклон, перспектива, контур и то, что нашлось из
+ *   полей
+ * @param frame — кадр фотографии: фолбэк полей отсчитывается от сторон
+ *   прямоугольника, вписанного в контур листа, а он задан в кадре
  * @returns разлиновка экземпляра; без шага поля остаются как пришли
  */
-export const buildSheetRuling = (source: SheetRulingSource): SheetRuling => {
+export const buildSheetRuling = (
+  source: SheetRulingSource,
+  frame: SheetFrame
+): SheetRuling => {
   const { step, firstLinePhase, skewAngle } = source;
   const margins = source.margins || NO_MARGINS;
   const marginLineX = source.marginLineX || null;
@@ -74,12 +87,12 @@ export const buildSheetRuling = (source: SheetRulingSource): SheetRuling => {
     marginLineX: hasMarginLine ? marginLineX : null,
     marginLineSide: hasMarginLine ? marginLineSide : null,
     /**
-     * Чистый лист и ручной ввод без шага не несут сетку изгиба: она описывает
-     * смещения гребёнки, которой у такого листа нет.
+     * Чистый лист и ручной ввод без шага не несут ни сетку изгиба, ни
+     * перспективу: обе описывают гребёнку, которой у такого листа нет.
      */
     bend: step > 0 ? source.bend || null : null,
-    perspective: null,
-    outline: null,
+    perspective: step > 0 ? source.perspective || null : null,
+    outline: source.outline || null,
   };
 
   /**
@@ -90,15 +103,26 @@ export const buildSheetRuling = (source: SheetRulingSource): SheetRuling => {
     return ruling;
   }
 
+  const bounds = resolveSheetBounds(ruling.outline, frame.width, frame.height);
   const fallback = step * MARGIN_FALLBACK_STEPS;
+  /**
+   * Верхнее поле округляется до линии в координате вдоль линий, а не по высоте
+   * кадра: при перспективе соседние линии отстоят друг от друга по высоте на
+   * разное число пикселей, и округление по высоте встало бы мимо линии.
+   */
+  const topLine = ceilToLine(
+    lineCoordinateAt(ruling, 0, bounds.top) + fallback,
+    step,
+    firstLinePhase
+  );
 
   return {
     ...ruling,
     margins: {
-      top: margins.top || ceilToLine(fallback, step, firstLinePhase),
-      right: margins.right || fallback,
-      bottom: margins.bottom || fallback,
-      left: margins.left || fallback,
+      top: margins.top || lineHeightAt(ruling, 0, topLine),
+      right: margins.right || bounds.right + fallback,
+      bottom: margins.bottom || bounds.bottom + fallback,
+      left: margins.left || bounds.left + fallback,
     },
   };
 };

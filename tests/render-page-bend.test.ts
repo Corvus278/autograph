@@ -97,6 +97,12 @@ const BEND: RulingBend = {
   offsets: [...buildBendRow(1), ...buildBendRow(0.6)],
 };
 
+/**
+ * Строки узлов изгиба лежат в координате вдоль линий наклонной разлиновки;
+ * перспективы у листа теста нет.
+ */
+const BEND_PROJECTION = { skewAngle: SKEW_ANGLE, perspective: null };
+
 const BENT_SHEET: PaperSheet = {
   id: 'bent',
   label: 'Изогнутый лист',
@@ -349,7 +355,7 @@ const measureLineDrift = (ruling: SheetRuling, { x, y }: GlyphPoint): number => 
   const tangent = Math.tan(skewAngle / DEGREES_IN_RADIAN);
   const lineIndex = Math.round((y - firstLinePhase - x * tangent) / step);
   const straightY = firstLinePhase + lineIndex * step + x * tangent;
-  const lineY = straightY + (bend ? sampleRulingBend(bend, skewAngle, x, straightY) : 0);
+  const lineY = straightY + (bend ? sampleRulingBend(bend, ruling, x, straightY) : 0);
 
   return Math.abs(y - lineY) / step;
 };
@@ -376,7 +382,7 @@ describe('изгиб контуров на странице', () => {
     const bent = measureColumnBottoms(renderPoints(buildParams(BENT_SHEET, text)));
     const flat = measureColumnBottoms(renderPoints(buildParams(FLAT_SHEET, text)));
     const bendSteps = bent.map(({ x, y }) => {
-      return Math.abs(sampleRulingBend(BEND, SKEW_ANGLE, x, y)) / RULING_STEP;
+      return Math.abs(sampleRulingBend(BEND, BEND_PROJECTION, x, y)) / RULING_STEP;
     });
 
     expect(bent.length).toBeGreaterThan(MIN_COLUMNS);
@@ -406,7 +412,7 @@ describe('изгиб контуров на странице', () => {
     const drift = bent.reduce(
       (acc, point, index) => {
         const straight = flat[index] || point;
-        const bend = sampleRulingBend(BEND, SKEW_ANGLE, straight.x, straight.y);
+        const bend = sampleRulingBend(BEND, BEND_PROJECTION, straight.x, straight.y);
 
         return {
           horizontal: Math.max(acc.horizontal, Math.abs(point.x - straight.x)),
@@ -438,7 +444,7 @@ describe('изгиб контуров на странице', () => {
 
     expect(sampleSpy).toHaveBeenCalledWith(
       BEND,
-      SKEW_ANGLE,
+      BEND_PROJECTION,
       expect.any(Number),
       expect.any(Number)
     );

@@ -309,13 +309,16 @@ const seedBentSheet = () => {
       src: 'data:image/jpeg;base64,0123456789',
       width: 480,
       height: 640,
-      ruling: buildSheetRuling({
-        step: 47.9312,
-        firstLinePhase: 19.2587,
-        skewAngle: 0.4,
-        margins: { top: 70, right: 40, bottom: 50, left: 45 },
-        bend: SHEET_BEND,
-      }),
+      ruling: buildSheetRuling(
+        {
+          step: 47.9312,
+          firstLinePhase: 19.2587,
+          skewAngle: 0.4,
+          margins: { top: 70, right: 40, bottom: 50, left: 45 },
+          bend: SHEET_BEND,
+        },
+        { width: 480, height: 640 }
+      ),
       lighting: null,
       texture: null,
     },

@@ -1,6 +1,5 @@
-import type { RulingBend } from './paper.types';
-
-const DEGREES_IN_RADIAN = 180 / Math.PI;
+import type { RulingBend, RulingProjection } from './paper.types';
+import { lineCoordinateAt } from './rulingPerspective';
 
 /**
  * Выборка одной строки узлов в координате вдоль строки, где узлы стоят на
@@ -109,7 +108,7 @@ const sampleRowSlope: RowSampler = (bend, row, column) => {
  * под последней строкой берётся крайняя строка.
  *
  * @param bend — сетка изгиба
- * @param skewAngle — наклон разлиновки в градусах
+ * @param projection — наклон и перспектива разлиновки
  * @param x — горизонталь в пикселях кадра
  * @param y — вертикаль в пикселях кадра
  * @param sampleRow — выборка одной строки
@@ -117,7 +116,7 @@ const sampleRowSlope: RowSampler = (bend, row, column) => {
  */
 const blendRows = (
   bend: RulingBend,
-  skewAngle: number,
+  projection: RulingProjection,
   x: number,
   y: number,
   sampleRow: RowSampler
@@ -130,7 +129,7 @@ const blendRows = (
     return sampleRow(bend, 0, column);
   }
 
-  const u = y - x * Math.tan(skewAngle / DEGREES_IN_RADIAN);
+  const u = lineCoordinateAt(projection, x, y);
   const position = clampToRange((u - rowOrigin) / rowSpacing, last);
   const row = Math.min(Math.floor(position), last - 1);
   const weight = position - row;
@@ -142,23 +141,29 @@ const blendRows = (
 };
 
 /**
- * Вертикальное смещение линий разлиновки от прямой наклонной гребёнки в точке
- * кадра. Линия `k` проходит на высоте
- * `firstLinePhase + k·step + x·tgθ + sampleRulingBend(bend, θ, x, firstLinePhase + k·step + x·tgθ)`.
+ * Вертикальное смещение линий разлиновки от гребёнки проекции в точке кадра.
+ * Строки узлов лежат в координате вдоль линий `U`, а не по высоте кадра: на
+ * листе с перспективой линия уходит от прямой наклонной гребёнки дальше
+ * полушага, и выборка по высоте взяла бы чужую строку.
+ *
+ * Линия `k` с координатой `U_k = firstLinePhase + k·step` проходит на высоте
+ * `y = lineHeightAt(projection, x, U_k)` плюс `sampleRulingBend(bend,
+ * projection, x, y)`. Без перспективы гребёнка прямая наклонная, и числа
+ * прежние.
  *
  * @param bend — сетка изгиба листа
- * @param skewAngle — наклон разлиновки в градусах
+ * @param projection — наклон и перспектива разлиновки
  * @param x — горизонталь в пикселях кадра
  * @param y — вертикаль в пикселях кадра
  * @returns смещение в пикселях кадра, положительное — вниз
  */
 export const sampleRulingBend = (
   bend: RulingBend,
-  skewAngle: number,
+  projection: RulingProjection,
   x: number,
   y: number
 ): number => {
-  return blendRows(bend, skewAngle, x, y, sampleRowValue);
+  return blendRows(bend, projection, x, y, sampleRowValue);
 };
 
 /**
@@ -168,16 +173,16 @@ export const sampleRulingBend = (
  * умноженный на изменение смещения поперёк линий.
  *
  * @param bend — сетка изгиба листа
- * @param skewAngle — наклон разлиновки в градусах
+ * @param projection — наклон и перспектива разлиновки
  * @param x — горизонталь в пикселях кадра
  * @param y — вертикаль в пикселях кадра
  * @returns производная в пикселях на пиксель; за крайними узлами — ноль
  */
 export const sampleRulingBendSlope = (
   bend: RulingBend,
-  skewAngle: number,
+  projection: RulingProjection,
   x: number,
   y: number
 ): number => {
-  return blendRows(bend, skewAngle, x, y, sampleRowSlope);
+  return blendRows(bend, projection, x, y, sampleRowSlope);
 };

@@ -267,7 +267,7 @@ describe('detectRuling на листе в клетку', () => {
   it('выкладывает блок внутри сетки без линии поля с зазором, как от линии поля', () => {
     const { width, height, margins, step } = GRID_SHEET;
     const detection = detectRuling(createSyntheticSheet({ ...GRID_SHEET, noise: 0.05 }));
-    const ruling = buildSheetRuling({ ...detection, skewAngle: 0 });
+    const ruling = buildSheetRuling({ ...detection, skewAngle: 0 }, { width, height });
     const { leftPadding, blockWidth } = deriveGeometry(
       { ruling, kind: 'grid', width, height },
       FALLBACK_FONT_METRICS
@@ -299,7 +299,7 @@ describe('detectRuling на листе в клетку', () => {
         noise: 0.05,
       })
     );
-    const ruling = buildSheetRuling({ ...detection, skewAngle: 0 });
+    const ruling = buildSheetRuling({ ...detection, skewAngle: 0 }, { width, height });
     const { leftPadding, blockWidth } = deriveGeometry(
       { ruling, kind: 'grid', width, height },
       FALLBACK_FONT_METRICS

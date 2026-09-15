@@ -1,4 +1,8 @@
-import type { RulingBend } from '@pages/Generator/lib/paper';
+import type {
+  RulingBend,
+  RulingPerspective,
+  RulingProjection,
+} from '@pages/Generator/lib/paper';
 import {
   buildSheetRuling,
   sampleRulingBend,
@@ -28,6 +32,13 @@ const BEND: RulingBend = {
  */
 const SKEW_ANGLE = 2;
 const TILT = Math.tan((SKEW_ANGLE * Math.PI) / 180);
+
+const STRAIGHT_PROJECTION: RulingProjection = { skewAngle: 0, perspective: null };
+
+const SKEWED_PROJECTION: RulingProjection = {
+  skewAngle: SKEW_ANGLE,
+  perspective: null,
+};
 
 const LAST_COLUMN = BEND.columnCount - 1;
 const LAST_ROW = BEND.rowCount - 1;
@@ -68,17 +79,16 @@ const computeCatmullRom = ([p0, p1, p2, p3]: Segment, t: number): number => {
  * Смещение на ровном листе на высоте первой строки узлов.
  */
 const sampleFirstRow = (x: number): number => {
-  return sampleRulingBend(BEND, 0, x, toRowU(0));
+  return sampleRulingBend(BEND, STRAIGHT_PROJECTION, x, toRowU(0));
 };
 
 describe('выборка изгиба', () => {
   it('в узле возвращает сам узел', () => {
     for (let row = 0; row <= LAST_ROW; row += 1) {
       for (let column = 0; column <= LAST_COLUMN; column += 1) {
-        expect(sampleRulingBend(BEND, 0, toNodeX(column), toRowU(row))).toBeCloseTo(
-          readNode(row, column),
-          9
-        );
+        expect(
+          sampleRulingBend(BEND, STRAIGHT_PROJECTION, toNodeX(column), toRowU(row))
+        ).toBeCloseTo(readNode(row, column), 9);
       }
     }
   });
@@ -116,7 +126,7 @@ describe('выборка изгиба', () => {
       const u = toRowU(0) + weight * BEND.rowSpacing;
       const expected = (1 - weight) * readNode(0, column) + weight * readNode(1, column);
 
-      expect(sampleRulingBend(BEND, SKEW_ANGLE, x, u + x * TILT)).toBeCloseTo(
+      expect(sampleRulingBend(BEND, SKEWED_PROJECTION, x, u + x * TILT)).toBeCloseTo(
         expected,
         9
       );
@@ -135,7 +145,7 @@ describe('выборка изгиба', () => {
     ];
 
     for (const { x, u, row, column } of cases) {
-      expect(sampleRulingBend(BEND, SKEW_ANGLE, x, u + x * TILT)).toBeCloseTo(
+      expect(sampleRulingBend(BEND, SKEWED_PROJECTION, x, u + x * TILT)).toBeCloseTo(
         readNode(row, column),
         9
       );
@@ -162,7 +172,10 @@ describe('выборка изгиба', () => {
        * расстояние между ними — оставила бы здесь сотые.
        */
       expect(previous).toBeLessThan(1e-4);
-      expect(sampleRulingBendSlope(BEND, 0, x, toRowU(0))).toBeCloseTo(0, 9);
+      expect(sampleRulingBendSlope(BEND, STRAIGHT_PROJECTION, x, toRowU(0))).toBeCloseTo(
+        0,
+        9
+      );
     }
   });
 
@@ -177,10 +190,9 @@ describe('выборка изгиба', () => {
       for (let column = 0; column <= LAST_COLUMN; column += 1) {
         const x = toNodeX(column);
 
-        expect(sampleRulingBend(BEND, SKEW_ANGLE, x, toRowU(row) + x * TILT)).toBeCloseTo(
-          readNode(row, column),
-          9
-        );
+        expect(
+          sampleRulingBend(BEND, SKEWED_PROJECTION, x, toRowU(row) + x * TILT)
+        ).toBeCloseTo(readNode(row, column), 9);
       }
     }
   });
@@ -195,14 +207,14 @@ describe('выборка изгиба', () => {
 
     for (const { x, u } of points) {
       const y = u + x * TILT;
-      const slope = sampleRulingBendSlope(BEND, SKEW_ANGLE, x, y);
+      const slope = sampleRulingBendSlope(BEND, SKEWED_PROJECTION, x, y);
       const alongLine =
-        (sampleRulingBend(BEND, SKEW_ANGLE, x + h, y + h * TILT) -
-          sampleRulingBend(BEND, SKEW_ANGLE, x - h, y - h * TILT)) /
+        (sampleRulingBend(BEND, SKEWED_PROJECTION, x + h, y + h * TILT) -
+          sampleRulingBend(BEND, SKEWED_PROJECTION, x - h, y - h * TILT)) /
         (2 * h);
       const atConstantY =
-        (sampleRulingBend(BEND, SKEW_ANGLE, x + h, y) -
-          sampleRulingBend(BEND, SKEW_ANGLE, x - h, y)) /
+        (sampleRulingBend(BEND, SKEWED_PROJECTION, x + h, y) -
+          sampleRulingBend(BEND, SKEWED_PROJECTION, x - h, y)) /
         (2 * h);
 
       expect(slope).toBeCloseTo(alongLine, 6);
@@ -216,31 +228,128 @@ describe('выборка изгиба', () => {
   });
 });
 
+/**
+ * Перспектива со схождением только по ширине: шаг у левого края кадра примерно
+ * на десятую меньше, чем в начале отсчёта. Схождение по высоте здесь нулевое —
+ * общая формула координаты вдоль линий проверена в `paper-ruling-perspective`,
+ * а выборке изгиба нужна только строка узлов по `U`.
+ */
+const PERSPECTIVE: RulingPerspective = {
+  originX: 1200,
+  originY: 400,
+  convergenceX: 1e-4,
+  convergenceY: 0,
+};
+
+const PERSPECTIVE_PROJECTION: RulingProjection = {
+  skewAngle: SKEW_ANGLE,
+  perspective: PERSPECTIVE,
+};
+
+/**
+ * Высота линии с координатой вдоль линий `u` в столбце, посчитанная по формуле
+ * design при нулевом схождении по высоте, а не выборкой из `lib/paper`: эталон
+ * не должен зависеть от проверяемого модуля.
+ *
+ * @param u — координата вдоль линий
+ * @param x — горизонталь в пикселях кадра
+ * @returns высота линии в пикселях кадра
+ */
+const toPerspectiveLineY = (u: number, x: number): number => {
+  const { originX, originY, convergenceX } = PERSPECTIVE;
+  const offsetX = x - originX;
+
+  return (
+    originY +
+    offsetX * TILT +
+    (u - originY + originX * TILT) * (1 + convergenceX * offsetX)
+  );
+};
+
+describe('выборка изгиба под перспективой', () => {
+  it('точка на линии получает смещение своей строки узлов', () => {
+    for (let row = 0; row <= LAST_ROW; row += 1) {
+      for (let column = 0; column <= LAST_COLUMN; column += 1) {
+        const u = toRowU(row);
+        const x = toNodeX(column);
+        const y = toPerspectiveLineY(u, x);
+
+        /**
+         * Линия под перспективой уходит от прямой гребёнки дальше восьмой
+         * расстояния между строками узлов: иначе выборка по прямой
+         * `y − x·tgθ` попала бы в ту же строку и тест ничего не отличил бы.
+         */
+        expect(Math.abs(y - x * TILT - u)).toBeGreaterThan(BEND.rowSpacing / 8);
+        expect(sampleRulingBend(BEND, PERSPECTIVE_PROJECTION, x, y)).toBeCloseTo(
+          readNode(row, column),
+          9
+        );
+      }
+    }
+  });
+
+  it('производная совпадает с конечной разностью вдоль линии', () => {
+    const h = 1e-3;
+    const points = [
+      { x: toNodeX(1) + 17, u: toRowU(0) + 11 },
+      { x: toNodeX(2) - 21, u: toRowU(0) + 29 },
+    ];
+
+    for (const { x, u } of points) {
+      const slope = sampleRulingBendSlope(
+        BEND,
+        PERSPECTIVE_PROJECTION,
+        x,
+        toPerspectiveLineY(u, x)
+      );
+      const ahead = sampleRulingBend(
+        BEND,
+        PERSPECTIVE_PROJECTION,
+        x + h,
+        toPerspectiveLineY(u, x + h)
+      );
+      const behind = sampleRulingBend(
+        BEND,
+        PERSPECTIVE_PROJECTION,
+        x - h,
+        toPerspectiveLineY(u, x - h)
+      );
+
+      expect(slope).toBeCloseTo((ahead - behind) / (2 * h), 6);
+    }
+  });
+});
+
+/**
+ * Кадр листа: сборке разлиновки он нужен для фолбэка полей, на перенос изгиба
+ * не влияет.
+ */
+const FRAME = { width: 1600, height: 2000 };
+
 describe('изгиб в сборке разлиновки', () => {
   it('переносит переданный изгиб как есть', () => {
-    const ruling = buildSheetRuling({
-      step: 40,
-      firstLinePhase: 13,
-      skewAngle: -0.9,
-      bend: BEND,
-    });
+    const ruling = buildSheetRuling(
+      { step: 40, firstLinePhase: 13, skewAngle: -0.9, bend: BEND },
+      FRAME
+    );
 
     expect(ruling.bend).toEqual(BEND);
   });
 
   it('без изгиба в источнике даёт прямые линии', () => {
-    const ruling = buildSheetRuling({ step: 40, firstLinePhase: 13, skewAngle: 0 });
+    const ruling = buildSheetRuling(
+      { step: 40, firstLinePhase: 13, skewAngle: 0 },
+      FRAME
+    );
 
     expect(ruling.bend).toBeNull();
   });
 
   it('без шага отбрасывает изгиб: сетка относилась бы к несуществующей гребёнке', () => {
-    const ruling = buildSheetRuling({
-      step: 0,
-      firstLinePhase: 0,
-      skewAngle: 0,
-      bend: BEND,
-    });
+    const ruling = buildSheetRuling(
+      { step: 0, firstLinePhase: 0, skewAngle: 0, bend: BEND },
+      FRAME
+    );
 
     expect(ruling.bend).toBeNull();
   });

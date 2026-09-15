@@ -116,6 +116,12 @@ const BEND: RulingBend = {
   offsets: [...buildBendRow(1), ...buildBendRow(0.6)],
 };
 
+/**
+ * Строки узлов изгиба лежат в координате вдоль линий наклонной разлиновки;
+ * перспективы у листа теста нет.
+ */
+const BEND_PROJECTION = { skewAngle: SKEW_ANGLE, perspective: null };
+
 const BENT_SHEET: PaperSheet = {
   id: 'bent',
   label: 'Изогнутый лист',
@@ -444,7 +450,7 @@ const measureLineDrift = (ruling: SheetRuling, { x, y }: GlyphPoint): number => 
   const tangent = Math.tan(skewAngle / DEGREES_IN_RADIAN);
   const lineIndex = Math.round((y - firstLinePhase - x * tangent) / step);
   const straightY = firstLinePhase + lineIndex * step + x * tangent;
-  const lineY = straightY + (bend ? sampleRulingBend(bend, skewAngle, x, straightY) : 0);
+  const lineY = straightY + (bend ? sampleRulingBend(bend, ruling, x, straightY) : 0);
 
   return Math.abs(y - lineY) / step;
 };
@@ -463,17 +469,17 @@ const measureTangentAngle = ({ point, angle }: DrawnLetter): number => {
   const half = RECORDER_CHAR_WIDTH / 2;
   const centerX = point.x + half * Math.cos(direction);
   const shiftedY = point.y + half * Math.sin(direction);
-  const centerY = shiftedY - sampleRulingBend(BEND, SKEW_ANGLE, centerX, shiftedY);
+  const centerY = shiftedY - sampleRulingBend(BEND, BEND_PROJECTION, centerX, shiftedY);
   const rise = TANGENT_STEP * Math.tan(SKEW_ANGLE / DEGREES_IN_RADIAN);
   const ahead = sampleRulingBend(
     BEND,
-    SKEW_ANGLE,
+    BEND_PROJECTION,
     centerX + TANGENT_STEP,
     centerY + rise
   );
   const behind = sampleRulingBend(
     BEND,
-    SKEW_ANGLE,
+    BEND_PROJECTION,
     centerX - TANGENT_STEP,
     centerY - rise
   );
@@ -523,7 +529,7 @@ const summarizeLetters = (letters: DrawnLetter[]): LetterSummary => {
         drift: Math.max(acc.drift, measureLineDrift(BENT_SHEET.ruling, letter.point)),
         bend: Math.max(
           acc.bend,
-          Math.abs(sampleRulingBend(BEND, SKEW_ANGLE, x, y)) / RULING_STEP
+          Math.abs(sampleRulingBend(BEND, BEND_PROJECTION, x, y)) / RULING_STEP
         ),
         tangent: Math.max(acc.tangent, Math.abs(tangent)),
         angleError:
@@ -665,7 +671,7 @@ describe('поправка геометрии на изогнутом листе
           shift: (shifted.y - point.y) / RULING_STEP,
           drift: measureLineDrift(BENT_SHEET.ruling, lifted),
           bend:
-            Math.abs(sampleRulingBend(BEND, SKEW_ANGLE, lifted.x, lifted.y)) /
+            Math.abs(sampleRulingBend(BEND, BEND_PROJECTION, lifted.x, lifted.y)) /
             RULING_STEP,
         });
       }

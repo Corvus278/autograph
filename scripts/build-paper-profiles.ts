@@ -206,7 +206,7 @@ const buildSheetProfile = (
       ...sheet,
       width: photo.width,
       height: photo.height,
-      ruling: buildSheetRuling({ ...detection, skewAngle }),
+      ruling: buildSheetRuling({ ...detection, skewAngle }, photo),
       lighting,
       texture: {
         src: `${sheet.src.replace(/\.[^.]+$/, '')}.texture.png`,

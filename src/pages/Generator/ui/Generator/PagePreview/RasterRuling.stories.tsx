@@ -21,6 +21,7 @@ import type {
   PaperFamily,
   PaperSheet,
   RulingBend,
+  RulingProjection,
   SheetImageData,
 } from '../../../lib/paper';
 import {
@@ -600,18 +601,18 @@ const toRadians = (degrees: number): number => {
  * нулевой.
  *
  * @param bend — изгиб; `null` — его нет
- * @param angle — угол, под которым изгиб читается, в градусах
+ * @param projection — наклон и перспектива, в которых изгиб читается
  * @param x — столбец в пикселях страницы
  * @param y — высота в пикселях страницы
  * @returns отход вниз в пикселях
  */
 const sampleBend = (
   bend: RulingBend | null,
-  angle: number,
+  projection: RulingProjection,
   x: number,
   y: number
 ): number => {
-  return bend ? sampleRulingBend(bend, angle, x, y) : 0;
+  return bend ? sampleRulingBend(bend, projection, x, y) : 0;
 };
 
 /**
@@ -1132,9 +1133,10 @@ const measureStripFit = (
   const { fontSizePx, lineSpacing, fontMetrics, blockRotate, bend } = params.geometry;
   const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
   const bandMiddle = (band.top + band.bottom) / 2;
-  const bandBend = sampleBend(ruling.bend, ruling.skewAngle, strip.center, bandMiddle);
+  const blockProjection = { skewAngle: blockRotate, perspective: null };
+  const bandBend = sampleBend(ruling.bend, ruling, strip.center, bandMiddle);
   const bendSlope = ruling.bend
-    ? sampleRulingBendSlope(ruling.bend, ruling.skewAngle, strip.center, bandMiddle)
+    ? sampleRulingBendSlope(ruling.bend, ruling, strip.center, bandMiddle)
     : 0;
   const tangent = Math.tan(toRadians(blockRotate)) + bendSlope;
   const lineBand: RasterBand = { ...band, left: strip.left, right: strip.right };
@@ -1147,7 +1149,7 @@ const measureStripFit = (
   const ink = buildInkProfile(raster, inkBand, tangent, strip.center).values;
 
   const inkOffsets = baselines.map((baseline) => {
-    const drawn = baseline + sampleBend(bend, blockRotate, strip.center, baseline);
+    const drawn = baseline + sampleBend(bend, blockProjection, strip.center, baseline);
     const bottom = measureInkBottom(ink, drawn - inkTop, lineStep);
 
     if (bottom === null) {
@@ -1155,7 +1157,7 @@ const measureStripFit = (
     }
 
     const line = Math.round((baseline + bandBend - firstLine) / period);
-    const rowBend = sampleBend(ruling.bend, ruling.skewAngle, strip.center, baseline);
+    const rowBend = sampleBend(ruling.bend, ruling, strip.center, baseline);
     const target = firstLine + line * period + rowBend - bandBend;
 
     return Math.abs(inkTop + bottom - target) / period;
@@ -1692,7 +1694,12 @@ const buildOverhangBoxes = (params: PageRenderParams): OverhangBox[] => {
     const baseline = topOffset + fontMetrics.fontAscent * fontSizePx + index * lineStep;
     const penX = leftPadding * Math.cos(radians) - baseline * Math.sin(radians);
     const penY = leftPadding * Math.sin(radians) + baseline * Math.cos(radians);
-    const shift = sampleBend(bend, blockRotate, penX, penY);
+    const shift = sampleBend(
+      bend,
+      { skewAngle: blockRotate, perspective: null },
+      penX,
+      penY
+    );
 
     acc.push({
       left: leftPadding + extent.left,
@@ -1724,6 +1731,7 @@ const measureLineBoxEdges = (params: PageRenderParams): LineBoxEdges => {
   const radians = toRadians(blockRotate);
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
+  const blockProjection = { skewAngle: blockRotate, perspective: null };
   let top = Number.POSITIVE_INFINITY;
   let bottom = Number.NEGATIVE_INFINITY;
 
@@ -1734,8 +1742,11 @@ const measureLineBoxEdges = (params: PageRenderParams): LineBoxEdges => {
     const bottomX = along * cos - boxBottom * sin;
     const bottomY = along * sin + boxBottom * cos;
 
-    top = Math.min(top, topY + sampleBend(bend, blockRotate, topX, topY));
-    bottom = Math.max(bottom, bottomY + sampleBend(bend, blockRotate, bottomX, bottomY));
+    top = Math.min(top, topY + sampleBend(bend, blockProjection, topX, topY));
+    bottom = Math.max(
+      bottom,
+      bottomY + sampleBend(bend, blockProjection, bottomX, bottomY)
+    );
   }
 
   return { top, bottom };
@@ -2170,7 +2181,10 @@ const createBentSheet = (): PaperSheet => {
     src: canvas.toDataURL('image/png'),
     width: BENT_SHEET_WIDTH,
     height: BENT_SHEET_HEIGHT,
-    ruling: buildSheetRuling(detection),
+    ruling: buildSheetRuling(detection, {
+      width: BENT_SHEET_WIDTH,
+      height: BENT_SHEET_HEIGHT,
+    }),
     lighting: null,
     texture: null,
   };
@@ -2271,7 +2285,7 @@ const checkBentRaster = async (customFontFamily: string | null): Promise<void> =
     const bandMiddle = (band.top + band.bottom) / 2;
 
     for (const strip of [strips.left, strips.right]) {
-      const bend = sampleBend(ruling.bend, ruling.skewAngle, strip.center, bandMiddle);
+      const bend = sampleBend(ruling.bend, ruling, strip.center, bandMiddle);
 
       await expect(Math.abs(bend) / ruling.step).toBeGreaterThanOrEqual(
         MIN_STRIP_BEND_SHARE

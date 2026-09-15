@@ -49,3 +49,13 @@
 2.3: имена K2 — lineCoordinateAt/lineHeightAt/lineHeightSlopeAt(projection, u)/lineHeightScaleAt, аргумент RulingProjection { skewAngle, perspective } (camelCase вместо U/Y); plan.md K2 обновлён.
 Аудит: ok с первого круга; эталоны 2.3 пересчитаны независимо (Decimal), совпали до 1e-9.
 Долг: пусто, кроме переноса null → G2.
+
+### G2 · Разлиновка на контуре и перспективе
+
+2.4: buildSheetRuling(source, frame) переносит outline всегда, perspective — при step > 0; фолбэк полей от сторон resolveSheetBounds, верхнее — по линии в координате U. Без контура и перспективы числа побитово прежние.
+2.5: mirrorSheetRuling(ruling, frame) — второй аргумент стал SheetFrame: формула нижнего поля из design требует высоту кадра. Отражение перспективы (originX → W − originX, −convergenceX) и контура.
+2.6: sampleRulingBend/Slope принимают RulingProjection, строка узлов — lineCoordinateAt; отрисовка пока зовёт их с perspective: null — заполнит G6 (6.2).
+Отступление: правлен model/geometrySelectors.ts (файл G6) — одна строка, единственный боевой вызов отражения, иначе не компилируется.
+Решение: ручная правка в PaperGroup переносит perspective под тем же условием isCombKept, что и изгиб; иначе правка полей стирала бы перспективу.
+Аудит: ok с первого круга, мутация знака convergenceX ловится тестом отражения.
+Долг: тест переноса perspective/outline в «Применить разлиновку» — за 7.2 (G8); сочетание «контур + перспектива» в фолбэке верхнего поля не покрыто.

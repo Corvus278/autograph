@@ -119,19 +119,23 @@ export const useSheetImport = (): SheetImport => {
       const lighting = image ? extractLighting(image) : null;
       const texture = image && lighting ? await encodeTexture(image, lighting) : null;
       /**
-       * В разлиновку идёт всё найденное — и поля, и линия поля со стороной:
-       * по ним выкладывается блок текста, а не по общему для семьи отступу.
-       */
-      const ruling = buildSheetRuling({
-        ...(measurement?.detection || MISSING_RULING),
-        skewAngle: measurement?.skewAngle || 0,
-      });
-      /**
        * Кадр неразобранной фотографии неизвестен, а сама она не отбрасывается:
        * берётся кадр первого листа семьи. Без него страница такого листа
        * вышла бы нулевого размера, а разлиновку к нему всё равно задают руками.
        */
-      const frame = image || family.sheets[0];
+      const source = image || family.sheets[0];
+      const frame = { width: source?.width || 0, height: source?.height || 0 };
+      /**
+       * В разлиновку идёт всё найденное — и поля, и линия поля со стороной:
+       * по ним выкладывается блок текста, а не по общему для семьи отступу.
+       */
+      const ruling = buildSheetRuling(
+        {
+          ...(measurement?.detection || MISSING_RULING),
+          skewAngle: measurement?.skewAngle || 0,
+        },
+        frame
+      );
 
       addUserSheet({
         familyId: family.id,
@@ -139,8 +143,8 @@ export const useSheetImport = (): SheetImport => {
           id: nextSheetId(),
           label: toSheetLabel(file.name),
           src,
-          width: frame?.width || 0,
-          height: frame?.height || 0,
+          width: frame.width,
+          height: frame.height,
           ruling,
           lighting,
           texture,

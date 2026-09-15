@@ -27,6 +27,7 @@ export type {
   RulingKind,
   RulingPerspective,
   RulingProjection,
+  SheetFrame,
   SheetImageData,
   SheetOutline,
   SheetPoint,

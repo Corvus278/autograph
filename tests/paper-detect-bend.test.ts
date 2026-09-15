@@ -110,6 +110,7 @@ const measureRestoreError = (
 ): number => {
   const { step = STEP, phase = 0, angle = 0 } = params;
   const tangent = Math.tan(angle * DEGREES_TO_RADIANS);
+  const projection = { skewAngle: angle, perspective: null };
   let maxError = 0;
 
   for (let row = 0; row < bend.rowCount; row += 1) {
@@ -117,7 +118,7 @@ const measureRestoreError = (
 
     for (let x = Math.ceil(region.left); x < Math.floor(region.right); x += 1) {
       const straightY = phase + index * step + x * tangent;
-      const restored = straightY + sampleRulingBend(bend, angle, x, straightY);
+      const restored = straightY + sampleRulingBend(bend, projection, x, straightY);
       const error = Math.abs(restored - computeSyntheticLineY(params, index, x));
 
       maxError = Math.max(maxError, error);

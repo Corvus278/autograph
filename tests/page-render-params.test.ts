@@ -326,7 +326,7 @@ describe('чётные страницы', () => {
 
     expect(straight.bend).toStrictEqual(BENT_SHEET.ruling.bend);
     expect(mirrored.bend).toStrictEqual(
-      mirrorSheetRuling(BENT_SHEET.ruling, BENT_SHEET.width).bend
+      mirrorSheetRuling(BENT_SHEET.ruling, BENT_SHEET).bend
     );
     expect(mirrored.bend).not.toStrictEqual(straight.bend);
   });

@@ -313,7 +313,9 @@ const measurePointDrift = (probe: BaselineProbe, x: number, y: number): number =
     const straightY = firstLinePhase + line * step + x * tangent;
     const lineY =
       straightY +
-      (rulingBend ? sampleRulingBend(rulingBend, skewAngle, x, straightY) : 0);
+      (rulingBend
+        ? sampleRulingBend(rulingBend, { skewAngle, perspective: null }, x, straightY)
+        : 0);
 
     drift = Math.min(drift, Math.abs(y - lineY) / step);
   }
@@ -356,7 +358,9 @@ const measureBaselineDrift = (
       const along = leftPadding + (blockWidth * point) / (DRIFT_POINT_COUNT - 1);
       const x = along * cos - baseline * sin;
       const y = along * sin + baseline * cos;
-      const shift = bend ? sampleRulingBend(bend, blockRotate, x, y) : 0;
+      const shift = bend
+        ? sampleRulingBend(bend, { skewAngle: blockRotate, perspective: null }, x, y)
+        : 0;
 
       drift = Math.max(drift, measurePointDrift(probe, x, y + shift));
     }

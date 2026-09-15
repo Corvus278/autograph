@@ -13,6 +13,12 @@ const SKEW_ANGLE = -1.17;
 const PHASE = 21.4;
 
 /**
+ * Кадр листа: отражению высота нужна для нижнего поля, на перенос изгиба она
+ * не влияет.
+ */
+const FRAME = { width: FRAME_WIDTH, height: 2100 };
+
+/**
  * Допуск совпадения линий в долях шага — из задачи 1.3.
  */
 const LINE_TOLERANCE = 0.01;
@@ -59,7 +65,7 @@ const resolveLineY = (ruling: SheetRuling, index: number, x: number): number => 
   const straightY =
     firstLinePhase + index * step + x * Math.tan(skewAngle / DEGREES_IN_RADIAN);
 
-  return straightY + (bend ? sampleRulingBend(bend, skewAngle, x, straightY) : 0);
+  return straightY + (bend ? sampleRulingBend(bend, ruling, x, straightY) : 0);
 };
 
 /**
@@ -83,7 +89,7 @@ describe('отражение изгиба', () => {
   });
 
   it('линия, восстановленная по отражённой разлиновке, совпадает с отражённой линией листа', () => {
-    const mirrored = mirrorSheetRuling(RULING, FRAME_WIDTH);
+    const mirrored = mirrorSheetRuling(RULING, FRAME);
     let drift = 0;
 
     for (const index of [1, 3, 4, 5, 6, 9]) {
@@ -101,6 +107,6 @@ describe('отражение изгиба', () => {
   });
 
   it('ровные линии остаются ровными после отражения', () => {
-    expect(mirrorSheetRuling({ ...RULING, bend: null }, FRAME_WIDTH).bend).toBeNull();
+    expect(mirrorSheetRuling({ ...RULING, bend: null }, FRAME).bend).toBeNull();
   });
 });

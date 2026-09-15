@@ -152,9 +152,10 @@ const HALF_SAG_CLUTTERED_SHEET = {
 
 const detectSheetRuling = (params: SyntheticSheetParams): SheetRuling => {
   const skewAngle = params.angle || 0;
-  const detection = detectRuling(createSyntheticSheet(params), { skewAngle });
+  const image = createSyntheticSheet(params);
+  const detection = detectRuling(image, { skewAngle });
 
-  return buildSheetRuling({ ...detection, skewAngle });
+  return buildSheetRuling({ ...detection, skewAngle }, image);
 };
 
 /**
@@ -208,7 +209,7 @@ const measureRestoreError = (
       const straightY = ruling.firstLinePhase + line * ruling.step + x * tangent;
       const restored =
         straightY +
-        (ruling.bend ? sampleRulingBend(ruling.bend, ruling.skewAngle, x, straightY) : 0);
+        (ruling.bend ? sampleRulingBend(ruling.bend, ruling, x, straightY) : 0);
 
       maxError = Math.max(
         maxError,

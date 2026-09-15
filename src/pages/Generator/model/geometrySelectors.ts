@@ -21,7 +21,7 @@ import { selectPageSheetId } from './recipeSelectors';
  */
 export const getPageRuling = (sheet: PaperSheet, pageIndex: number): SheetRuling => {
   return isMirroredPage(pageIndex)
-    ? mirrorSheetRuling(sheet.ruling, sheet.width)
+    ? mirrorSheetRuling(sheet.ruling, sheet)
     : sheet.ruling;
 };
 

@@ -1,7 +1,7 @@
 import { deformGlyphPath } from '../glyph/deformGlyphPath';
 import type { GlyphPathCommand, GlyphPoint } from '../glyph/glyph.types';
 import { FALLBACK_FONT_METRICS } from '../measure/measureFontMetrics';
-import type { RulingBend } from '../paper/paper.types';
+import type { RulingBend, RulingProjection } from '../paper/paper.types';
 import { sampleRulingBend, sampleRulingBendSlope } from '../paper/sampleRulingBend';
 import type { LetterDistortion } from '../randomize/randomize.types';
 
@@ -119,9 +119,10 @@ type BendTracker = {
   bend: RulingBend;
 
   /**
-   * Наклон разлиновки в градусах, с которым выбирается изгиб.
+   * Наклон и перспектива разлиновки, в координате вдоль линий которых лежат
+   * строки узлов изгиба.
    */
-  skewAngle: number;
+  projection: RulingProjection;
 
   /**
    * Текущее преобразование из системы рисования в пиксели страницы.
@@ -150,7 +151,7 @@ type BendTracker = {
  * @returns сдвинутая точка в той же системе
  */
 const bendPoint = (tracker: BendTracker, x: number, y: number): GlyphPoint => {
-  const { bend, skewAngle, matrix } = tracker;
+  const { bend, projection, matrix } = tracker;
   const { a, b, c, d, e, f } = matrix;
   const determinant = a * d - b * c;
 
@@ -158,7 +159,7 @@ const bendPoint = (tracker: BendTracker, x: number, y: number): GlyphPoint => {
     return { x, y };
   }
 
-  const offset = sampleRulingBend(bend, skewAngle, a * x + c * y + e, b * x + d * y + f);
+  const offset = sampleRulingBend(bend, projection, a * x + c * y + e, b * x + d * y + f);
 
   return {
     x: x - (c * offset) / determinant,
@@ -192,13 +193,13 @@ const fillBentText = (
   x: number,
   y: number
 ): void => {
-  const { bend, skewAngle, matrix } = tracker;
+  const { bend, projection, matrix } = tracker;
   const { a, b, c, d, e, f } = matrix;
   const centerX = x + ctx.measureText(text).width / 2;
   const center = bendPoint(tracker, centerX, y);
   const slope = sampleRulingBendSlope(
     bend,
-    skewAngle,
+    projection,
     a * centerX + c * y + e,
     b * centerX + d * y + f
   );
@@ -227,15 +228,16 @@ const fillBentText = (
  *
  * @param ctx — контекст, в который идут вызовы
  * @param bend — изгиб линий разлиновки страницы
- * @param skewAngle — наклон разлиновки в градусах
+ * @param projection — наклон и перспектива разлиновки, в которых заданы строки
+ *   узлов изгиба
  * @returns контекст рисования по изогнутым линиям
  */
 const createBentContext = (
   ctx: RenderContext,
   bend: RulingBend,
-  skewAngle: number
+  projection: RulingProjection
 ): RenderContext => {
-  const tracker: BendTracker = { bend, skewAngle, matrix: IDENTITY_MATRIX, stack: [] };
+  const tracker: BendTracker = { bend, projection, matrix: IDENTITY_MATRIX, stack: [] };
 
   const apply = (next: AffineMatrix): void => {
     tracker.matrix = multiplyMatrices(tracker.matrix, next);
@@ -830,7 +832,10 @@ const drawPage = (
   if (layers.hasInk) {
     ctx.save();
 
-    const inkContext = bend === null ? ctx : createBentContext(ctx, bend, blockRotate);
+    const inkContext =
+      bend === null
+        ? ctx
+        : createBentContext(ctx, bend, { skewAngle: blockRotate, perspective: null });
 
     if (blockRotate !== 0) {
       inkContext.rotate(toRadians(blockRotate));

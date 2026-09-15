@@ -1,4 +1,12 @@
-import type { MarginLineSide, RulingBend, SheetRuling } from './paper.types';
+import type {
+  MarginLineSide,
+  RulingBend,
+  RulingPerspective,
+  SheetFrame,
+  SheetOutline,
+  SheetRuling,
+} from './paper.types';
+import { lineCoordinateAt, lineHeightAt } from './rulingPerspective';
 
 const DEGREES_IN_RADIAN = 180 / Math.PI;
 
@@ -72,6 +80,64 @@ const mirrorRulingBend = (
 };
 
 /**
+ * Перспектива отражённой фотографии: начало отсчёта переезжает к другому краю
+ * кадра, схождение линий по ширине меняет знак, дрейф шага по высоте остаётся
+ * прежним. При такой подстановке координата вдоль линий отражённого кадра
+ * отличается от исходной ровно на наклон во всю ширину — тем же слагаемым, что
+ * и фаза.
+ *
+ * @param perspective — перспектива листа; `null` — линии идут через равный шаг
+ * @param width — ширина кадра фотографии в пикселях
+ * @returns перспектива отражённой фотографии
+ */
+const mirrorPerspective = (
+  perspective: RulingPerspective | null,
+  width: number
+): RulingPerspective | null => {
+  if (!perspective) {
+    return null;
+  }
+
+  return {
+    ...perspective,
+    originX: width - perspective.originX,
+    /**
+     * `|| 0` убирает отрицательный ноль у листа без схождения по ширине: он
+     * неотличим в расчётах, но сравнение через `Object.is` видит в нём другое
+     * значение.
+     */
+    convergenceX: -perspective.convergenceX || 0,
+  };
+};
+
+/**
+ * Контур листа на отражённой фотографии: углы переезжают по горизонтали, а
+ * левые меняются местами с правыми — иначе обход четырёхугольника вывернулся
+ * бы, и вписанный прямоугольник вышел бы за лист.
+ *
+ * @param outline — контур листа; `null` — лист во весь кадр
+ * @param width — ширина кадра фотографии в пикселях
+ * @returns контур на отражённой фотографии
+ */
+const mirrorOutline = (
+  outline: SheetOutline | null,
+  width: number
+): SheetOutline | null => {
+  if (!outline) {
+    return null;
+  }
+
+  const { topLeft, topRight, bottomRight, bottomLeft } = outline;
+
+  return {
+    topLeft: { x: width - topRight.x, y: topRight.y },
+    topRight: { x: width - topLeft.x, y: topLeft.y },
+    bottomRight: { x: width - bottomLeft.x, y: bottomLeft.y },
+    bottomLeft: { x: width - bottomRight.x, y: bottomRight.y },
+  };
+};
+
+/**
  * Разлиновка того же листа, отражённого по горизонтали, — правой половины
  * разворота.
  *
@@ -82,14 +148,32 @@ const mirrorRulingBend = (
  * фотографии.
  *
  * @param ruling — разлиновка листа
- * @param width — ширина кадра фотографии в пикселях
+ * @param frame — кадр фотографии в пикселях: нижнее поле отсчитывается от низа
+ *   кадра, поэтому одной ширины мало
  * @returns разлиновка отражённой фотографии в тех же пикселях
  */
-export const mirrorSheetRuling = (ruling: SheetRuling, width: number): SheetRuling => {
+export const mirrorSheetRuling = (
+  ruling: SheetRuling,
+  frame: SheetFrame
+): SheetRuling => {
   const { step, firstLinePhase, skewAngle, margins, marginLineX, marginLineSide } =
     ruling;
+  const { width, height } = frame;
   const shift = Math.tan(skewAngle / DEGREES_IN_RADIAN) * width;
   const phase = firstLinePhase + shift;
+
+  /**
+   * Прямая, шедшая у левого края кадра, после отражения проходит там, где она
+   * шла у правого. Высота берётся через координату вдоль линий: при перспективе
+   * поправка не сводится к одному наклону во всю ширину, а зависит от того, на
+   * какой высоте прямая идёт.
+   *
+   * @param y — высота прямой у левого края кадра в пикселях
+   * @returns её высота у левого края отражённого кадра
+   */
+  const mirrorEdge = (y: number): number => {
+    return lineHeightAt(ruling, width, lineCoordinateAt(ruling, 0, y));
+  };
 
   return {
     step,
@@ -100,15 +184,15 @@ export const mirrorSheetRuling = (ruling: SheetRuling, width: number): SheetRuli
      */
     skewAngle: -skewAngle || 0,
     margins: {
-      top: margins.top + shift,
+      top: mirrorEdge(margins.top),
       right: margins.left,
-      bottom: margins.bottom - shift,
+      bottom: height - mirrorEdge(height - margins.bottom),
       left: margins.right,
     },
     marginLineX: marginLineX === null ? null : width - marginLineX,
     marginLineSide: flipMarginLineSide(marginLineSide),
     bend: mirrorRulingBend(ruling.bend, shift, width),
-    perspective: null,
-    outline: null,
+    perspective: mirrorPerspective(ruling.perspective, width),
+    outline: mirrorOutline(ruling.outline, width),
   };
 };
