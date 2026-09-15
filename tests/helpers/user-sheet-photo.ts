@@ -5,6 +5,8 @@ import { screen, waitFor } from '@testing-library/react';
 import type userEvent from '@testing-library/user-event';
 import { expect } from 'vitest';
 
+import type { SyntheticField, SyntheticSheetParams } from './synthetic-sheet';
+
 /**
  * Снимок листа в линейку с полями со всех сторон и линией поля слева. Верхнее
  * поле стоит ровно на линии разлиновки, нижнее — ровно под последней, поэтому
@@ -29,6 +31,27 @@ export const RULED_PHOTO_FOUND_MARGINS = {
   right: RULED_PHOTO.margins.right + RULED_PHOTO.step * MARGIN_LINE_GAP_SHARE,
   left: RULED_PHOTO.margins.left + RULED_PHOTO.step * MARGIN_LINE_GAP_SHARE,
 };
+
+/**
+ * Прогиб линий между линией поля и правыми концами линий: в середине на три
+ * десятых шага вниз, к краям области сходит на нет без излома — за крайним
+ * узлом сетка изгиба держит смещение постоянным.
+ */
+const sagInsideRuledArea: SyntheticField = (x) => {
+  const left = RULED_PHOTO.marginLineX;
+  const right = RULED_PHOTO.width - RULED_PHOTO.margins.right;
+  const share = Math.max(-1, Math.min(1, (2 * x - left - right) / (right - left)));
+
+  return 0.3 * RULED_PHOTO.step * Math.cos((Math.PI * share) / 2) ** 2;
+};
+
+/**
+ * Тот же снимок с прогнутыми линиями.
+ */
+export const BENT_PHOTO = {
+  ...RULED_PHOTO,
+  bend: sagInsideRuledArea,
+} satisfies SyntheticSheetParams;
 
 /**
  * Наклон повёрнутого снимка в градусах: в пределах свипа детектора и заметно

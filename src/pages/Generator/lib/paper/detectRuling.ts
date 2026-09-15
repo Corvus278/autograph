@@ -1,3 +1,4 @@
+import { detectRulingBend, type RulingBendRegion } from './detectRulingBend';
 import { detectSkewAngle, MAX_SKEW_ANGLE, SKEW_ANGLE_STEP } from './detectSkewAngle';
 import { ANALYSIS_IMAGE_SIZE } from './downsampleSheetImage';
 import type { PaperMargins, RulingDetection, SheetImageData } from './paper.types';
@@ -205,6 +206,13 @@ export type DetectedRuling = RulingDetection & {
    * Край, у которого стоит линия поля. `null` — линии поля нет.
    */
   marginLineSide: MarginLineSide | null;
+
+  /**
+   * Доля узлов области с линиями, где при измерении изгиба линия нашлась, от 0
+   * до 1. Есть и при `bend: null`: по ней сборка профилей показывает, почему
+   * изгиб отброшен, и сверяет пороги надёжности.
+   */
+  bendFoundNodeShare: number;
 };
 
 const NO_MARGINS: PaperMargins = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -259,6 +267,7 @@ const toMissingDetection = (confidence: number): DetectedRuling => {
     marginLineX: null,
     marginLineSide: null,
     bend: null,
+    bendFoundNodeShare: 0,
     confidence,
   };
 };
@@ -1136,6 +1145,56 @@ const isSameStep = (first: number, second: number): boolean => {
 };
 
 /**
+ * Область измерения изгиба в столбцах кадра: от концов горизонтальных линий,
+ * а со стороны линии поля — до неё. Концы и линия поля найдены вдоль
+ * вертикалей разлиновки, а полосы изгиба режутся по столбцам кадра: на
+ * наклонном листе граница проходит кадр наискосок, и область берётся по её
+ * самому внутреннему положению между верхней и нижней линиями. Иначе крайняя
+ * полоса на части строк легла бы за концы линий или за линию поля, где трасса
+ * цепляется за пятна спирали и чужую линейку.
+ *
+ * @param image — полутоновая выжимка
+ * @param tangent — тангенс наклона разлиновки
+ * @param margins — найденные поля: по верхнему и нижнему видно высоту области
+ * @param rowBorders — концы горизонтальных линий
+ * @param marginLine — линия поля; `null` — её нет
+ * @returns горизонтальная область с линиями
+ */
+const toBendRegion = (
+  image: SheetImageData,
+  tangent: number,
+  margins: PaperMargins,
+  rowBorders: RowBorders,
+  marginLine: MarginLine | null
+): RulingBendRegion => {
+  const topShift = margins.top * tangent;
+  const bottomShift = (image.height - margins.bottom) * tangent;
+  const leftShift = Math.min(topShift, bottomShift);
+  const rightShift = Math.max(topShift, bottomShift);
+  const left = rowBorders.left > 0 ? rowBorders.left - leftShift : 0;
+  const right =
+    rowBorders.right < image.width ? rowBorders.right - rightShift : image.width;
+
+  if (!marginLine) {
+    return { left, right };
+  }
+
+  switch (marginLine.side) {
+    case 'left': {
+      return { left: Math.max(left, marginLine.x - leftShift), right };
+    }
+
+    case 'right': {
+      return { left, right: Math.min(right, marginLine.x - rightShift) };
+    }
+
+    default: {
+      throw new Error(`Неизвестная сторона линии поля: ${marginLine.side}`);
+    }
+  }
+};
+
+/**
  * Измеряет разлиновку на фотографии листа: шаг — автокорреляцией профиля
  * яркости, снятого вдоль наклонных линий, фазу и поля — по тому же профилю,
  * вид разлиновки — повторным измерением поперёк.
@@ -1277,6 +1336,11 @@ export const detectRuling = (
     left: leftBorder > 0 ? leftBorder + edgeGap : 0,
     right: rightBorder < image.width ? image.width - rightBorder + edgeGap : 0,
   };
+  const bendDetection = detectRulingBend(
+    image,
+    { step: period.step, firstLinePhase: period.phase, skewAngle, margins },
+    toBendRegion(image, tangent, margins, rowBorders, marginLine)
+  );
 
   return {
     isDetected: true,
@@ -1286,7 +1350,8 @@ export const detectRuling = (
     margins,
     marginLineX: marginLine && marginLine.x,
     marginLineSide: marginLine && marginLine.side,
-    bend: null,
+    bend: bendDetection.bend,
+    bendFoundNodeShare: bendDetection.foundNodeShare,
     confidence: period.confidence,
   };
 };

@@ -434,8 +434,16 @@ const fillGaps = (grid: NodeGrid): void => {
   });
 };
 
+/**
+ * Округляет смещение до сотой пикселя. Отрицательный ноль заменяется нулём:
+ * хранилище и артефакт пишут изгиб в JSON, где `-0` становится `0`, и лист,
+ * перечитанный из хранилища, нёс бы не то же число, что в памяти.
+ *
+ * @param offset — смещение в пикселях
+ * @returns смещение, кратное сотой
+ */
 const roundOffset = (offset: number): number => {
-  return Math.round(offset * OFFSET_PRECISION) / OFFSET_PRECISION;
+  return Math.round(offset * OFFSET_PRECISION) / OFFSET_PRECISION || 0;
 };
 
 /**

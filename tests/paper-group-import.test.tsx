@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSyntheticSheet } from './helpers/synthetic-sheet';
 import {
   ANGLE_TOLERANCE,
+  BENT_PHOTO,
   MARGIN_TOLERANCE,
   readUserRuling,
   RULED_PHOTO,
@@ -121,6 +122,24 @@ describe('импорт фотографии листа', () => {
     const [stored] = readUserSheets();
 
     expect(stored?.sheet.ruling).toEqual(readUserRuling());
+  });
+
+  it('сохраняет у изогнутого листа изгиб линий, и из хранилища он читается тем же', async () => {
+    const user = userEvent.setup();
+
+    decodeSheetImage.mockResolvedValue(createSyntheticSheet(BENT_PHOTO));
+
+    render(<PaperGroup />);
+    await uploadUserPhoto(user);
+
+    const bend = readUserRuling()?.bend;
+
+    expect(bend?.offsets.length).toBeGreaterThan(0);
+
+    useGeneratorStore.setState({ userSheets: [] });
+    useGeneratorStore.getState().restoreUserSheets();
+
+    expect(readUserRuling()?.bend).toStrictEqual(bend);
   });
 
   it('на ненайденной разлиновке оставляет лист с нулевым шагом и без линии поля', async () => {

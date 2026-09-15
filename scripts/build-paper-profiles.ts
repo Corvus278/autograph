@@ -15,6 +15,7 @@ import type {
   PaperMargins,
   PaperSheet,
   SheetImageData,
+  SheetRuling,
 } from '../src/pages/Generator/lib/paper';
 import {
   buildSheetRuling,
@@ -98,6 +99,12 @@ type SheetProfileResult = {
    * Стороны, поля с которых детектор не нашёл и которые взяты фолбэком.
    */
   fallbackSides: (keyof PaperMargins)[];
+
+  /**
+   * Доля узлов области с линиями, где при измерении изгиба линия нашлась: по
+   * ней сверяются пороги надёжности изгиба.
+   */
+  bendFoundNodeShare: number;
 
   /**
    * Пиксели карты текстуры или `null`, если карта не строилась.
@@ -207,8 +214,29 @@ const buildSheetProfile = (
     fallbackSides: MARGIN_SIDES.filter((side) => {
       return !detection.margins[side];
     }),
+    bendFoundNodeShare: detection.bendFoundNodeShare,
     texturePixels: toTexturePixels(textureMap),
   };
+};
+
+/**
+ * Изгиб экземпляра для отчёта: наибольший отход линии от прямой гребёнки в
+ * долях шага и доля найденных узлов — по ним видно, насколько лист изогнут и
+ * почему изгиб отброшен.
+ */
+const describeBend = (ruling: SheetRuling, foundNodeShare: number): string => {
+  const { bend, step } = ruling;
+  const nodesText = `узлов найдено ${Math.round(foundNodeShare * 100)} %`;
+
+  if (!bend) {
+    return `изгиба нет (${nodesText})`;
+  }
+
+  const maxOffset = bend.offsets.reduce((max, offset) => {
+    return Math.max(max, Math.abs(offset));
+  }, 0);
+
+  return `изгиб до ${(maxOffset / step).toFixed(3)} шага (${nodesText})`;
 };
 
 /**
@@ -231,6 +259,7 @@ const describeProfile = (name: string, result: SheetProfileResult): string => {
     `угол ${skewAngle.toFixed(2)}°`,
     `поля сверху/справа/снизу/слева ${marginsText}`,
     `линия поля ${marginLineText}`,
+    describeBend(sheet.ruling, result.bendFoundNodeShare),
     `свет ${sheet.lighting?.isUsable ? 'пригоден' : 'непригоден'}`,
   ].join(', ');
 };

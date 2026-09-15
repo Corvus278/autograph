@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { buildPaperFamilies } from '@pages/Generator/config/paperFamilies';
 import { deriveGeometry } from '@pages/Generator/lib/calibrate';
 import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
@@ -95,6 +98,27 @@ describe('разбор артефакта профилей', () => {
         return sheet.id;
       })
     ).toEqual(['1']);
+  });
+});
+
+describe('закоммиченный артефакт пресет-пака', () => {
+  /**
+   * Сырой текст, а не разобранный объект: изгиб пишет скрипт сборки, читает
+   * приложение, и расхождение формата молча выпрямило бы листы.
+   */
+  it('разбирает каждый лист с изгибом в сыром артефакте в изогнутый', () => {
+    const text = readFileSync(
+      join(process.cwd(), 'public', 'paper', 'profiles.json'),
+      'utf8'
+    );
+    const rawBendCount = text.match(/"bend":\{/g)?.length || 0;
+    const sheets = Object.values(parsePaperProfiles(JSON.parse(text))).flat();
+    const bentCount = sheets.reduce((count, sheet) => {
+      return sheet.ruling.bend === null ? count : count + 1;
+    }, 0);
+
+    expect(rawBendCount).toBeGreaterThan(0);
+    expect(bentCount).toBe(rawBendCount);
   });
 });
 

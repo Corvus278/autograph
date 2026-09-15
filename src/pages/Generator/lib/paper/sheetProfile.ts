@@ -356,10 +356,30 @@ export const buildStripProfiles = (
 };
 
 /**
+ * Ширина окна местной фазы отклика гребёнки в шагах разлиновки. Внутри четырёх
+ * шагов прогиб в треть шага поворачивает фазу не больше чем на полтора радиана к
+ * краям окна, а среднее направление остаётся фазой столбца. Полуокно в два шага
+ * шире окна затягивания провалов в шаг: пятно, до которого затягивание дотянет
+ * область, проецируется на фазу линий, а не на свою.
+ */
+const PHASE_WINDOW_STEPS = 4;
+
+/**
  * Отклик поперёк горизонтальной разлиновки: для каждого столбца считается,
  * насколько его тёмные точки попадают в найденную гребёнку линий. Там, где
  * линии кончаются, отклик падает до нуля — по этому обрыву находятся левое и
  * правое поля.
+ *
+ * Отклик столбца — проекция его квадратур `(C, S)` на местную фазу, то есть на
+ * направление сумм квадратур в окне `PHASE_WINDOW_STEPS` шагов вокруг столбца, а
+ * не косинусная сумма с фазой прямой гребёнки: линия, прогнутая на треть шага,
+ * посреди листа уходит от гребёнки почти в противофазу, косинус там падает ниже
+ * порога и рвёт область надвое, а самый длинный её участок уводит внутрь конец
+ * линий у противоположного края. Прогиб меняется по ширине медленно, и местная
+ * фаза идёт за ним. Модуль `√(C² + S²)` тоже не зависел бы от прогиба, но он
+ * положителен и там, где линий нет: тёмные пятна спирали у концов линий дали бы
+ * отклик, и затягивание провалов пришило бы их к области. Проекция на фазу
+ * соседних линий гасит такие пятна, как и косинусная сумма.
  *
  * @param image — полутоновая выжимка
  * @param angleDegrees — наклон разлиновки в градусах
@@ -385,8 +405,8 @@ export const buildCombResponse = (
 
   const tangent = toTangent(angleDegrees);
   const mean = computeMean(luminance);
-  const frequency = (2 * Math.PI) / step;
-  const sums = new Float64Array(size);
+  const cosSums = new Float64Array(size);
+  const sinSums = new Float64Array(size);
   const counts = new Float64Array(size);
 
   for (let y = 0; y < height; y += 1) {
@@ -397,16 +417,44 @@ export const buildCombResponse = (
       const bin = Math.round(x + offset) - guard;
 
       if (bin >= 0 && bin < size) {
-        const alongLines = y - x * tangent;
-        const weight = Math.cos((alongLines - phase) * frequency);
+        const cycles = (y - x * tangent - phase) / step;
+        const tableIndex = Math.floor((cycles - Math.floor(cycles)) * PHASE_TABLE_SIZE);
+        const deviation = mean - (luminance[row + x] || 0);
 
-        sums[bin] = (sums[bin] || 0) + (mean - (luminance[row + x] || 0)) * weight;
+        cosSums[bin] = (cosSums[bin] || 0) + deviation * (COS_TABLE[tableIndex] || 0);
+        sinSums[bin] = (sinSums[bin] || 0) + deviation * (SIN_TABLE[tableIndex] || 0);
         counts[bin] = (counts[bin] || 0) + 1;
       }
     }
   }
 
-  return { values: toMeans(sums, counts), origin: guard };
+  const half = Math.max(1, Math.round((PHASE_WINDOW_STEPS * step) / 2));
+  const cosPrefix = new Float64Array(size + 1);
+  const sinPrefix = new Float64Array(size + 1);
+
+  for (let bin = 0; bin < size; bin += 1) {
+    cosPrefix[bin + 1] = (cosPrefix[bin] || 0) + (cosSums[bin] || 0);
+    sinPrefix[bin + 1] = (sinPrefix[bin] || 0) + (sinSums[bin] || 0);
+  }
+
+  const values = new Float64Array(size);
+
+  for (let bin = 0; bin < size; bin += 1) {
+    const from = Math.max(0, bin - half);
+    const to = Math.min(size, bin + half + 1);
+    const localCos = (cosPrefix[to] || 0) - (cosPrefix[from] || 0);
+    const localSin = (sinPrefix[to] || 0) - (sinPrefix[from] || 0);
+    const norm = Math.hypot(localCos, localSin);
+    const count = counts[bin] || 0;
+
+    if (count > 0 && norm > 0) {
+      values[bin] =
+        ((cosSums[bin] || 0) * localCos + (sinSums[bin] || 0) * localSin) /
+        (norm * count);
+    }
+  }
+
+  return { values, origin: guard };
 };
 
 /**
