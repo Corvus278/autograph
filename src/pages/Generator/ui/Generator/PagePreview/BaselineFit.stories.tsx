@@ -5,7 +5,8 @@ import { expect, waitFor } from 'storybook/test';
 
 import { GRID_FAMILY_ID, HANDWRITING_FONTS, LINED_FAMILY_ID } from '../../../config';
 import { loadFontMetrics } from '../../../lib/measure/measureFontMetrics';
-import type { PaperFamily } from '../../../lib/paper';
+import type { PaperFamily, PaperSheet, RulingBend } from '../../../lib/paper';
+import { sampleRulingBend } from '../../../lib/paper';
 import { clearLayoutCache } from '../../../model/measureLayout';
 import { loadPaperFamilies } from '../../../model/paperProfiles';
 import {
@@ -59,10 +60,25 @@ type BaselineProbe = {
   topOffset: number;
 
   /**
+   * Отступ левого края блока от левого края страницы до поворота блока.
+   */
+  leftPadding: number;
+
+  /**
+   * Ширина блока текста в пикселях кадра листа.
+   */
+  blockWidth: number;
+
+  /**
    * Угол наклона блока в градусах. Блок поворачивается вокруг левого верхнего
    * угла страницы.
    */
   blockRotate: number;
+
+  /**
+   * Изгиб, по которому рендерер гнёт строки страницы.
+   */
+  bend: RulingBend | null;
 
   /**
    * Подъём строчного бокса над базовой линией в долях кегля.
@@ -88,6 +104,11 @@ type BaselineProbe = {
    * Наклон разлиновки страницы в градусах; на чётной странице — отражённый.
    */
   skewAngle: number;
+
+  /**
+   * Изгиб линий разлиновки страницы; на чётной странице — отражённый.
+   */
+  rulingBend: RulingBend | null;
 
   /**
    * Число строк на показанной странице.
@@ -154,6 +175,24 @@ const STEP_EPSILON = 1e-9;
 const MIN_LINE_COUNT = 8;
 
 /**
+ * Сколько точек строки сверяется с линией: от левого до правого края блока
+ * включительно. Изгиб линии меняется на ширине листа плавно, и девяти точек
+ * хватает, чтобы не проскочить ни горб, ни прогиб.
+ */
+const DRIFT_POINT_COUNT = 9;
+
+/**
+ * Наибольший отход растянутого изгиба в долях шага: вчетверо больше допуска,
+ * чтобы строка без изгиба заметно уходила с линий.
+ */
+const AMPLIFIED_BEND_SHARE = 0.4;
+
+/**
+ * Узлы изгиба хранятся с точностью до сотой пикселя.
+ */
+const OFFSET_PRECISION = 100;
+
+/**
  * Шрифты, на которых проверяется попадание. Первые из пресета: расхождение
  * метрик ловится уже на нескольких начертаниях, а прогонять все шестнадцать —
  * минуты в браузере на пустом месте.
@@ -193,12 +232,16 @@ const BaselineFitProbe: FC = () => {
           fontSizePx: params.geometry.fontSizePx,
           lineSpacing: params.geometry.lineSpacing,
           topOffset: params.geometry.topOffset,
+          leftPadding: params.geometry.leftPadding,
+          blockWidth: params.geometry.blockWidth,
           blockRotate: params.geometry.blockRotate,
+          bend: params.geometry.bend,
           fontAscent: params.geometry.fontMetrics.fontAscent,
           lineHeight: params.geometry.fontMetrics.lineHeight,
           step: ruling.step,
           firstLinePhase: ruling.firstLinePhase,
           skewAngle: ruling.skewAngle,
+          rulingBend: ruling.bend,
           lineCount: params.page.lines.length,
           pageWidth: source.pageWidth,
           pageHeight: source.pageHeight,
@@ -236,32 +279,87 @@ const measureLineStep = (probe: BaselineProbe): number => {
 };
 
 /**
+ * Переводит градусы в радианы.
+ *
+ * @param degrees — угол в градусах
+ * @returns угол в радианах
+ */
+const toRadians = (degrees: number): number => {
+  return (degrees * Math.PI) / 180;
+};
+
+/**
+ * Расстояние от точки страницы до ближайшей линии разлиновки листа в долях
+ * шага, по вертикали.
+ *
+ * Линия k проходит через столбец x на высоте `фаза + k × шаг + x × tg θ` плюс
+ * изгиб линии в этом столбце. Изгиб читается в точке самой линии, а не в
+ * сверяемой точке: у изогнутой разлиновки соседние линии изогнуты по-разному.
+ * Кандидаты — ближайшая прямая линия и две соседние: изгиб до половины шага
+ * может сделать ближайшей соседнюю.
+ *
+ * @param probe — снимок разлиновки страницы
+ * @param x — столбец точки в пикселях страницы
+ * @param y — высота точки в пикселях страницы
+ * @returns расстояние в долях шага
+ */
+const measurePointDrift = (probe: BaselineProbe, x: number, y: number): number => {
+  const { step, firstLinePhase, skewAngle, rulingBend } = probe;
+  const tangent = Math.tan(toRadians(skewAngle));
+  const nearest = Math.round((y - x * tangent - firstLinePhase) / step);
+  let drift = Number.POSITIVE_INFINITY;
+
+  for (let line = nearest - 1; line <= nearest + 1; line += 1) {
+    const straightY = firstLinePhase + line * step + x * tangent;
+    const lineY =
+      straightY +
+      (rulingBend ? sampleRulingBend(rulingBend, skewAngle, x, straightY) : 0);
+
+    drift = Math.min(drift, Math.abs(y - lineY) / step);
+  }
+
+  return drift;
+};
+
+/**
  * Наибольшее отклонение базовых линий страницы от линий разлиновки в долях
- * шага.
+ * шага по точкам каждой строки от левого до правого края блока.
  *
  * Базовые линии считаются по модели рендерера: до поворота строка n стоит на
- * высоте `topOffset + fontAscent × кегль + n × шаг строк`. Блок поворачивается
- * вокруг левого верхнего угла страницы, поэтому базовая линия b пересекает
- * столбец x на высоте `b / cos θ + x × tg θ`, а линия разлиновки — на высоте
- * `фаза + k × шаг + x × tg θ`. Слагаемое вдоль строки у них общее, и попадание
- * — это расстояние от `b / cos θ` до ближайшей линии у левого края: на листе в
- * клетку строка занимает две клетки, и базовая линия садится на каждую вторую.
+ * высоте `topOffset + fontAscent × кегль + n × шаг строк`, блок поворачивается
+ * вокруг левого верхнего угла страницы, а изгиб сдвигает точку по вертикали
+ * на отход, прочитанный в её месте на странице под углом блока. На листе в
+ * клетку строка занимает две клетки, и базовая линия садится на каждую вторую
+ * линию, поэтому сверка идёт с ближайшей.
  *
  * @param probe — снимок параметров отрисовки и разлиновки
+ * @param bend — изгиб, которым гнутся строки; не задан — изгиб рендерера,
+ *   `null` — тот же расчёт для прямых строк
  * @returns отклонение в долях шага разлиновки
  */
-const measureBaselineDrift = (probe: BaselineProbe): number => {
+const measureBaselineDrift = (
+  probe: BaselineProbe,
+  bend: RulingBend | null = probe.bend
+): number => {
   const { topOffset, fontSizePx, fontAscent, blockRotate } = probe;
-  const { step, firstLinePhase, lineCount } = probe;
+  const { leftPadding, blockWidth, lineCount } = probe;
   const lineStep = measureLineStep(probe);
-  const stretch = 1 / Math.cos((blockRotate * Math.PI) / 180);
+  const radians = toRadians(blockRotate);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
   let drift = 0;
 
   for (let index = 0; index < lineCount; index += 1) {
-    const baselineY = (topOffset + fontAscent * fontSizePx + index * lineStep) * stretch;
-    const lines = (baselineY - firstLinePhase) / step;
+    const baseline = topOffset + fontAscent * fontSizePx + index * lineStep;
 
-    drift = Math.max(drift, Math.abs(lines - Math.round(lines)));
+    for (let point = 0; point < DRIFT_POINT_COUNT; point += 1) {
+      const along = leftPadding + (blockWidth * point) / (DRIFT_POINT_COUNT - 1);
+      const x = along * cos - baseline * sin;
+      const y = along * sin + baseline * cos;
+      const shift = bend ? sampleRulingBend(bend, blockRotate, x, y) : 0;
+
+      drift = Math.max(drift, measurePointDrift(probe, x, y + shift));
+    }
   }
 
   return drift;
@@ -311,15 +409,16 @@ const waitForProbe = async (
 };
 
 /**
- * Проверяет, что базовые линии сели на разлиновку листа страницы.
+ * Проверяет, что базовые линии сели на разлиновку листа страницы по всей
+ * длине строк.
  *
  * @param probe — снятая проба
  */
 const expectBaselinesOnRuling = async (probe: BaselineProbe): Promise<void> => {
   /**
-   * Блок наклонён ровно на угол разлиновки страницы: только при этом сдвиг
-   * вдоль строки у базовой линии и у линии разлиновки один и тот же, и
-   * попадание у левого края значит попадание по всей строке.
+   * Блок наклонён ровно на угол разлиновки страницы: при другом угле строка
+   * расходилась бы с линией к правому краю, а изгиб читался бы рендерером не
+   * в тех точках, где его измерили на фотографии.
    */
   await expect(probe.blockRotate).toBeCloseTo(probe.skewAngle, 9);
 
@@ -397,6 +496,108 @@ const countDistinctSteps = (family: PaperFamily): number => {
   return steps.size;
 };
 
+/**
+ * Наибольший отход линий листа от прямой в пикселях кадра.
+ *
+ * @param bend — изгиб линий листа
+ * @returns наибольший отход по модулю
+ */
+const measureBendReach = (bend: RulingBend): number => {
+  return bend.offsets.reduce((reach, offset) => {
+    return Math.max(reach, Math.abs(offset));
+  }, 0);
+};
+
+/**
+ * Экземпляр пресет-пака вместе с семьёй, в которую он входит.
+ */
+type SheetInFamily = {
+  /**
+   * Семья экземпляра.
+   */
+  family: PaperFamily;
+
+  /**
+   * Сам экземпляр.
+   */
+  sheet: PaperSheet;
+};
+
+/**
+ * Экземпляр пресет-пака с наибольшим отходом линий в долях шага вместе с его
+ * семьёй.
+ *
+ * @param families — предустановленные семьи с измерениями
+ * @returns семья и экземпляр; `null` — изогнутых экземпляров нет
+ */
+const findMostBentSheet = (families: PaperFamily[]): SheetInFamily | null => {
+  let found: SheetInFamily | null = null;
+  let bestShare = 0;
+
+  for (const family of families) {
+    for (const sheet of family.sheets) {
+      const { bend, step } = sheet.ruling;
+      const share = bend && step > 0 ? measureBendReach(bend) / step : 0;
+
+      if (share > bestShare) {
+        bestShare = share;
+        found = { family, sheet };
+      }
+    }
+  }
+
+  return found;
+};
+
+/**
+ * Тот же экземпляр с изгибом, растянутым до заданного отхода: форма изгиба
+ * настоящая, с фотографии, а размах такой, что строка без изгиба уходит с
+ * линий за допуск.
+ *
+ * @param sheet — изогнутый экземпляр пресет-пака
+ * @returns экземпляр с растянутым изгибом
+ */
+const amplifySheetBend = (sheet: PaperSheet): PaperSheet => {
+  const { bend, step } = sheet.ruling;
+
+  if (!bend) {
+    throw new Error(`У экземпляра нет изгиба: ${sheet.id}`);
+  }
+
+  const factor = (AMPLIFIED_BEND_SHARE * step) / measureBendReach(bend);
+
+  return {
+    ...sheet,
+    ruling: {
+      ...sheet.ruling,
+      bend: {
+        ...bend,
+        offsets: bend.offsets.map((offset) => {
+          return Math.round(offset * factor * OFFSET_PRECISION) / OFFSET_PRECISION;
+        }),
+      },
+    },
+  };
+};
+
+/**
+ * Семьи, в которых экземпляр заменён другим с тем же идентификатором.
+ *
+ * @param families — предустановленные семьи
+ * @param sheet — экземпляр на замену
+ * @returns семьи с заменённым экземпляром
+ */
+const replaceSheet = (families: PaperFamily[], sheet: PaperSheet): PaperFamily[] => {
+  return families.map((family) => {
+    return {
+      ...family,
+      sheets: family.sheets.map((item) => {
+        return item.id === sheet.id ? sheet : item;
+      }),
+    };
+  });
+};
+
 const meta = {
   component: BaselineFitProbe,
   beforeEach: () => {
@@ -452,9 +653,10 @@ export const FontSwitchKeepsRuling: Story = {
  * экземпляре и на обеих половинах разворота, а страница равна кадру своего
  * листа.
  *
- * Экземпляры берутся из артефакта профилей: у каждого свой шаг, поля и наклон,
- * и на чётной странице разлиновка отражена вместе с наклоном — на наклонных
- * листах потерянная при отражении поправка вывела бы строки за допуск.
+ * Экземпляры берутся из артефакта профилей: у каждого свой шаг, поля, наклон
+ * и изгиб, и на чётной странице разлиновка отражена вместе с наклоном и
+ * изгибом — на наклонных листах потерянная при отражении поправка вывела бы
+ * строки за допуск.
  */
 export const PhotoRulingOnSheet: Story = {
   play: async () => {
@@ -474,6 +676,45 @@ export const PhotoRulingOnSheet: Story = {
           await expect(probe.pageHeight).toBe(sheet.height);
         }
       }
+    }
+  },
+};
+
+/**
+ * Строки повторяют изгиб линий по всей длине — на нечётной и на зеркальной
+ * странице, — а тот же расчёт для прямых строк уходит с линий за допуск.
+ *
+ * Отход изгиба у экземпляров пресет-пака не больше десятой шага: прямые строки
+ * на них укладываются в допуск, и отрицательный контроль ничего бы не
+ * проверил. Поэтому берётся самый изогнутый экземпляр, а размах его изгиба
+ * растягивается до четырёх десятых шага — форма линий остаётся снятой с
+ * фотографии.
+ *
+ * Отражение изгиба эта арифметика не проверяет: изгиб рендерера и изгиб
+ * разлиновки страницы берутся из одной отражённой разлиновки и совпадают и
+ * при потерянном отражении. Его проверяет растр отражённой фотографии в
+ * `RasterRuling.stories.tsx`.
+ */
+export const BentRulingOnSheet: Story = {
+  play: async () => {
+    const families = await loadPaperFamilies();
+    const found = findMostBentSheet(families);
+
+    if (!found) {
+      throw new Error('В пресет-паке нет изогнутых экземпляров');
+    }
+
+    const { family, sheet } = found;
+    const bentFamilies = replaceSheet(families, amplifySheetBend(sheet));
+
+    for (const pageIndex of [0, 1]) {
+      applySheet(bentFamilies, family.id, sheet.id, pageIndex);
+
+      const probe = await waitForProbe(DEFAULT_FONT, pageIndex, sheet.id);
+
+      await expect(probe.bend).not.toBeNull();
+      await expectBaselinesOnRuling(probe);
+      await expect(measureBaselineDrift(probe, null)).toBeGreaterThan(DRIFT_TOLERANCE);
     }
   },
 };

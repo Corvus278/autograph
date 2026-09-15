@@ -4,11 +4,32 @@ import { useEffect } from 'react';
 import { expect, waitFor } from 'storybook/test';
 import { useShallow } from 'zustand/react/shallow';
 
-import { GRID_FAMILY_ID, HANDWRITING_FONTS, LINED_FAMILY_ID } from '../../../config';
+import {
+  CUSTOM_FONT_FAMILY,
+  GRID_FAMILY_ID,
+  HANDWRITING_FONTS,
+  LINED_FAMILY_ID,
+} from '../../../config';
 import { GRID_ROW_STEPS, MARGIN_LINE_GAP_SHARE } from '../../../lib/calibrate';
+import type { GlyphSource } from '../../../lib/glyph';
 import { contourBounds } from '../../../lib/glyph';
-import { loadFontMetrics } from '../../../lib/measure/measureFontMetrics';
-import type { PaperFamily, PaperSheet } from '../../../lib/paper';
+import {
+  clearFontMetricsCache,
+  loadFontMetrics,
+} from '../../../lib/measure/measureFontMetrics';
+import type {
+  PaperFamily,
+  PaperSheet,
+  RulingBend,
+  SheetImageData,
+} from '../../../lib/paper';
+import {
+  buildSheetRuling,
+  detectRuling,
+  detectSkewAngle,
+  sampleRulingBend,
+  sampleRulingBendSlope,
+} from '../../../lib/paper';
 import type { PageRenderParams, RenderImage } from '../../../lib/render';
 import { loadRenderImage } from '../../../lib/render';
 import { drawPage, measurePageImage } from '../../../model/drawPage';
@@ -17,6 +38,7 @@ import { clearLayoutCache } from '../../../model/measureLayout';
 import { mirrorRenderImage } from '../../../model/mirrorRenderImage';
 import { loadPaperFamilies } from '../../../model/paperProfiles';
 import { findSheet } from '../../../model/paperSelectors';
+import { findFontUrl } from '../../../model/useFontGlyphs';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -43,10 +65,17 @@ type RasterProbe = {
   layoutSheetId: string;
 
   /**
-   * Число страниц раскладки: по нему видно, что раскладка пересчитана под
-   * текущий текст, а не осталась от прежнего на том же листе.
+   * Число страниц раскладки.
    */
   pageCount: number;
+
+  /**
+   * Число слов во всех строках раскладки: по нему видно, что раскладка
+   * пересчитана под текущий текст, а не осталась от прежнего на том же листе.
+   * Числа страниц для этого мало: у двух текстов на одном листе оно
+   * совпадает.
+   */
+  wordCount: number;
 
   /**
    * Номер показанной страницы: у соседних половин разворота параметры разные,
@@ -164,6 +193,79 @@ type RasterRuling = {
 };
 
 /**
+ * Узкая полоса столбцов страницы, в которой строки сверяются с линиями.
+ */
+type RasterStrip = {
+  /**
+   * Левый столбец полосы включительно.
+   */
+  left: number;
+
+  /**
+   * Правый столбец полосы не включая.
+   */
+  right: number;
+
+  /**
+   * Столбец середины полосы: в нём читаются изгиб и положение линий.
+   */
+  center: number;
+};
+
+/**
+ * Полосы замера у левого края блока, посередине и у правого края.
+ */
+type StripSet = {
+  /**
+   * Полоса у левого края блока.
+   */
+  left: RasterStrip;
+
+  /**
+   * Полоса посередине блока.
+   */
+  middle: RasterStrip;
+
+  /**
+   * Полоса у правого края блока.
+   */
+  right: RasterStrip;
+};
+
+/**
+ * Как строки страницы легли на линии в одной полосе.
+ */
+type StripFit = {
+  /**
+   * Наибольшее отклонение базовых линий геометрии с изгибом листа от линий
+   * растра в долях шага.
+   */
+  drift: number;
+
+  /**
+   * Отклонение низа чернил каждой строки от линии растра в долях шага.
+   * `null` — чернил строки в полосе не нашлось.
+   */
+  inkOffsets: (number | null)[];
+};
+
+/**
+ * Страница, проверенная по растру, вместе с фотографией, на которой её
+ * рисовали.
+ */
+type RasterCheck = {
+  /**
+   * Проба проверенной страницы.
+   */
+  probe: RasterProbe;
+
+  /**
+   * Фотография листа страницы; на чётной странице — отражённая.
+   */
+  image: RenderImage;
+};
+
+/**
  * Веса каналов при переводе цвета в яркость — та же свёртка, что и у разбора
  * фотографий листа.
  */
@@ -253,11 +355,11 @@ const INK_BAND_SHARE = 0.15;
 const INK_BASELINE_SHARE = 0.35;
 
 /**
- * Допустимое расхождение низа строки чернил с расчётной базовой линией в долях
- * шага. Замер грубее расчёта: край чернил размыт сглаживанием, а под линией
- * остаются выносные элементы. На пресет-паке расхождение не выходит за
- * четыре сотых шага, поэтому запас взят с тройным перекрытием — но постоянный
- * сдвиг в четверть шага, какой даёт сверка по серединам строк, порог ловит.
+ * Допустимое расхождение низа строки чернил с линией растра в долях шага.
+ * Замер грубее расчёта: край чернил размыт сглаживанием, а под линией
+ * остаются выносные элементы. Запас взят с тройным перекрытием к расхождению на
+ * пресет-паке, но постоянный сдвиг в четверть шага, какой даёт сверка по
+ * серединам строк или строка, не повторившая изгиб, порог ловит.
  */
 const INK_TOLERANCE = 0.15;
 
@@ -270,42 +372,103 @@ const BAND_LEFT_SHARE = 0.3;
 const BAND_RIGHT_SHARE = 0.7;
 
 /**
- * Текст на несколько строк: строк должно хватить, чтобы расхождение шага
- * успело накопиться, и при этом низ страницы обязан остаться чистым — по нему
- * меряется разлиновка.
- */
-const TEXT = [
-  'Рукописные строки садятся на разлиновку тетрадного листа,',
-  'и низ страницы остаётся чистым, чтобы линии было по чему померить.',
-].join(' ');
-
-/**
- * Строка для набора разворота. Уже блока на любом листе пресет-пака — не
- * переносится, — и длиннее трети кадра: чернила заходят в полосу замера.
- */
-const ROW_TEXT = 'рукописные строки на листе';
-
-/**
- * Сколько строк набирается, чтобы снять вместимость первой страницы: больше,
- * чем вмещает страница любого листа пресет-пака.
- */
-const PROBE_ROW_COUNT = 60;
-
-/**
- * Сколько строк уходит на вторую страницу разворота: хватает на замер низа
+ * Сколько строк набирается на проверяемую страницу: хватает на замер низа
  * строк, и под ними остаётся полоса без чернил.
  */
-const SECOND_PAGE_ROW_COUNT = 3;
+const CHECKED_ROW_COUNT = 4;
 
 /**
- * Абзац на всю ширину блока: короткие слова одним абзацем, поэтому строки
- * набираются почти до правого края блока. Повторов столько, что текст не
- * влезает в две страницы ни одного листа пресет-пака — и чётная страница тоже
- * набрана целиком.
+ * Слова абзаца на всю ширину блока: короткие, поэтому строки набираются почти
+ * до правого края блока. Повторов столько, что текст не влезает в две страницы
+ * ни одного листа — и чётная страница тоже набрана целиком.
  */
-const WIDE_TEXT = Array.from({ length: 250 }, () => {
+const WIDE_WORDS = Array.from({ length: 600 }, () => {
   return 'и снова до поля';
-}).join(' ');
+})
+  .join(' ')
+  .split(' ');
+
+/**
+ * Абзац на всю ширину блока.
+ */
+const WIDE_TEXT = WIDE_WORDS.join(' ');
+
+/**
+ * Ширина полосы замера в шагах разлиновки. Замер ведётся вдоль изогнутой
+ * линии: профиль сдвигается по её местному наклону в центре полосы, и внутри
+ * трёх шагов линия от этой прямой почти не отходит.
+ */
+const STRIP_STEPS = 3;
+
+/**
+ * Насколько правая полоса отступает от правого края блока, в шагах
+ * разлиновки: строка переносится целым словом и до края не доходит, а чернила
+ * каждой проверяемой строки обязаны зайти в полосу.
+ */
+const RAGGED_STEPS = 2;
+
+/**
+ * Сколько точек строки проверяется на выход строчного бокса за кадр: от
+ * левого до правого края блока включительно.
+ */
+const BOX_POINT_COUNT = 9;
+
+/**
+ * Кадр, шаг и фаза изогнутого листа. Шаг мельче, чем у пресет-пака: узлы
+ * изгиба стоят через два шага, и подъём линии между соседними узлами обязан
+ * уложиться в окно трассировки в шестую шага — на мелком шаге тот же отход в
+ * долях шага набирается на большем числе узлов.
+ */
+const BENT_SHEET_WIDTH = 1600;
+const BENT_SHEET_HEIGHT = 2000;
+const BENT_SHEET_STEP = 40;
+const BENT_SHEET_PHASE = 11;
+
+/**
+ * Сколько шагов сверху и снизу кадра лист без линий: линии до самого края
+ * кадра сбивают поиск шага на кратный.
+ */
+const BENT_BLANK_STEPS = 8;
+
+/**
+ * Форма изгиба по доле полуширины кадра от центра: середина прямая, левая
+ * половина плавно опускается на отход, правая так же поднимается, и у самых
+ * краёв линии снова идут ровно.
+ *
+ * Изгиб несимметричен: у отражённого листа он направлен навстречу исходному,
+ * и зеркальная страница, потерявшая отражение изгиба, уводит строки у краёв
+ * больше чем на полшага. Прямые середина и края не сбивают свип угла и держат
+ * отход найденного изгиба в крайних полосах выше четверти шага, а подъём
+ * ступени достаточно пологий для окна трассировки.
+ */
+const BENT_FLAT_SHARE = 0.3;
+const BENT_EDGE_SHARE = 0.2;
+const BENT_REACH_SHARE = 0.35;
+
+/**
+ * Толщина и цвет линий изогнутого листа, цвет бумаги: линия светлее порога
+ * чернил, но заметно темнее бумаги.
+ */
+const BENT_LINE_WIDTH = 2.4;
+const BENT_LINE_COLOR = 'rgb(120, 140, 170)';
+const BENT_PAPER_COLOR = 'rgb(246, 244, 238)';
+
+/**
+ * Через сколько пикселей ставится вершина ломаной линии листа.
+ */
+const BENT_LINE_SEGMENT = 4;
+
+/**
+ * Идентификатор изогнутого листа: не совпадает ни с одним экземпляром пака.
+ */
+const BENT_SHEET_ID = 'bent-synthetic';
+
+/**
+ * Наименьший отход найденного изгиба в центре крайней полосы в долях шага:
+ * меньше — и строки без изгиба почти укладывались бы в допуск чернил, а
+ * отрицательный контроль ничего бы не проверил.
+ */
+const MIN_STRIP_BEND_SHARE = 0.25;
 
 /**
  * Нечётная и зеркальная половины разворота.
@@ -331,7 +494,51 @@ const FILL_TOLERANCE_STEPS = 2;
  */
 const DEFAULT_FONT = HANDWRITING_FONTS[0]?.family || '';
 
+/**
+ * Варианты шрифта страницы: встроенный, который рисуется контурами, и тот же
+ * файл, подключённый своим шрифтом, — без контуров, обычными буквами.
+ */
+const FONT_VARIANTS: (string | null)[] = [null, CUSTOM_FONT_FAMILY];
+
 let lastProbe: RasterProbe | null = null;
+
+/**
+ * Разбор изогнутого листа идёт один раз на прогон: детектор по кадру в два
+ * мегапикселя работает заметное время.
+ */
+let bentSheet: PaperSheet | null = null;
+
+/**
+ * Подключение своего шрифта одно на прогон: семейство у него всегда одно.
+ */
+let customFontTask: Promise<void> | null = null;
+
+/**
+ * Число слов в тексте.
+ *
+ * @param text — текст
+ * @returns число слов
+ */
+const countTextWords = (text: string): number => {
+  return text.split(/\s+/).filter(Boolean).length;
+};
+
+/**
+ * Число слов во всех строках раскладки.
+ *
+ * @param pages — страницы раскладки
+ * @returns число слов
+ */
+const countLayoutWords = (pages: ReturnType<typeof usePageLayout>): number => {
+  return pages.reduce((count, page) => {
+    return (
+      count +
+      page.lines.reduce((lineCount, line) => {
+        return lineCount + countTextWords(line.text);
+      }, 0)
+    );
+  }, 0);
+};
 
 /**
  * Проба страницы: собирает параметры отрисовки теми же хуками, что и экран
@@ -354,6 +561,7 @@ const RasterRulingProbe: FC = () => {
           sheetId: sheet.id,
           layoutSheetId: pages[pageIndex]?.sheetId || '',
           pageCount: pages.length,
+          wordCount: countLayoutWords(pages),
           sheet,
           pageIndex,
           params,
@@ -379,6 +587,58 @@ const RasterRulingProbe: FC = () => {
 };
 
 /**
+ * Переводит градусы в радианы.
+ *
+ * @param degrees — угол в градусах
+ * @returns угол в радианах
+ */
+const toRadians = (degrees: number): number => {
+  return (degrees * Math.PI) / 180;
+};
+
+/**
+ * Отход линии изгиба в точке страницы. Без изгиба линии прямые, и отход
+ * нулевой.
+ *
+ * @param bend — изгиб; `null` — его нет
+ * @param angle — угол, под которым изгиб читается, в градусах
+ * @param x — столбец в пикселях страницы
+ * @param y — высота в пикселях страницы
+ * @returns отход вниз в пикселях
+ */
+const sampleBend = (
+  bend: RulingBend | null,
+  angle: number,
+  x: number,
+  y: number
+): number => {
+  return bend ? sampleRulingBend(bend, angle, x, y) : 0;
+};
+
+/**
+ * Яркости пикселей RGBA-буфера.
+ *
+ * @param data — пиксели построчно, по четыре канала
+ * @param size — число пикселей
+ * @returns яркости от 0 до 1
+ */
+const toLuminance = (data: Uint8ClampedArray, size: number): Float32Array => {
+  const luminance = new Float32Array(size);
+
+  for (let index = 0; index < size; index += 1) {
+    const offset = index * 4;
+
+    luminance[index] =
+      ((data[offset] || 0) * RED_WEIGHT +
+        (data[offset + 1] || 0) * GREEN_WEIGHT +
+        (data[offset + 2] || 0) * BLUE_WEIGHT) /
+      255;
+  }
+
+  return luminance;
+};
+
+/**
  * Рисует страницу настоящим путём отрисовки и снимает с неё полутоновую
  * выжимку.
  *
@@ -389,14 +649,19 @@ const RasterRulingProbe: FC = () => {
  *
  * @param probe — проба страницы
  * @param image — фотография выбранного экземпляра
+ * @param params — параметры отрисовки; не заданы — параметры пробы
  * @returns растр страницы
  */
-const renderProbeRaster = (probe: RasterProbe, image: RenderImage): PageRaster => {
+const renderProbeRaster = (
+  probe: RasterProbe,
+  image: RenderImage,
+  params: PageRenderParams = probe.params
+): PageRaster => {
   const { sheet } = probe;
 
   return rasterizePage(sheet, {
-    ...probe.params,
-    background: probe.params.background ? { ...probe.params.background, image } : null,
+    ...params,
+    background: params.background ? { ...params.background, image } : null,
   });
 };
 
@@ -424,24 +689,17 @@ const rasterizePage = (sheet: PaperSheet, params: PageRenderParams): PageRaster 
   drawPage(context, params, size);
 
   const { data } = context.getImageData(0, 0, size.width, size.height);
-  const luminance = new Float32Array(size.width * size.height);
 
-  for (let index = 0; index < luminance.length; index += 1) {
-    const offset = index * 4;
-
-    luminance[index] =
-      ((data[offset] || 0) * RED_WEIGHT +
-        (data[offset + 1] || 0) * GREEN_WEIGHT +
-        (data[offset + 2] || 0) * BLUE_WEIGHT) /
-      255;
-  }
-
-  return { width: size.width, height: size.height, luminance };
+  return {
+    width: size.width,
+    height: size.height,
+    luminance: toLuminance(data, size.width * size.height),
+  };
 };
 
 /**
  * Профиль средней яркости вдоль линий, наклонённых на заданный тангенс. Бин
- * профиля отвечает строке растра в левом столбце участка: наклон учитывается
+ * профиля отвечает строке растра в опорном столбце: наклон учитывается
  * сдвигом, а не поворотом растра.
  *
  * Края, где бин собрался не со всей ширины участка, отброшены — иначе
@@ -450,19 +708,21 @@ const rasterizePage = (sheet: PaperSheet, params: PageRenderParams): PageRaster 
  * @param raster — растр страницы
  * @param band — участок растра
  * @param tangent — тангенс наклона линий
+ * @param pivot — опорный столбец; не задан — левый столбец участка
  * @returns средние яркости бинов сверху вниз
  */
 const buildProfile = (
   raster: PageRaster,
   band: RasterBand,
-  tangent: number
+  tangent: number,
+  pivot = band.left
 ): ShearedProfile => {
   const height = band.bottom - band.top;
   const sums = new Float64Array(height);
   const counts = new Float64Array(height);
 
   for (let x = band.left; x < band.right; x += COLUMN_STRIDE) {
-    const shift = Math.round((x - band.left) * tangent);
+    const shift = Math.round((x - pivot) * tangent);
 
     for (let y = band.top; y < band.bottom; y += 1) {
       const bin = y - band.top - shift;
@@ -479,7 +739,8 @@ const buildProfile = (
    * участка, темнее соседей на ровном месте, и такой скачок перебил бы в
    * автокорреляции саму разлиновку.
    */
-  const guard = Math.ceil(Math.abs(tangent) * (band.right - band.left)) + 1;
+  const reach = Math.max(Math.abs(band.left - pivot), Math.abs(band.right - pivot));
+  const guard = Math.ceil(Math.abs(tangent) * reach) + 1;
   const size = Math.max(0, height - 2 * guard);
   const values = new Float64Array(size);
 
@@ -655,52 +916,49 @@ const measureRasterRuling = (raster: PageRaster, band: RasterBand): RasterRuling
 };
 
 /**
- * Базовые линии страницы в системе координат профиля.
+ * Прямые базовые линии страницы в столбце растра, без изгиба.
  *
  * Считаются по той же модели строчного бокса, которой рисует рендерер:
- * `fillText` ставит текст на базовую линию `topOffset + fontAscent × кегль +
- * n × шаг строк`. Поворот блока учитывается делением на косинус — вдоль
- * наклона строка отстоит от верха листа именно на столько.
+ * текст стоит на базовой линии `topOffset + fontAscent × кегль + n × шаг
+ * строк`. Блок повёрнут вокруг левого верхнего угла страницы, поэтому
+ * базовая линия пересекает столбец x на высоте `b / cos θ + x × tg θ`.
  *
- * @param probe — проба страницы
- * @param band — участок, по которому снят профиль
- * @param ruling — найденная на растре разлиновка: из неё берётся наклон и
- *   начало профиля
- * @returns положения базовых линий в бинах профиля
+ * @param params — параметры отрисовки страницы
+ * @param column — столбец страницы в пикселях
+ * @returns высоты базовых линий в пикселях страницы сверху вниз
  */
-const buildBaselines = (
-  probe: RasterProbe,
-  band: RasterBand,
-  ruling: RasterRuling
-): number[] => {
-  const { geometry, page } = probe.params;
-  const { fontSizePx, lineSpacing, topOffset, fontMetrics } = geometry;
+const buildBaselines = (params: PageRenderParams, column: number): number[] => {
+  const { geometry, page } = params;
+  const { fontSizePx, lineSpacing, topOffset, fontMetrics, blockRotate } = geometry;
   const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
-  const stretch = Math.hypot(1, ruling.tangent);
-  const baselines: number[] = [];
+  const radians = toRadians(blockRotate);
+  const stretch = 1 / Math.cos(radians);
+  const rise = column * Math.tan(radians);
 
-  for (let index = 0; index < page.lines.length; index += 1) {
+  return page.lines.map((_, index) => {
     const baseline = topOffset + fontMetrics.fontAscent * fontSizePx + index * lineStep;
 
-    baselines.push(
-      band.left * ruling.tangent + baseline * stretch - band.top - ruling.origin
-    );
-  }
-
-  return baselines;
+    return baseline * stretch + rise;
+  });
 };
 
 /**
- * Наибольшее отклонение базовых линий от ближайшей линии разлиновки в долях
- * шага.
+ * Наибольшее отклонение базовых линий от ближайшей линии растра в долях шага.
  *
- * @param baselines — базовые линии в бинах профиля
- * @param ruling — найденная на растре разлиновка
+ * @param baselines — высоты базовых линий в пикселях страницы
+ * @param shift — общий сдвиг базовых линий: изгиб линий листа в полосе
+ * @param firstLine — высота одной из линий растра
+ * @param period — шаг линий растра
  * @returns отклонение в долях шага
  */
-const measureDrift = (baselines: number[], ruling: RasterRuling): number => {
+const measureDrift = (
+  baselines: number[],
+  shift: number,
+  firstLine: number,
+  period: number
+): number => {
   return baselines.reduce((drift, baseline) => {
-    const lines = (baseline - ruling.phase) / ruling.period;
+    const lines = (baseline + shift - firstLine) / period;
 
     return Math.max(drift, Math.abs(lines - Math.round(lines)));
   }, 0);
@@ -712,18 +970,20 @@ const measureDrift = (baselines: number[], ruling: RasterRuling): number => {
  * @param raster — растр страницы
  * @param band — участок со строками
  * @param tangent — наклон строк
+ * @param pivot — опорный столбец: бин отвечает строке растра в нём
  * @returns число тёмных пикселей по бинам сверху вниз
  */
 const buildInkProfile = (
   raster: PageRaster,
   band: RasterBand,
-  tangent: number
+  tangent: number,
+  pivot: number
 ): ShearedProfile => {
   const height = band.bottom - band.top;
   const counts = new Float64Array(height);
 
   for (let x = band.left; x < band.right; x += 1) {
-    const shift = Math.round((x - band.left) * tangent);
+    const shift = Math.round((x - pivot) * tangent);
 
     for (let y = band.top; y < band.bottom; y += 1) {
       const bin = y - band.top - shift;
@@ -782,32 +1042,130 @@ const measureInkBottom = (
 };
 
 /**
- * Наибольшее расхождение низа строк чернил с расчётными базовыми линиями в
- * долях шага разлиновки.
+ * Наибольшее из отклонений низа чернил; строки без чернил не учитываются —
+ * их наличие проверяется отдельно.
  *
- * @param raster — растр страницы
- * @param band — участок со строками
- * @param ruling — найденная на растре разлиновка
- * @param baselines — расчётные базовые линии в бинах профиля разлиновки
- * @param lineStep — шаг строк
- * @returns расхождение в долях шага разлиновки
+ * @param offsets — отклонения строк в долях шага
+ * @returns наибольшее отклонение
  */
-const measureInkOffset = (
+const measureWorstOffset = (offsets: (number | null)[]): number => {
+  return offsets.reduce<number>((worst, offset) => {
+    return Math.max(worst, offset || 0);
+  }, 0);
+};
+
+/**
+ * Полосы замера: у левого края блока, посередине и у правого края.
+ *
+ * Край блока у каждой строки свой: блок повёрнут вокруг угла страницы, и
+ * нижние строки сдвинуты вбок на наклон. Полосы ставятся внутрь самого узкого
+ * места, а правая ещё и отступает от края на перенос слова — туда заходят
+ * чернила каждой строки.
+ *
+ * @param probe — проба страницы
+ * @returns три полосы столбцов страницы
+ */
+const buildStrips = (probe: RasterProbe): StripSet => {
+  const { params, sheet, pageIndex } = probe;
+  const { geometry, page } = params;
+  const { fontSizePx, lineSpacing, topOffset, fontMetrics } = geometry;
+  const { leftPadding, blockWidth, blockRotate } = geometry;
+  const { step } = getPageRuling(sheet, pageIndex);
+  const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
+  const radians = toRadians(blockRotate);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const firstBaseline = topOffset + fontMetrics.fontAscent * fontSizePx;
+  const lastBaseline = firstBaseline + Math.max(0, page.lines.length - 1) * lineStep;
+  const firstShift = firstBaseline * sin;
+  const lastShift = lastBaseline * sin;
+  const width = Math.round(STRIP_STEPS * step);
+  const left = Math.ceil(leftPadding * cos - Math.min(firstShift, lastShift));
+  const right = Math.floor(
+    (leftPadding + blockWidth) * cos -
+      Math.max(firstShift, lastShift) -
+      RAGGED_STEPS * step
+  );
+
+  const toStrip = (start: number): RasterStrip => {
+    return { left: start, right: start + width, center: start + width / 2 };
+  };
+
+  return {
+    left: toStrip(left),
+    middle: toStrip(Math.round((left + right - width) / 2)),
+    right: toStrip(right - width),
+  };
+};
+
+/**
+ * Сверяет строки страницы с линиями растра в одной полосе.
+ *
+ * Линии растра меряются в полосе без чернил под текстом: профиль снимается
+ * вдоль линии листа — по наклону блока плюс местному наклону изгиба в центре
+ * полосы, со сдвигом от её центра, — и фаза даёт высоту линии в центральном
+ * столбце. Базовые линии геометрии вместе с изгибом листа в центре полосы
+ * обязаны лечь на эти линии.
+ *
+ * Низ чернил каждой строки ищется у той базовой линии, по которой строку
+ * рисовали, а сверяется с линией растра, перенесённой от полосы замера к
+ * строке по найденному изгибу: у изгиба, меняющегося от строки к строке,
+ * линия у строки стоит не там, где в полосе замера.
+ *
+ * @param probe — проба страницы: лист и его разлиновка
+ * @param raster — растр страницы
+ * @param band — полоса без чернил под текстом
+ * @param strip — полоса столбцов
+ * @param period — шаг линий на растре
+ * @param params — параметры, которыми нарисован растр
+ * @returns отклонения базовых линий и чернил
+ */
+const measureStripFit = (
+  probe: RasterProbe,
   raster: PageRaster,
   band: RasterBand,
-  ruling: RasterRuling,
-  baselines: number[],
-  lineStep: number
-): number => {
-  const ink = buildInkProfile(raster, band, ruling.tangent).values;
+  strip: RasterStrip,
+  period: number,
+  params: PageRenderParams
+): StripFit => {
+  const { sheet, pageIndex } = probe;
+  const ruling = getPageRuling(sheet, pageIndex);
+  const { fontSizePx, lineSpacing, fontMetrics, blockRotate, bend } = params.geometry;
+  const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
+  const bandMiddle = (band.top + band.bottom) / 2;
+  const bandBend = sampleBend(ruling.bend, ruling.skewAngle, strip.center, bandMiddle);
+  const bendSlope = ruling.bend
+    ? sampleRulingBendSlope(ruling.bend, ruling.skewAngle, strip.center, bandMiddle)
+    : 0;
+  const tangent = Math.tan(toRadians(blockRotate)) + bendSlope;
+  const lineBand: RasterBand = { ...band, left: strip.left, right: strip.right };
+  const profile = buildProfile(raster, lineBand, tangent, strip.center);
+  const phase = measurePhase(buildDarkness(profile.values), period);
+  const firstLine = band.top + profile.origin + phase;
+  const baselines = buildBaselines(params, strip.center);
+  const inkTop = Math.max(0, Math.floor((baselines[0] || 0) - 2 * lineStep));
+  const inkBand: RasterBand = { ...lineBand, top: inkTop, bottom: band.top };
+  const ink = buildInkProfile(raster, inkBand, tangent, strip.center).values;
 
-  return baselines.reduce((offset, baseline) => {
-    const bottom = measureInkBottom(ink, baseline, lineStep);
+  const inkOffsets = baselines.map((baseline) => {
+    const drawn = baseline + sampleBend(bend, blockRotate, strip.center, baseline);
+    const bottom = measureInkBottom(ink, drawn - inkTop, lineStep);
 
-    return bottom === null
-      ? offset
-      : Math.max(offset, Math.abs(bottom - baseline) / ruling.period);
-  }, 0);
+    if (bottom === null) {
+      return null;
+    }
+
+    const line = Math.round((baseline + bandBend - firstLine) / period);
+    const rowBend = sampleBend(ruling.bend, ruling.skewAngle, strip.center, baseline);
+    const target = firstLine + line * period + rowBend - bandBend;
+
+    return Math.abs(inkTop + bottom - target) / period;
+  });
+
+  return {
+    drift: measureDrift(baselines, bandBend, firstLine, period),
+    inkOffsets,
+  };
 };
 
 /**
@@ -818,20 +1176,38 @@ const measureInkOffset = (
  * @returns участок для замера; `null` — полосы не осталось
  */
 const buildEmptyBand = (probe: RasterProbe): RasterBand | null => {
-  const { params, sheet } = probe;
+  const { params, sheet, pageIndex } = probe;
   const { background, geometry } = params;
-  const { fontSizePx, lineSpacing, topOffset, fontMetrics } = geometry;
+  const { fontSizePx, lineSpacing, topOffset, fontMetrics, blockRotate } = geometry;
 
   if (!background) {
     return null;
   }
 
   const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
+  const radians = toRadians(blockRotate);
   const lastBaseline =
     topOffset +
     fontMetrics.fontAscent * fontSizePx +
     Math.max(0, params.page.lines.length - 1) * lineStep;
-  const top = Math.ceil(Math.max(0, lastBaseline + lineStep));
+  const { bend } = getPageRuling(sheet, pageIndex);
+  const bendDrop = bend
+    ? bend.offsets.reduce((drop, offset) => {
+        return Math.max(drop, offset);
+      }, 0)
+    : 0;
+
+  /**
+   * Полоса начинается под самой низкой точкой последней строки: блок повёрнут,
+   * и у края кадра, куда строки опускаются, строка ниже, чем у левого края, а
+   * изгиб опускает её ещё на свой наибольший отход вниз, — иначе в крайней
+   * полосе замера под линиями оказались бы хвосты букв.
+   */
+  const lowest =
+    lastBaseline / Math.cos(radians) +
+    Math.max(0, sheet.width * Math.tan(radians)) +
+    bendDrop;
+  const top = Math.ceil(Math.max(0, lowest + lineStep));
   const limit = Math.floor(Math.min(sheet.height, background.height));
   const bottom = Math.min(limit, top + MAX_BAND_STEPS * sheet.ruling.step);
   const left = Math.round(background.width * BAND_LEFT_SHARE);
@@ -845,32 +1221,59 @@ const buildEmptyBand = (probe: RasterProbe): RasterBand | null => {
 };
 
 /**
- * Ждёт страницу, нарисованную нужным экземпляром.
+ * Семейство шрифта страницы в варианте проверки.
+ *
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
+ * @returns семейство шрифта страницы
+ */
+const resolveFontFamily = (customFontFamily: string | null): string => {
+  return customFontFamily || DEFAULT_FONT;
+};
+
+/**
+ * Ждёт страницу, нарисованную нужным экземпляром и нужным шрифтом.
  *
  * @param sheetId — ожидаемый экземпляр листа
  * @param pageIndex — ожидаемая страница
  * @param pageCount — ожидаемое число страниц раскладки; ноль — любое
+ * @param fontFamily — ожидаемое семейство шрифта страницы
  * @returns проба страницы
  */
 const waitForProbe = async (
   sheetId: string,
   pageIndex: number,
-  pageCount = 0
+  pageCount = 0,
+  fontFamily = DEFAULT_FONT
 ): Promise<RasterProbe> => {
   /**
    * Ожидание идёт по метрикам шрифта: пока начертание не загрузилось,
    * геометрия считается по запасным пропорциям, строк на странице выходит
    * другое число, и «полоса без чернил» оказывается под текстом.
    */
-  const metrics = await loadFontMetrics(DEFAULT_FONT);
+  const metrics = await loadFontMetrics(fontFamily);
+
+  /**
+   * Контуры доезжают отдельно от метрик. Встроенный шрифт без них рисовался
+   * бы запасным путём, и проверка мерила бы не ту страницу, что уйдёт в
+   * экспорт; у своего шрифта контуров нет вовсе.
+   */
+  const hasGlyphs = findFontUrl(fontFamily) !== null;
+
+  /**
+   * Эффект прежнего рендера может записать пробу уже после того, как стор
+   * переставлен: у неё тот же лист и та же страница, но раскладка прежнего
+   * текста.
+   */
+  const wordCount = countTextWords(useGeneratorStore.getState().text);
 
   await waitFor(
     async () => {
       await expect(lastProbe?.sheetId).toBe(sheetId);
       await expect(lastProbe?.layoutSheetId).toBe(sheetId);
+      await expect(lastProbe?.wordCount).toBe(wordCount);
       await expect(lastProbe?.pageCount).toBe(pageCount || lastProbe?.pageCount);
       await expect(lastProbe?.pageIndex).toBe(pageIndex);
-      await expect(lastProbe?.params.fontFamily).toBe(DEFAULT_FONT);
+      await expect(lastProbe?.params.fontFamily).toBe(fontFamily);
       await expect(lastProbe?.params.geometry.fontMetrics.fontAscent).toBeCloseTo(
         metrics.fontAscent,
         6
@@ -880,6 +1283,7 @@ const waitForProbe = async (
         6
       );
       await expect(lastProbe?.params.page.lines.length || 0).toBeGreaterThan(1);
+      await expect(Boolean(lastProbe?.params.glyphs)).toBe(hasGlyphs);
     },
     { timeout: 15_000 }
   );
@@ -893,7 +1297,8 @@ const waitForProbe = async (
 
 /**
  * Проверяет по растру нарисованной страницы, что разлиновка фотографии
- * совпадает с разлиновкой листа, а базовые линии сидят на линиях.
+ * совпадает с разлиновкой листа, а строки сидят на линиях от левого до
+ * правого края блока.
  *
  * @param probe — проба страницы
  * @param image — фотография выбранного экземпляра
@@ -935,38 +1340,30 @@ const expectRasterOnRuling = async (
 
   await expect(Math.abs(rasterAngle - blockAngle)).toBeLessThan(ANGLE_TOLERANCE);
 
-  /**
-   * Строки садятся на линии: отклонение считается до ближайшей линии, потому
-   * что на листе в клетку строка занимает две клетки.
-   */
-  const baselines = buildBaselines(probe, band, ruling);
   const rowSteps = family.kind === 'grid' ? GRID_ROW_STEPS : 1;
   const lineStep =
     probe.params.geometry.fontSizePx * probe.params.geometry.fontMetrics.lineHeight +
     probe.params.geometry.lineSpacing;
 
-  /**
-   * Строки и правда стоят там, где их посчитала геометрия: низ чернил каждой
-   * строки лежит у своей базовой линии. Без этой сверки проверка говорила бы
-   * только о разлиновке, а текст мог бы уехать сам по себе.
-   */
-  const inkBand: RasterBand = {
-    left: band.left,
-    right: band.right,
-    top: Math.max(0, Math.round(probe.params.geometry.topOffset)),
-    bottom: band.top,
-  };
-
-  const inkBaselines = baselines.map((baseline) => {
-    return baseline + band.top + ruling.origin - inkBand.top;
-  });
-
-  await expect(
-    measureInkOffset(raster, inkBand, ruling, inkBaselines, lineStep)
-  ).toBeLessThanOrEqual(INK_TOLERANCE);
-
   await expect(lineStep / ruling.period).toBeCloseTo(rowSteps, 1);
-  await expect(measureDrift(baselines, ruling)).toBeLessThanOrEqual(DRIFT_TOLERANCE);
+
+  /**
+   * Строки сверяются с линиями в трёх узких полосах: на изогнутом листе
+   * попадание в одном месте строки ничего не говорит о другом. Отклонение
+   * базовых линий считается до ближайшей линии — на листе в клетку строка
+   * занимает две клетки. Низ чернил сверяется вместе с базовыми линиями: без
+   * этого проверка говорила бы только о разлиновке, а текст мог бы уехать сам
+   * по себе.
+   */
+  const strips = buildStrips(probe);
+
+  for (const strip of [strips.left, strips.middle, strips.right]) {
+    const fit = measureStripFit(probe, raster, band, strip, ruling.period, probe.params);
+
+    await expect(fit.drift).toBeLessThanOrEqual(DRIFT_TOLERANCE);
+    await expect(fit.inkOffsets).not.toContain(null);
+    await expect(measureWorstOffset(fit.inkOffsets)).toBeLessThanOrEqual(INK_TOLERANCE);
+  }
 };
 
 /**
@@ -1009,6 +1406,11 @@ type InkExtent = {
    * Есть ли чернила в верхнем ряду растра: там их срезал бы край кадра.
    */
   hasInkOnTopEdge: boolean;
+
+  /**
+   * Есть ли чернила в нижнем ряду растра: там их срезал бы край кадра.
+   */
+  hasInkOnBottomEdge: boolean;
 };
 
 /**
@@ -1017,17 +1419,53 @@ type InkExtent = {
  */
 type OverhangBox = {
   /**
-   * Левый край контура буквы в пикселях кадра.
+   * Левый край буквы в пикселях кадра.
    */
   left: number;
 
   /**
-   * Верх контура буквы в пикселях кадра.
+   * Верх буквы в пикселях кадра.
    */
   top: number;
 
   /**
-   * Низ контура буквы в пикселях кадра.
+   * Низ буквы в пикселях кадра.
+   */
+  bottom: number;
+};
+
+/**
+ * Габарит буквы относительно пера и базовой линии.
+ */
+type LetterExtent = {
+  /**
+   * Левый край буквы относительно пера в пикселях кадра; отрицательный —
+   * буква свешена левее пера.
+   */
+  left: number;
+
+  /**
+   * Подъём буквы над базовой линией в пикселях кадра.
+   */
+  ascent: number;
+
+  /**
+   * Спуск буквы под базовую линию в пикселях кадра.
+   */
+  descent: number;
+};
+
+/**
+ * Верх строчного бокса первой строки и низ бокса последней на странице.
+ */
+type LineBoxEdges = {
+  /**
+   * Самая высокая точка верха бокса первой строки в пикселях страницы.
+   */
+  top: number;
+
+  /**
+   * Самая низкая точка низа бокса последней строки в пикселях страницы.
    */
   bottom: number;
 };
@@ -1068,7 +1506,7 @@ const isInsideOverhang = (
  * @param raster — растр страницы
  * @param params — параметры отрисовки страницы
  * @param boxes — габариты первых букв строк, свешенных левее пера
- * @returns края чернил и срез сверху
+ * @returns края чернил и срезы сверху и снизу
  */
 const measureInkExtent = (
   raster: PageRaster,
@@ -1076,13 +1514,15 @@ const measureInkExtent = (
   boxes: OverhangBox[]
 ): InkExtent => {
   const { geometry, scale } = params;
-  const radians = (geometry.blockRotate * Math.PI) / 180;
+  const radians = toRadians(geometry.blockRotate);
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
+  const lastRow = raster.height - 1;
   let left = Number.POSITIVE_INFINITY;
   let bareLeft = Number.POSITIVE_INFINITY;
   let right = Number.NEGATIVE_INFINITY;
   let hasInkOnTopEdge = false;
+  let hasInkOnBottomEdge = false;
 
   for (let y = 0; y < raster.height; y += 1) {
     const row = y * raster.width;
@@ -1097,6 +1537,7 @@ const measureInkExtent = (
         left = Math.min(left, across);
         right = Math.max(right, across);
         hasInkOnTopEdge = hasInkOnTopEdge || y === 0;
+        hasInkOnBottomEdge = hasInkOnBottomEdge || y === lastRow;
 
         if (across < bareLeft && !isInsideOverhang(boxes, across, along)) {
           bareLeft = across;
@@ -1105,7 +1546,7 @@ const measureInkExtent = (
     }
   }
 
-  return { left, bareLeft, right, hasInkOnTopEdge };
+  return { left, bareLeft, right, hasInkOnTopEdge, hasInkOnBottomEdge };
 };
 
 /**
@@ -1142,6 +1583,74 @@ const resolvePaperBounds = (probe: RasterProbe): PaperBounds => {
 };
 
 /**
+ * Габарит буквы по контурам шрифта — тем, которыми её рисует рендерер.
+ *
+ * @param source — контуры шрифта страницы
+ * @param char — буква
+ * @param fontSizePx — кегль в пикселях кадра
+ * @returns габарит; `null` — у буквы нет контура
+ */
+const measureContourExtent = (
+  source: GlyphSource,
+  char: string,
+  fontSizePx: number
+): LetterExtent | null => {
+  const outline = source.getGlyph(char);
+
+  if (!outline || outline.commands.length === 0) {
+    return null;
+  }
+
+  const { minX, minY, maxY } = contourBounds(outline.commands);
+  const unit = fontSizePx / source.unitsPerEm;
+
+  return { left: minX * unit, ascent: maxY * unit, descent: -minY * unit };
+};
+
+/**
+ * Габарит буквы по метрикам начертания в браузере: у своего шрифта контуров
+ * нет, и буква рисуется обычным текстом тем же начертанием.
+ *
+ * @param context — контекст с установленным шрифтом страницы
+ * @param char — буква
+ * @returns габарит
+ */
+const measureTextExtent = (
+  context: CanvasRenderingContext2D,
+  char: string
+): LetterExtent => {
+  const metrics = context.measureText(char);
+
+  return {
+    left: -metrics.actualBoundingBoxLeft,
+    ascent: metrics.actualBoundingBoxAscent,
+    descent: metrics.actualBoundingBoxDescent,
+  };
+};
+
+/**
+ * Контекст для замера букв шрифтом страницы.
+ *
+ * @param fontSizePx — кегль в пикселях кадра
+ * @param fontFamily — семейство шрифта страницы
+ * @returns контекст с установленным шрифтом
+ */
+const createMeasureContext = (
+  fontSizePx: number,
+  fontFamily: string
+): CanvasRenderingContext2D => {
+  const context = document.createElement('canvas').getContext('2d');
+
+  if (!context) {
+    throw new Error('Браузер не дал контекст canvas');
+  }
+
+  context.font = `${fontSizePx}px "${fontFamily}"`;
+
+  return context;
+};
+
+/**
  * Габариты первых букв строк, которые рисунок шрифта свешивает левее пера.
  * Рукописный шрифт рисует часть букв с хвостом влево от точки, куда их ставит
  * перо: у «д» в шрифте по умолчанию хвост уходит на 0.156 em. Строка при этом
@@ -1149,59 +1658,104 @@ const resolvePaperBounds = (probe: RasterProbe): PaperBounds => {
  * буквы, а не положение блока.
  *
  * Габарит берётся у каждой строки свой — по её первой букве, её базовой линии
- * и перу на краю блока, — и считается по контурам самого шрифта, а не по
- * растру: иначе проверка мерила бы допуск тем же, что проверяет.
+ * и перу на краю блока, — и считается по самому шрифту, а не по растру: иначе
+ * проверка мерила бы допуск тем же, что проверяет. Встроенный шрифт меряется
+ * контурами, свой — метриками начертания. На изогнутом листе буква опускается
+ * вместе с линией, и габарит сдвигается на отход изгиба в месте пера.
  *
- * @param params — параметры отрисовки страницы с загруженными контурами шрифта
+ * @param params — параметры отрисовки страницы
  * @returns габариты свешенных букв; строки без свеса в список не попадают
  */
 const buildOverhangBoxes = (params: PageRenderParams): OverhangBox[] => {
-  const { glyphs, page, geometry } = params;
-
-  if (!glyphs) {
-    throw new Error('Контуры шрифта страницы не загрузились');
-  }
-
-  const { source } = glyphs;
+  const { glyphs, page, geometry, fontFamily } = params;
   const { fontSizePx, lineSpacing, topOffset, leftPadding, fontMetrics } = geometry;
+  const { blockRotate, bend } = geometry;
   const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
-  const unit = fontSizePx / source.unitsPerEm;
+  const radians = toRadians(blockRotate);
+  const context = glyphs ? null : createMeasureContext(fontSizePx, fontFamily);
+
+  const measureLetter = (char: string): LetterExtent | null => {
+    if (glyphs) {
+      return measureContourExtent(glyphs.source, char, fontSizePx);
+    }
+
+    return context ? measureTextExtent(context, char) : null;
+  };
 
   return page.lines.reduce<OverhangBox[]>((acc, line, index) => {
     const char = line.words[0]?.text[0] || '';
-    const outline = char ? source.getGlyph(char) : null;
+    const extent = char ? measureLetter(char) : null;
 
-    if (!outline || outline.commands.length === 0) {
+    if (!extent || extent.left >= 0) {
       return acc;
     }
 
-    const { minX, minY, maxY } = contourBounds(outline.commands);
     const baseline = topOffset + fontMetrics.fontAscent * fontSizePx + index * lineStep;
+    const penX = leftPadding * Math.cos(radians) - baseline * Math.sin(radians);
+    const penY = leftPadding * Math.sin(radians) + baseline * Math.cos(radians);
+    const shift = sampleBend(bend, blockRotate, penX, penY);
 
-    if (minX < 0) {
-      acc.push({
-        left: leftPadding + minX * unit,
-        top: baseline - maxY * unit,
-        bottom: baseline - minY * unit,
-      });
-    }
+    acc.push({
+      left: leftPadding + extent.left,
+      top: baseline - extent.ascent + shift,
+      bottom: baseline + extent.descent + shift,
+    });
 
     return acc;
   }, []);
 };
 
 /**
+ * Верх строчного бокса первой строки и низ бокса последней в пикселях
+ * страницы — по точкам строки от левого до правого края блока, с поворотом
+ * блока и изгибом строк.
+ *
+ * @param params — параметры отрисовки страницы
+ * @returns крайние высоты боксов
+ */
+const measureLineBoxEdges = (params: PageRenderParams): LineBoxEdges => {
+  const { geometry, page } = params;
+  const { fontSizePx, lineSpacing, topOffset, fontMetrics } = geometry;
+  const { leftPadding, blockWidth, blockRotate, bend } = geometry;
+  const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
+  const boxBottom =
+    topOffset +
+    Math.max(0, page.lines.length - 1) * lineStep +
+    fontSizePx * fontMetrics.lineHeight;
+  const radians = toRadians(blockRotate);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  let top = Number.POSITIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+
+  for (let point = 0; point < BOX_POINT_COUNT; point += 1) {
+    const along = leftPadding + (blockWidth * point) / (BOX_POINT_COUNT - 1);
+    const topX = along * cos - topOffset * sin;
+    const topY = along * sin + topOffset * cos;
+    const bottomX = along * cos - boxBottom * sin;
+    const bottomY = along * sin + boxBottom * cos;
+
+    top = Math.min(top, topY + sampleBend(bend, blockRotate, topX, topY));
+    bottom = Math.max(bottom, bottomY + sampleBend(bend, blockRotate, bottomX, bottomY));
+  }
+
+  return { top, bottom };
+};
+
+/**
  * Проверяет по растру нарисованной страницы, что текст на всю ширину не
- * выходит ни за левое поле, ни за правое поле или линию поля листа страницы.
+ * выходит ни за левое поле, ни за правое поле или линию поля листа страницы,
+ * ни за верхний и нижний края кадра.
  *
  * Справа граница строгая: правый край самой длинной строки не заходит ни за
  * поле, ни за зазор до линии поля. Слева граница — край блока, с которого
- * начинаются строки: левее него допускаются только чернила внутри контура
+ * начинаются строки: левее него допускаются только чернила внутри габарита
  * первой буквы той строки, которую рисунок шрифта свешивает за перо. Общий
  * свес на всю страницу пропустил бы строку без свеса, уехавшую влево.
  *
- * Сверху строчный бокс первой строки по метрикам настоящего шрифта не выше
- * края кадра, и край кадра не срезал ни одного пикселя чернил.
+ * Сверху и снизу строчные боксы первой и последней строк по метрикам
+ * настоящего шрифта лежат в кадре по всей длине строки — с поворотом блока и
+ * изгибом, — и край кадра не срезал ни одного пикселя чернил.
  *
  * Фон скрыт: линия поля на фотографии темнее порога чернил и сошла бы за
  * текст, а размер и геометрия страницы от фона не зависят.
@@ -1213,14 +1767,17 @@ const expectTextOnPaper = async (probe: RasterProbe): Promise<void> => {
   const raster = rasterizePage(sheet, { ...params, background: null });
   const ink = measureInkExtent(raster, params, buildOverhangBoxes(params));
   const bounds = resolvePaperBounds(probe);
+  const box = measureLineBoxEdges(params);
   const fill = FILL_TOLERANCE_STEPS * getPageRuling(sheet, pageIndex).step;
 
   if (!Number.isFinite(ink.left) || !Number.isFinite(ink.right)) {
     throw new Error(`На странице нет чернил: ${probe.sheetId}, ${pageIndex}`);
   }
 
-  await expect(params.geometry.topOffset).toBeGreaterThanOrEqual(0);
+  await expect(box.top).toBeGreaterThanOrEqual(0);
+  await expect(box.bottom).toBeLessThanOrEqual(sheet.height);
   await expect(ink.hasInkOnTopEdge).toBe(false);
+  await expect(ink.hasInkOnBottomEdge).toBe(false);
   await expect(ink.bareLeft).toBeGreaterThanOrEqual(bounds.left - RASTER_TOLERANCE);
   await expect(ink.right).toBeLessThanOrEqual(bounds.right + RASTER_TOLERANCE);
 
@@ -1233,56 +1790,7 @@ const expectTextOnPaper = async (probe: RasterProbe): Promise<void> => {
 };
 
 /**
- * Прогоняет проверку полей по всем экземплярам семьи на обеих половинах
- * разворота.
- *
- * @param familyId — семья листов
- */
-const checkTextOnPaper = async (familyId: string): Promise<void> => {
-  const families = await loadPaperFamilies();
-  const family = families.find((item) => {
-    return item.id === familyId;
-  });
-
-  if (!family) {
-    throw new Error(`Семья не нашлась: ${familyId}`);
-  }
-
-  for (const sheet of family.sheets) {
-    for (const pageIndex of SPREAD_PAGES) {
-      applySheet(families, familyId, sheet.id, pageIndex, WIDE_TEXT);
-
-      await waitForProbe(sheet.id, pageIndex);
-
-      /**
-       * Контуры шрифта доезжают отдельно от метрик, а без них свес первых букв
-       * строк не посчитать.
-       */
-      await waitFor(
-        async () => {
-          await expect(lastProbe?.params.glyphs).toBeTruthy();
-        },
-        { timeout: 15_000 }
-      );
-
-      const probe = lastProbe;
-
-      if (!probe) {
-        throw new Error(`Проба не снялась: ${sheet.id}, ${pageIndex}`);
-      }
-
-      /**
-       * Страница не последняя в раскладке — значит, набрана до низа, а не
-       * парой строк.
-       */
-      await expect(probe.pageCount).toBeGreaterThan(pageIndex + 1);
-      await expectTextOnPaper(probe);
-    }
-  }
-};
-
-/**
- * Ставит стор на известный лист и половину разворота.
+ * Ставит стор на известный лист, половину разворота и шрифт.
  *
  * Искажения почерка выключены: они двигают слова и строки нарочно, а проверке
  * нужна сама раскладка.
@@ -1292,13 +1800,15 @@ const checkTextOnPaper = async (familyId: string): Promise<void> => {
  * @param sheetId — экземпляр листа
  * @param pageIndex — номер страницы, считая с нуля
  * @param text — текст генератора
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
  */
 const applySheet = (
   families: PaperFamily[],
   familyId: string,
   sheetId: string,
   pageIndex: number,
-  text: string
+  text: string,
+  customFontFamily: string | null = null
 ): void => {
   lastProbe = null;
   clearLayoutCache();
@@ -1311,49 +1821,148 @@ const applySheet = (
     isSheetPinned: true,
     pageIndex,
     hasContourVariance: false,
+    customFontFamily,
   });
 };
 
 /**
- * Текст из одинаковых строк, каждая — отдельным абзацем.
- *
- * @param count — число строк
- * @returns текст генератора
+ * Подключает файл встроенного шрифта своим шрифтом — тем же путём, что и
+ * загрузка пользователем: через FontFace под общим именем своего шрифта.
+ * Кэш метрик сбрасывается: семейство своего шрифта одно на любой файл.
  */
-const buildRowsText = (count: number): string => {
-  return Array.from({ length: count }, () => {
-    return ROW_TEXT;
-  }).join('\n');
+const loadCustomFont = async (): Promise<void> => {
+  const url = findFontUrl(DEFAULT_FONT);
+
+  if (!url) {
+    throw new Error(`Файл шрифта не нашёлся: ${DEFAULT_FONT}`);
+  }
+
+  const response = await fetch(url);
+  const face = new FontFace(CUSTOM_FONT_FAMILY, await response.arrayBuffer());
+
+  await face.load();
+  document.fonts.add(face);
+  clearFontMetricsCache();
 };
 
 /**
- * Текст, при котором проверяемая страница существует, а снизу у неё остаётся
- * полоса без чернил. Нечётной странице хватает пары строк. Чётная появляется,
- * только когда текст не влез в первую, а вместимость у каждого листа своя:
- * она снимается раскладкой первой страницы, и на вторую уходит несколько
- * строк сверх неё.
+ * Готовит шрифт варианта проверки. Свой шрифт подключается один раз на
+ * прогон, и контуров для него генератор не находит.
+ *
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
+ */
+const prepareFont = async (customFontFamily: string | null): Promise<void> => {
+  if (!customFontFamily) {
+    return;
+  }
+
+  customFontTask = customFontTask || loadCustomFont();
+
+  await customFontTask;
+  await expect(findFontUrl(customFontFamily)).toBeNull();
+};
+
+/**
+ * Число слов в строках.
+ *
+ * @param lines — строки страницы
+ * @returns число слов
+ */
+const countWords = (lines: PageRenderParams['page']['lines']): number => {
+  return lines.reduce((count, line) => {
+    return count + line.words.length;
+  }, 0);
+};
+
+/**
+ * Текст, при котором проверяемая страница существует, набрана строками почти
+ * до правого края блока, а снизу у неё остаётся полоса без чернил.
+ *
+ * Берётся начало абзаца на всю ширину: столько слов, сколько легло на
+ * страницы до проверяемой и на первые строки её самой. Строки переносятся по
+ * словам, поэтому начало абзаца раскладывается теми же строками, а последняя
+ * строка кончается там же, где кончалась в полном абзаце, — у края блока.
  *
  * @param families — предустановленные семьи с измерениями
  * @param familyId — семья листов
  * @param sheetId — экземпляр листа
  * @param pageIndex — номер проверяемой страницы, считая с нуля
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
  * @returns текст генератора
  */
 const resolvePageText = async (
   families: PaperFamily[],
   familyId: string,
   sheetId: string,
-  pageIndex: number
+  pageIndex: number,
+  customFontFamily: string | null
 ): Promise<string> => {
-  if (pageIndex === 0) {
-    return TEXT;
+  let wordCount = 0;
+
+  for (let index = 0; index <= pageIndex; index += 1) {
+    applySheet(families, familyId, sheetId, index, WIDE_TEXT, customFontFamily);
+
+    const { params } = await waitForProbe(
+      sheetId,
+      index,
+      0,
+      resolveFontFamily(customFontFamily)
+    );
+    const { lines } = params.page;
+
+    wordCount += countWords(
+      index === pageIndex ? lines.slice(0, CHECKED_ROW_COUNT) : lines
+    );
   }
 
-  applySheet(families, familyId, sheetId, 0, buildRowsText(PROBE_ROW_COUNT));
+  return WIDE_WORDS.slice(0, wordCount).join(' ');
+};
 
-  const { params } = await waitForProbe(sheetId, 0);
+/**
+ * Проверяет по растру одну страницу экземпляра: набирает текст, ждёт
+ * страницу и сверяет её с линиями фотографии.
+ *
+ * @param families — семьи листов стора
+ * @param familyId — семья листов
+ * @param sheet — экземпляр листа
+ * @param pageIndex — номер страницы: чётная по счёту пользователя отражается
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
+ * @returns проверенная страница и её фотография
+ */
+const checkSheetRaster = async (
+  families: PaperFamily[],
+  familyId: string,
+  sheet: PaperSheet,
+  pageIndex: number,
+  customFontFamily: string | null
+): Promise<RasterCheck> => {
+  const photo = await loadRenderImage(sheet.src);
+  const image =
+    pageIndex % 2 === 1 ? mirrorRenderImage(photo, sheet.width, sheet.height) : photo;
+  const text = await resolvePageText(
+    families,
+    familyId,
+    sheet.id,
+    pageIndex,
+    customFontFamily
+  );
 
-  return buildRowsText(params.page.lines.length + SECOND_PAGE_ROW_COUNT);
+  applySheet(families, familyId, sheet.id, pageIndex, text, customFontFamily);
+
+  /**
+   * Проверяемая страница — последняя в раскладке: под её строками и остаётся
+   * полоса для замера разлиновки.
+   */
+  const probe = await waitForProbe(
+    sheet.id,
+    pageIndex,
+    pageIndex + 1,
+    resolveFontFamily(customFontFamily)
+  );
+
+  await expectRasterOnRuling(probe, image);
+
+  return { probe, image };
 };
 
 /**
@@ -1394,25 +2003,284 @@ const checkFamily = async (familyId: string, pageIndex: number): Promise<void> =
   await expect(steps.size).toBe(family.sheets.length);
   await expect(hasTiltedSheet).toBe(true);
 
-  const isMirrored = pageIndex % 2 === 1;
-
   for (const sheet of family.sheets) {
-    const photo = await loadRenderImage(sheet.src);
-    const image = isMirrored
-      ? mirrorRenderImage(photo, sheet.width, sheet.height)
-      : photo;
+    await checkSheetRaster(families, familyId, sheet, pageIndex, null);
+  }
+};
 
-    const text = await resolvePageText(families, familyId, sheet.id, pageIndex);
+/**
+ * Прогоняет проверку полей на всех половинах разворота одного экземпляра.
+ *
+ * @param families — семьи листов стора
+ * @param familyId — семья листов
+ * @param sheetId — экземпляр листа
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
+ * @returns пробы проверенных страниц
+ */
+const checkSheetTextOnPaper = async (
+  families: PaperFamily[],
+  familyId: string,
+  sheetId: string,
+  customFontFamily: string | null
+): Promise<RasterProbe[]> => {
+  const probes: RasterProbe[] = [];
 
-    applySheet(families, familyId, sheet.id, pageIndex, text);
+  for (const pageIndex of SPREAD_PAGES) {
+    applySheet(families, familyId, sheetId, pageIndex, WIDE_TEXT, customFontFamily);
+
+    const probe = await waitForProbe(
+      sheetId,
+      pageIndex,
+      0,
+      resolveFontFamily(customFontFamily)
+    );
 
     /**
-     * Проверяемая страница — последняя в раскладке: под её строками и остаётся
-     * полоса для замера разлиновки.
+     * Страница не последняя в раскладке — значит, набрана до низа, а не
+     * парой строк.
      */
-    const probe = await waitForProbe(sheet.id, pageIndex, pageIndex + 1);
+    await expect(probe.pageCount).toBeGreaterThan(pageIndex + 1);
+    await expectTextOnPaper(probe);
 
-    await expectRasterOnRuling(probe, image);
+    probes.push(probe);
+  }
+
+  return probes;
+};
+
+/**
+ * Прогоняет проверку полей по всем экземплярам семьи на обеих половинах
+ * разворота.
+ *
+ * @param familyId — семья листов
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
+ */
+const checkTextOnPaper = async (
+  familyId: string,
+  customFontFamily: string | null
+): Promise<void> => {
+  const families = await loadPaperFamilies();
+  const family = families.find((item) => {
+    return item.id === familyId;
+  });
+
+  if (!family) {
+    throw new Error(`Семья не нашлась: ${familyId}`);
+  }
+
+  await prepareFont(customFontFamily);
+
+  for (const sheet of family.sheets) {
+    await checkSheetTextOnPaper(families, familyId, sheet.id, customFontFamily);
+  }
+};
+
+/**
+ * Отход линии изогнутого листа в столбце кадра: изгиб зависит только от
+ * горизонтали, левее середины кадра линия опускается, правее — поднимается.
+ *
+ * @param x — столбец кадра
+ * @returns отход вниз в пикселях; отрицательный — вверх
+ */
+const computeSheetBend = (x: number): number => {
+  const half = BENT_SHEET_WIDTH / 2;
+  const distance = Math.abs(x - half) / half;
+  const ramp = (distance - BENT_FLAT_SHARE) / (1 - BENT_FLAT_SHARE - BENT_EDGE_SHARE);
+  const share = Math.min(1, Math.max(0, ramp));
+  const reach =
+    BENT_REACH_SHARE * BENT_SHEET_STEP * (0.5 - 0.5 * Math.cos(Math.PI * share));
+
+  return x < half ? reach : -reach;
+};
+
+/**
+ * Рисует изогнутый лист в линейку.
+ *
+ * Хелперы синтетических листов из `tests/` в stories недоступны, а лист
+ * должен пройти настоящий импорт: из растра, а не из готовой разлиновки.
+ *
+ * @returns канва с фотографией листа
+ */
+const drawBentSheet = (): HTMLCanvasElement => {
+  const canvas = document.createElement('canvas');
+
+  canvas.width = BENT_SHEET_WIDTH;
+  canvas.height = BENT_SHEET_HEIGHT;
+
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    throw new Error('Браузер не дал контекст canvas');
+  }
+
+  context.fillStyle = BENT_PAPER_COLOR;
+  context.fillRect(0, 0, BENT_SHEET_WIDTH, BENT_SHEET_HEIGHT);
+  context.strokeStyle = BENT_LINE_COLOR;
+  context.lineWidth = BENT_LINE_WIDTH;
+
+  const firstLineY = BENT_SHEET_PHASE + BENT_BLANK_STEPS * BENT_SHEET_STEP;
+  const lastLineY = BENT_SHEET_HEIGHT - BENT_BLANK_STEPS * BENT_SHEET_STEP;
+
+  for (let lineY = firstLineY; lineY <= lastLineY; lineY += BENT_SHEET_STEP) {
+    context.beginPath();
+    context.moveTo(0, lineY + computeSheetBend(0));
+
+    for (let x = BENT_LINE_SEGMENT; x <= BENT_SHEET_WIDTH; x += BENT_LINE_SEGMENT) {
+      context.lineTo(x, lineY + computeSheetBend(x));
+    }
+
+    context.stroke();
+  }
+
+  return canvas;
+};
+
+/**
+ * Изогнутый лист, разобранный тем же путём, что и загруженная фотография:
+ * сначала наклон, потом по нему разлиновка вместе с изгибом.
+ *
+ * @returns экземпляр листа с фотографией в data URL
+ */
+const createBentSheet = (): PaperSheet => {
+  const canvas = drawBentSheet();
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    throw new Error('Браузер не дал контекст canvas');
+  }
+
+  const { data } = context.getImageData(0, 0, BENT_SHEET_WIDTH, BENT_SHEET_HEIGHT);
+  const image: SheetImageData = {
+    width: BENT_SHEET_WIDTH,
+    height: BENT_SHEET_HEIGHT,
+    luminance: toLuminance(data, BENT_SHEET_WIDTH * BENT_SHEET_HEIGHT),
+  };
+  const skewAngle = detectSkewAngle(image);
+  const detection = detectRuling(image, { skewAngle });
+
+  if (!detection.isDetected) {
+    throw new Error('Разлиновка изогнутого листа не нашлась');
+  }
+
+  return {
+    id: BENT_SHEET_ID,
+    label: 'Изогнутый лист',
+    src: canvas.toDataURL('image/png'),
+    width: BENT_SHEET_WIDTH,
+    height: BENT_SHEET_HEIGHT,
+    ruling: buildSheetRuling({ ...detection, skewAngle }),
+    lighting: null,
+    texture: null,
+  };
+};
+
+/**
+ * Изогнутый лист прогона.
+ *
+ * @returns экземпляр листа
+ */
+const resolveBentSheet = (): PaperSheet => {
+  bentSheet = bentSheet || createBentSheet();
+
+  return bentSheet;
+};
+
+/**
+ * Семьи стора с изогнутым листом в семье линейки.
+ *
+ * @param families — предустановленные семьи
+ * @param sheet — изогнутый лист
+ * @returns семьи с добавленным листом
+ */
+const withBentSheet = (families: PaperFamily[], sheet: PaperSheet): PaperFamily[] => {
+  return families.map((family) => {
+    return family.id === LINED_FAMILY_ID
+      ? { ...family, sheets: [...family.sheets, sheet] }
+      : family;
+  });
+};
+
+/**
+ * Проверяет, что та же страница, нарисованная с другим изгибом строк, уводит
+ * низ чернил в обеих крайних полосах от линий фотографии за допуск.
+ *
+ * @param probe — проба проверенной страницы
+ * @param image — фотография листа страницы
+ * @param band — полоса без чернил под текстом
+ * @param bend — изгиб, которым гнутся строки; `null` — строки прямые
+ */
+const expectBendMismatch = async (
+  probe: RasterProbe,
+  image: RenderImage,
+  band: RasterBand,
+  bend: RulingBend | null
+): Promise<void> => {
+  const strips = buildStrips(probe);
+  const params: PageRenderParams = {
+    ...probe.params,
+    geometry: { ...probe.params.geometry, bend },
+  };
+  const raster = renderProbeRaster(probe, image, params);
+  const { period } = measureRasterRuling(raster, band);
+
+  for (const strip of [strips.left, strips.right]) {
+    const fit = measureStripFit(probe, raster, band, strip, period, params);
+
+    await expect(measureWorstOffset(fit.inkOffsets)).toBeGreaterThan(INK_TOLERANCE);
+  }
+};
+
+/**
+ * Проверяет строки на изогнутом листе на нечётной и зеркальной страницах.
+ *
+ * Изгиб найден на растре и заметен: в центрах крайних полос он не меньше
+ * четверти шага. Отрицательных контролей два. Тот же лист, нарисованный
+ * прямыми строками, уводит низ чернил в крайних полосах за допуск — иначе
+ * проверка по полосам не отличала бы изогнутые строки от прямых. На
+ * зеркальной странице то же даёт неотражённый изгиб экземпляра — иначе
+ * проверка не отличала бы отражённый изгиб от потерянного.
+ *
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
+ */
+const checkBentRaster = async (customFontFamily: string | null): Promise<void> => {
+  await prepareFont(customFontFamily);
+
+  const sheet = resolveBentSheet();
+  const families = withBentSheet(await loadPaperFamilies(), sheet);
+
+  for (const pageIndex of SPREAD_PAGES) {
+    const { probe, image } = await checkSheetRaster(
+      families,
+      LINED_FAMILY_ID,
+      sheet,
+      pageIndex,
+      customFontFamily
+    );
+    const ruling = getPageRuling(sheet, pageIndex);
+    const band = buildEmptyBand(probe);
+
+    if (!band) {
+      throw new Error(`Полосы без чернил не осталось: ${sheet.id}, ${pageIndex}`);
+    }
+
+    await expect(probe.params.geometry.bend).not.toBeNull();
+
+    const strips = buildStrips(probe);
+    const bandMiddle = (band.top + band.bottom) / 2;
+
+    for (const strip of [strips.left, strips.right]) {
+      const bend = sampleBend(ruling.bend, ruling.skewAngle, strip.center, bandMiddle);
+
+      await expect(Math.abs(bend) / ruling.step).toBeGreaterThanOrEqual(
+        MIN_STRIP_BEND_SHARE
+      );
+    }
+
+    await expectBendMismatch(probe, image, band, null);
+
+    if (pageIndex % 2 === 1) {
+      await expectBendMismatch(probe, image, band, sheet.ruling.bend);
+    }
   }
 };
 
@@ -1426,7 +2294,8 @@ type Story = StoryObj<typeof meta>;
 
 /**
  * Растр нечётной страницы в клетку: шаг и наклон линий на растре — разлиновка
- * листа, а базовые линии сидят на линиях — на всех экземплярах семьи.
+ * листа, а строки сидят на линиях от левого до правого края блока — на всех
+ * экземплярах семьи.
  */
 export const GridRasterRuling: Story = {
   play: async () => {
@@ -1464,13 +2333,33 @@ export const MirroredLinedRasterRuling: Story = {
 };
 
 /**
+ * Строки повторяют изгиб линий листа, найденный импортом на его растре, — от
+ * левого до правого края блока, на нечётной и на зеркальной странице.
+ */
+export const BentRasterRuling: Story = {
+  play: async () => {
+    await checkBentRaster(null);
+  },
+};
+
+/**
+ * Свой шрифт повторяет изгиб: буквы без контуров садятся на изогнутую линию
+ * так же, как контуры встроенного шрифта.
+ */
+export const CustomFontBentRasterRuling: Story = {
+  play: async () => {
+    await checkBentRaster(CUSTOM_FONT_FAMILY);
+  },
+};
+
+/**
  * Текст на всю ширину остаётся на бумаге: на растре нечётной и зеркальной
- * страниц чернила не выходят за поля и линию поля — на всех экземплярах
- * клетки.
+ * страниц чернила не выходят за поля, линию поля и края кадра — на всех
+ * экземплярах клетки.
  */
 export const GridTextStaysOnPaper: Story = {
   play: async () => {
-    await checkTextOnPaper(GRID_FAMILY_ID);
+    await checkTextOnPaper(GRID_FAMILY_ID, null);
   },
 };
 
@@ -1479,6 +2368,52 @@ export const GridTextStaysOnPaper: Story = {
  */
 export const LinedTextStaysOnPaper: Story = {
   play: async () => {
-    await checkTextOnPaper(LINED_FAMILY_ID);
+    await checkTextOnPaper(LINED_FAMILY_ID, null);
+  },
+};
+
+/**
+ * То же своим шрифтом на экземплярах клетки: свес букв без контуров берётся
+ * из метрик начертания.
+ */
+export const GridCustomFontStaysOnPaper: Story = {
+  play: async () => {
+    await checkTextOnPaper(GRID_FAMILY_ID, CUSTOM_FONT_FAMILY);
+  },
+};
+
+/**
+ * То же своим шрифтом на экземплярах линейки.
+ */
+export const LinedCustomFontStaysOnPaper: Story = {
+  play: async () => {
+    await checkTextOnPaper(LINED_FAMILY_ID, CUSTOM_FONT_FAMILY);
+  },
+};
+
+/**
+ * Текст остаётся на бумаге на изогнутом листе: строки опускаются вслед за
+ * линиями, а боксы и чернила не уходят за края кадра — встроенным и своим
+ * шрифтом.
+ */
+export const BentTextStaysOnPaper: Story = {
+  play: async () => {
+    const sheet = resolveBentSheet();
+    const families = withBentSheet(await loadPaperFamilies(), sheet);
+
+    for (const customFontFamily of FONT_VARIANTS) {
+      await prepareFont(customFontFamily);
+
+      const probes = await checkSheetTextOnPaper(
+        families,
+        LINED_FAMILY_ID,
+        sheet.id,
+        customFontFamily
+      );
+
+      for (const probe of probes) {
+        await expect(probe.params.geometry.bend).not.toBeNull();
+      }
+    }
   },
 };
