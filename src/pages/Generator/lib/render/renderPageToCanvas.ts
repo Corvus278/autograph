@@ -2,7 +2,7 @@ import { deformGlyphPath } from '../glyph/deformGlyphPath';
 import type { GlyphPathCommand, GlyphPoint } from '../glyph/glyph.types';
 import { FALLBACK_FONT_METRICS } from '../measure/measureFontMetrics';
 import type { RulingBend } from '../paper/paper.types';
-import { sampleRulingBend } from '../paper/sampleRulingBend';
+import { sampleRulingBend, sampleRulingBendSlope } from '../paper/sampleRulingBend';
 import type { LetterDistortion } from '../randomize/randomize.types';
 
 import type {
@@ -167,8 +167,53 @@ const bendPoint = (tracker: BendTracker, x: number, y: number): GlyphPoint => {
 };
 
 /**
+ * Рисует текст жёсткой фигурой на изогнутой линии: середина текста на базовой
+ * линии опускается на изгиб в своём образе на странице, а сам текст
+ * поворачивается вокруг неё по касательной к линии.
+ *
+ * Согнуть текст по форме линии нечем — точек контура у него нет. Поэтому
+ * рендерер в режиме изгиба рисует так по одной букве: буква шириной в доли
+ * шага на касательной отходит от линии много меньше допуска, а целое слово
+ * осталось бы прямым.
+ *
+ * Поворот задан в системе буквы, и при скосе слова угол на странице
+ * приближённый: скос неровности почерка — единицы градусов, ошибка ничтожна.
+ *
+ * @param ctx — контекст, в который идут вызовы
+ * @param tracker — изгиб и текущее преобразование
+ * @param text — текст
+ * @param x — начало текста на базовой линии в системе рисования
+ * @param y — базовая линия в системе рисования
+ */
+const fillBentText = (
+  ctx: RenderContext,
+  tracker: BendTracker,
+  text: string,
+  x: number,
+  y: number
+): void => {
+  const { bend, skewAngle, matrix } = tracker;
+  const { a, b, c, d, e, f } = matrix;
+  const centerX = x + ctx.measureText(text).width / 2;
+  const center = bendPoint(tracker, centerX, y);
+  const slope = sampleRulingBendSlope(
+    bend,
+    skewAngle,
+    a * centerX + c * y + e,
+    b * centerX + d * y + f
+  );
+
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(Math.atan(slope));
+  ctx.translate(-centerX, -y);
+  ctx.fillText(text, x, y);
+  ctx.restore();
+};
+
+/**
  * Контекст, который рисует в `ctx` те же вызовы, но точки путей кладёт на
- * изогнутые линии разлиновки.
+ * изогнутые линии разлиновки, а текст — на линию сдвигом и поворотом.
  *
  * Рядом со стеком канвы ведётся своё преобразование с тем же порядком
  * `rotate`, `translate`, `transform` и своим стеком на `save`/`restore`: снять
@@ -249,7 +294,7 @@ const createBentContext = (
       return ctx.measureText(text);
     },
     fillText: (text, x, y) => {
-      ctx.fillText(text, x, y);
+      fillBentText(ctx, tracker, text, x, y);
     },
     beginPath: () => {
       ctx.beginPath();
@@ -405,20 +450,22 @@ const measureGlyphAdvances = (
 
 /**
  * Ширины букв слова: по контурам, если они есть, иначе текстом. Пустой список —
- * слово рисуется целиком, и мерить его по буквам незачем.
+ * слово рисуется целиком, и мерить его по буквам незачем. На изогнутом листе
+ * слово текстом всегда рисуется по буквам.
  */
 const measureAdvances = (
   ctx: RenderContext,
   word: RenderWord,
   glyphs: PageGlyphs | null,
   fontSizePx: number,
-  baseFont: string
+  baseFont: string,
+  isBent: boolean
 ): number[] => {
   if (glyphs) {
     return measureGlyphAdvances(ctx, word, glyphs, fontSizePx, baseFont);
   }
 
-  if (word.distortion.letters.length === 0) {
+  if (word.distortion.letters.length === 0 && !isBent) {
     return [];
   }
 
@@ -569,6 +616,10 @@ const drawWordGlyphs = (
 /**
  * Рисует слово буквами шрифта: целиком, если ни одна буква не выбивается, и
  * по одной, если у букв свои интервалы или своё начертание.
+ *
+ * На изогнутом листе слово рисуется по буквам всегда: каждая садится на линию
+ * в своей середине, а целое слово осталось бы прямым и на длинной строке
+ * отошло бы от линии дальше допуска.
  */
 const drawWordText = (
   ctx: RenderContext,
@@ -576,12 +627,13 @@ const drawWordText = (
   x: number,
   advances: number[],
   fontSizePx: number,
-  baseFont: string
+  baseFont: string,
+  isBent: boolean
 ): void => {
   const { text, distortion } = word;
   const { letters } = distortion;
 
-  if (letters.length === 0) {
+  if (letters.length === 0 && !isBent) {
     ctx.fillText(text, x, 0);
 
     return;
@@ -626,7 +678,8 @@ const drawWord = (
   glyphs: PageGlyphs | null,
   fontSizePx: number,
   baseFont: string,
-  blockWidth: number
+  blockWidth: number,
+  isBent: boolean
 ): number => {
   const { text, distortion } = word;
   const { rotate, skew, translateY, letters } = distortion;
@@ -635,8 +688,8 @@ const drawWord = (
     return 0;
   }
 
-  const isMeasuredByLetter = Boolean(glyphs) || letters.length > 0;
-  const advances = measureAdvances(ctx, word, glyphs, fontSizePx, baseFont);
+  const isMeasuredByLetter = Boolean(glyphs) || letters.length > 0 || isBent;
+  const advances = measureAdvances(ctx, word, glyphs, fontSizePx, baseFont, isBent);
   const width = isMeasuredByLetter
     ? advances.reduce((sum, advance) => {
         return sum + advance;
@@ -669,7 +722,7 @@ const drawWord = (
   if (glyphs) {
     drawWordGlyphs(ctx, word, x, advances, glyphs, fontSizePx, baseFont);
   } else {
-    drawWordText(ctx, word, x, advances, fontSizePx, baseFont);
+    drawWordText(ctx, word, x, advances, fontSizePx, baseFont, isBent);
   }
 
   ctx.restore();
@@ -693,7 +746,8 @@ const drawLine = (
   glyphs: PageGlyphs | null,
   fontSizePx: number,
   baseFont: string,
-  blockWidth: number
+  blockWidth: number,
+  isBent: boolean
 ): void => {
   const { words, distortion } = line;
   const { rotate, translateX } = distortion;
@@ -725,7 +779,16 @@ const drawLine = (
       cursorX += spaceWidth;
     }
 
-    cursorX += drawWord(ctx, word, cursorX, glyphs, fontSizePx, baseFont, blockWidth);
+    cursorX += drawWord(
+      ctx,
+      word,
+      cursorX,
+      glyphs,
+      fontSizePx,
+      baseFont,
+      blockWidth,
+      isBent
+    );
   });
 
   ctx.restore();
@@ -792,7 +855,8 @@ const drawPage = (
         glyphs,
         fontSizePx,
         baseFont,
-        blockWidth
+        blockWidth,
+        bend !== null
       );
     });
 

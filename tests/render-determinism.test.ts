@@ -14,6 +14,7 @@ const RENDER_PATHS = [
   'src/pages/Generator/lib/glyph',
   'src/pages/Generator/lib/ink',
   'src/pages/Generator/lib/randomize',
+  'src/pages/Generator/lib/paper/sampleRulingBend.ts',
   'src/pages/Generator/model/buildPageRenderParams.ts',
   'src/pages/Generator/model/buildPageTask.ts',
   'src/pages/Generator/model/drawPage.ts',
