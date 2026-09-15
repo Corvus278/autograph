@@ -19,6 +19,16 @@ export const MAX_SKEW_ANGLE = 2;
 export const SKEW_ANGLE_STEP = 0.1;
 
 /**
+ * Доля лучшей резкости вертикалей, ниже которой угол, найденный по
+ * горизонтальным линиям, считается уведённым изгибом. На синтетических листах
+ * с прогибом до трети шага угол, не уведённый изгибом, оставляет вертикалям от
+ * 0,78 их лучшей резкости, уведённый — не больше 0,12: половина лежит в этом
+ * разрыве. У листа без вертикалей резкость столбцов — зерно бумаги, от угла она
+ * почти не зависит, и отношение остаётся у единицы.
+ */
+const VERTICAL_SMEAR_RATIO = 0.5;
+
+/**
  * Настройки поиска наклона разлиновки.
  */
 export type SkewDetectionOptions = {
@@ -37,6 +47,21 @@ export type SkewDetectionOptions = {
    * меньше отключают уменьшение.
    */
   maxAnalysisSize?: number;
+};
+
+/**
+ * Итог свипа по одной оси.
+ */
+type AxisSweep = {
+  /**
+   * Угол наибольшей контрастности профиля в градусах, уточнённый параболой.
+   */
+  angle: number;
+
+  /**
+   * Контрастность профиля в лучшем отсчёте свипа.
+   */
+  contrast: number;
 };
 
 /**
@@ -65,10 +90,100 @@ const computeProfileContrast = (values: Float64Array): number => {
 };
 
 /**
- * Измеряет наклон разлиновки свипом по узкому диапазону углов: для каждого
- * угла изображение схлопывается в профиль средней яркости вдоль наклонных
- * линий, и берётся угол наибольшей контрастности профиля. Вершина уточняется
- * параболой по соседним отсчётам свипа, поэтому точность не упирается в шаг.
+ * Свип по одной оси: для каждого угла изображение схлопывается в профиль
+ * средней яркости вдоль наклонных линий этой оси, и берётся угол наибольшей
+ * контрастности. Вершина уточняется параболой по соседним отсчётам свипа,
+ * поэтому точность не упирается в шаг.
+ *
+ * @param source — уменьшенная копия фотографии
+ * @param axis — ось линий: горизонтальные линии разлиновки или вертикали
+ * @param maxAngle — половина диапазона свипа в градусах
+ * @param angleStep — шаг свипа в градусах
+ * @returns итог свипа; `null` — контрастности нет ни на одном угле
+ */
+const sweepAxis = (
+  source: SheetImageData,
+  axis: 'horizontal' | 'vertical',
+  maxAngle: number,
+  angleStep: number
+): AxisSweep | null => {
+  const sampleCount = Math.max(2, Math.round((2 * maxAngle) / angleStep));
+  const contrasts = new Float64Array(sampleCount + 1);
+  let bestIndex = 0;
+
+  for (let index = 0; index <= sampleCount; index += 1) {
+    const angle = -maxAngle + ((2 * maxAngle) / sampleCount) * index;
+    const profile = buildShearedProfile(source, axis, angle, maxAngle);
+
+    contrasts[index] = computeProfileContrast(profile.values);
+
+    if ((contrasts[index] || 0) > (contrasts[bestIndex] || 0)) {
+      bestIndex = index;
+    }
+  }
+
+  const contrast = contrasts[bestIndex] || 0;
+
+  if (contrast <= 0) {
+    return null;
+  }
+
+  const spacing = (2 * maxAngle) / sampleCount;
+  const isInside = bestIndex > 0 && bestIndex < sampleCount;
+  const offset = isInside
+    ? refinePeakOffset(
+        contrasts[bestIndex - 1] || 0,
+        contrast,
+        contrasts[bestIndex + 1] || 0
+      )
+    : 0;
+
+  return { angle: -maxAngle + (bestIndex + offset) * spacing, contrast };
+};
+
+/**
+ * Наклон по одним горизонтальным линиям, без сверки по вертикалям: угол, с
+ * которым сверяется итог `detectSkewAngle`, — поправка по вертикалям не должна
+ * восстанавливать линии хуже него.
+ *
+ * @param image — полутоновая выжимка фотографии листа
+ * @param options — настройки свипа
+ * @returns наклон в градусах; `0` на изображении без разлиновки
+ */
+export const detectRowSkewAngle = (
+  image: SheetImageData,
+  options: SkewDetectionOptions = {}
+): number => {
+  const {
+    maxAngle = MAX_SKEW_ANGLE,
+    angleStep = SKEW_ANGLE_STEP,
+    maxAnalysisSize = ANALYSIS_IMAGE_SIZE,
+  } = options;
+
+  if (maxAngle <= 0 || angleStep <= 0) {
+    return 0;
+  }
+
+  const rows = sweepAxis(
+    downsampleSheetImage(image, maxAnalysisSize),
+    'horizontal',
+    maxAngle,
+    angleStep
+  );
+
+  return rows ? rows.angle : 0;
+};
+
+/**
+ * Измеряет наклон разлиновки свипом по узкому диапазону углов — по
+ * горизонтальным линиям, со сверкой по вертикалям.
+ *
+ * Свип по линиям меряет их резкость во всём кадре и на изогнутом листе тянется
+ * к наклону крутой половины линии. Вертикали — линия поля, концы линий, линии
+ * клетки — от изгиба горизонтальных линий не зависят. Если угол, найденный по
+ * линиям, размывает вертикали меньше чем до половины их лучшей резкости, он
+ * уведён изгибом, и берётся угол вертикалей. Иначе остаётся угол линий:
+ * линейная часть изгиба уходит в сам изгиб.
  *
  * Фотография не выправляется — наклон только измеряется: выпрямление это
  * пересемплирование, оно размывает текстуру бумаги.
@@ -95,34 +210,23 @@ export const detectSkewAngle = (
   }
 
   const source = downsampleSheetImage(image, maxAnalysisSize);
-  const sampleCount = Math.max(2, Math.round((2 * maxAngle) / angleStep));
-  const contrasts = new Float64Array(sampleCount + 1);
-  let bestIndex = 0;
+  const rows = sweepAxis(source, 'horizontal', maxAngle, angleStep);
 
-  for (let index = 0; index <= sampleCount; index += 1) {
-    const angle = -maxAngle + ((2 * maxAngle) / sampleCount) * index;
-    const profile = buildShearedProfile(source, 'horizontal', angle, maxAngle);
-
-    contrasts[index] = computeProfileContrast(profile.values);
-
-    if ((contrasts[index] || 0) > (contrasts[bestIndex] || 0)) {
-      bestIndex = index;
-    }
-  }
-
-  if ((contrasts[bestIndex] || 0) <= 0) {
+  if (!rows) {
     return 0;
   }
 
-  const spacing = (2 * maxAngle) / sampleCount;
-  const isInside = bestIndex > 0 && bestIndex < sampleCount;
-  const offset = isInside
-    ? refinePeakOffset(
-        contrasts[bestIndex - 1] || 0,
-        contrasts[bestIndex] || 0,
-        contrasts[bestIndex + 1] || 0
-      )
-    : 0;
+  const columns = sweepAxis(source, 'vertical', maxAngle, angleStep);
 
-  return -maxAngle + (bestIndex + offset) * spacing;
+  if (!columns) {
+    return rows.angle;
+  }
+
+  const smearedContrast = computeProfileContrast(
+    buildShearedProfile(source, 'vertical', rows.angle, maxAngle).values
+  );
+
+  return smearedContrast < VERTICAL_SMEAR_RATIO * columns.contrast
+    ? columns.angle
+    : rows.angle;
 };

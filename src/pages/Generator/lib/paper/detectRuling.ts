@@ -213,6 +213,13 @@ export type DetectedRuling = RulingDetection & {
    * изгиб отброшен, и сверяет пороги надёжности.
    */
   bendFoundNodeShare: number;
+
+  /**
+   * Наклон в градусах, при котором измерена разлиновка: заданный в настройках
+   * или найденный свипом. Есть и у ненайденной разлиновки: импорт кладёт его в
+   * лист, ждущий ручного ввода.
+   */
+  skewAngle: number;
 };
 
 const NO_MARGINS: PaperMargins = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -257,9 +264,10 @@ export type RulingDetectionOptions = {
   maxAnalysisSize?: number;
 };
 
-const toMissingDetection = (confidence: number): DetectedRuling => {
+const toMissingDetection = (confidence: number, skewAngle: number): DetectedRuling => {
   return {
     isDetected: false,
+    skewAngle,
     step: 0,
     firstLinePhase: 0,
     kind: 'blank',
@@ -1208,7 +1216,7 @@ const toBendRegion = (
  *
  * @param image — полутоновая выжимка фотографии листа
  * @param options — настройки поиска
- * @returns измеренная разлиновка вместе с уверенностью
+ * @returns измеренная разлиновка вместе с наклоном и уверенностью
  */
 export const detectRuling = (
   image: SheetImageData,
@@ -1237,7 +1245,7 @@ export const detectRuling = (
   );
 
   if (period.step <= 0 || period.confidence < confidenceThreshold) {
-    return toMissingDetection(period.confidence);
+    return toMissingDetection(period.confidence, skewAngle);
   }
 
   const { columns, response: columnResponse } = buildColumnProfiles(
@@ -1345,6 +1353,7 @@ export const detectRuling = (
     isDetected: true,
     step: period.step,
     firstLinePhase: period.phase,
+    skewAngle,
     kind: isGrid ? 'grid' : 'lined',
     margins,
     marginLineX: marginLine && marginLine.x,

@@ -20,7 +20,6 @@ import type {
 import {
   buildSheetRuling,
   detectRuling,
-  detectSkewAngle,
   extractLighting,
   extractTexture,
   toTexturePixels,
@@ -185,8 +184,12 @@ const buildSheetProfile = (
   path: string,
   sheet: Pick<PaperSheet, 'id' | 'label' | 'src'>
 ): SheetProfileResult => {
-  const skewAngle = detectSkewAngle(photo);
-  const detection = detectRuling(photo, { skewAngle });
+  /**
+   * Наклон ищет сам детектор, как и при импорте своей фотографии: найденный
+   * свипом угол он поправляет по изгибу линий, и угол берётся из детекции.
+   */
+  const detection = detectRuling(photo);
+  const { skewAngle } = detection;
 
   if (!detection.isDetected || detection.step <= 0) {
     throw new Error(

@@ -71,6 +71,16 @@ const START_SEARCH_SHARE = 1 / 3;
 const TRACE_SEARCH_SHARE = 1 / 6;
 
 /**
+ * Полуширина запасного окна трассировки в долях шага — на случай, когда в
+ * основном окне линии нет. Предсказание по двум последним узлам промахивается
+ * на склоне короткого прогиба: у прогиба в треть шага на половине области
+ * соседние узлы расходятся на четверть шага, и линия уходит из окна в шестую.
+ * Соседняя линия лежит в шаге от настоящей, и окно в треть шага её не достаёт,
+ * пока промах предсказания меньше двух третей шага.
+ */
+const TRACE_FALLBACK_SHARE = 1 / 3;
+
+/**
  * Квантиль стартовых глубин, которым меряется типичная глубина линий: линии
  * видны не на всём листе, и медиана на наполовину пустом листе упала бы до шума.
  */
@@ -78,10 +88,14 @@ const LINE_DEPTH_QUANTILE = 0.9;
 
 /**
  * Доля типичной глубины, ниже которой линия в полосе считается ненайденной.
- * Та же, что у границ разлиновки в `detectRuling.ts`: бледные линии у края
- * снимка держатся выше, чистое поле — ниже.
+ * Десятая, а не пятая, как у границ разлиновки в `detectRuling.ts`: на крупном
+ * кадре линия, изогнутая внутри полосы, размазана по полосе, и у края области,
+ * срезанного наклоном, её провал мельче пятой части глубины прямых линий —
+ * крайний узел терялся и заполнялся соседним. Узел ищется только внутри
+ * области и в окне у предсказания трассы, поэтому чистое поле, спираль и чужая
+ * линейка за линией поля в него не попадают.
  */
-const LINE_DEPTH_LEVEL = 0.2;
+const LINE_DEPTH_LEVEL = 0.1;
 
 /**
  * Отход узла от медианы соседних линий в долях шага, после которого узел
@@ -200,8 +214,88 @@ const cropColumns = (
 };
 
 /**
- * Самый глубокий провал в окне вокруг предсказанного положения линии,
- * уточнённый параболой.
+ * Наименьшая разница плеч провала в пикселях — расстояний от вершины до краёв
+ * на половине глубины, — с которой положение линии в полосе берётся
+ * центроидом, а не вершиной. Линия, прямая внутри полосы, даёт симметричный
+ * провал, и вершина с параболой точнее центроида по нескольким бинам. Линия,
+ * изогнутая внутри полосы, даёт глубокую часть там, где она пологая, и
+ * затянутый склон: вершина уезжает к пологой части, а узел должен стоять на
+ * среднем положении линии в полосе. Порог в пиксель хватал шум ровных
+ * провалов — прогиб в середине области на кадре втрое крупнее при наклоне в два
+ * градуса терял точность с 0,037 до 0,042 шага, — при двух пикселях она
+ * прежняя.
+ */
+const DIP_ASYMMETRY_BINS = 2;
+
+/**
+ * Край провала на заданной глубине с одной стороны от вершины, уточнённый
+ * линейной интерполяцией между бинами.
+ *
+ * @param detrended — профиль полосы без фона, отрицательный на линиях
+ * @param peak — бин вершины
+ * @param level — глубина, на которой ищется край, меньше глубины вершины
+ * @param direction — сторона: `-1` влево, `1` вправо
+ * @returns координата края в бинах
+ */
+const findDipEdge = (
+  detrended: Float64Array,
+  peak: number,
+  level: number,
+  direction: -1 | 1
+): number => {
+  let bin = peak;
+
+  while (-(detrended[bin + direction] || 0) > level) {
+    bin += direction;
+  }
+
+  const inner = -(detrended[bin] || 0);
+  const outer = -(detrended[bin + direction] || 0);
+
+  return bin + (direction * (inner - level)) / (inner - outer);
+};
+
+/**
+ * Положение линии в полосе: у симметричного провала — вершина, у
+ * несимметричного — центроид его части глубже половины вершины, взвешенный
+ * превышением над половиной.
+ *
+ * @param detrended — профиль полосы без фона, отрицательный на линиях
+ * @param peak — бин самой глубокой точки
+ * @param depth — глубина вершины
+ * @param peakPosition — вершина, уточнённая параболой
+ * @returns координата линии в бинах
+ */
+const locateDipCenter = (
+  detrended: Float64Array,
+  peak: number,
+  depth: number,
+  peakPosition: number
+): number => {
+  const level = depth / 2;
+  const left = findDipEdge(detrended, peak, level, -1);
+  const right = findDipEdge(detrended, peak, level, 1);
+
+  if (Math.abs(left + right - 2 * peakPosition) < DIP_ASYMMETRY_BINS) {
+    return peakPosition;
+  }
+
+  let weight = 0;
+  let moment = 0;
+
+  for (let bin = Math.ceil(left); bin <= Math.floor(right); bin += 1) {
+    const excess = -(detrended[bin] || 0) - level;
+
+    weight += excess;
+    moment += excess * bin;
+  }
+
+  return moment / weight;
+};
+
+/**
+ * Самый глубокий провал в окне вокруг предсказанного положения линии; его
+ * положение — по `locateDipCenter`.
  *
  * @param detrended — профиль полосы без фона, отрицательный на линиях
  * @param center — предсказанная координата линии в бинах
@@ -235,7 +329,15 @@ const findLineDip = (
     return null;
   }
 
-  return { position: peak + refinePeakOffset(previous, depth, next), depth };
+  return {
+    position: locateDipCenter(
+      detrended,
+      peak,
+      depth,
+      peak + refinePeakOffset(previous, depth, next)
+    ),
+    depth,
+  };
 };
 
 const computeQuantile = (values: number[], quantile: number): number => {
@@ -273,6 +375,7 @@ const traceLine = (
   startDip: LineDip,
   straight: number,
   reach: number,
+  fallbackReach: number,
   threshold: number,
   grid: NodeGrid,
   row: number
@@ -292,7 +395,12 @@ const traceLine = (
       strip += direction
     ) {
       const predicted = previous + slope;
-      const dip = findLineDip(detrended[strip] || new Float64Array(0), predicted, reach);
+      const profile = detrended[strip] || new Float64Array(0);
+      const nearDip = findLineDip(profile, predicted, reach);
+      const dip =
+        nearDip !== null && nearDip.depth >= threshold
+          ? nearDip
+          : findLineDip(profile, predicted, fallbackReach);
       const isLineFound = dip !== null && dip.depth >= threshold;
       const position = dip !== null && isLineFound ? dip.position : predicted;
 
@@ -594,6 +702,7 @@ export const detectRulingBend = (
         startDip,
         lineOffset + (firstLine + row) * step,
         step * TRACE_SEARCH_SHARE,
+        step * TRACE_FALLBACK_SHARE,
         threshold,
         grid,
         row

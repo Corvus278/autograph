@@ -1,7 +1,14 @@
 /**
  * @vitest-environment jsdom
  */
-import type { PaperMargins } from '@pages/Generator/lib/paper';
+import {
+  buildSheetRuling,
+  detectRuling,
+  type PaperMargins,
+  sampleRulingBend,
+  type SheetRuling,
+} from '@pages/Generator/lib/paper';
+import { detectRowSkewAngle } from '@pages/Generator/lib/paper/detectSkewAngle';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -12,14 +19,24 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSyntheticSheet } from './helpers/synthetic-sheet';
+import {
+  computeSyntheticLineEnds,
+  computeSyntheticLineY,
+  computeSyntheticMarginLineX,
+  createSyntheticSheet,
+  type SyntheticSheetParams,
+} from './helpers/synthetic-sheet';
 import {
   ANGLE_TOLERANCE,
+  ARC_PHOTO,
   BENT_PHOTO,
+  LEFT_HALF_BENT_PHOTO,
   MARGIN_TOLERANCE,
   readUserRuling,
+  RIGHT_HALF_BENT_PHOTO,
   RULED_PHOTO,
   RULED_PHOTO_FOUND_MARGINS,
+  scalePhoto,
   STEP_TOLERANCE,
   TILTED_ANGLE,
   uploadUserPhoto,
@@ -56,6 +73,113 @@ const measureMarginMiss = (actual: PaperMargins, expected: PaperMargins): number
     Math.abs(actual.bottom - expected.bottom),
     Math.abs(actual.left - expected.left)
   );
+};
+
+/**
+ * Шаг прохода по столбцам при сверке линий в пикселях.
+ */
+const RESTORE_COLUMN_STEP = 2;
+
+/**
+ * Допуск попадания линий по спеке: двадцатая часть шага.
+ */
+const RESTORE_TOLERANCE = 1 / 20;
+
+/**
+ * Запас над пределом раскладки узлов в долях шага для случаев, где предел
+ * выше допуска спеки: замер узлов не должен добавлять к нему больше сотой шага.
+ */
+const LAYOUT_LIMIT_MARGIN = 0.01;
+
+/**
+ * Запас над промахом при угле свипа по линиям в долях шага. Угол вертикалей
+ * там, где он сменил угол линий, может сдвинуть сетку узлов на дискретность
+ * замера — у дуги во всю ширину втрое крупного кадра это три тысячных шага.
+ */
+const SWEEP_ANGLE_MARGIN = 0.005;
+
+/**
+ * Наибольший промах линий, восстановленных по разлиновке листа, мимо линий
+ * снимка — в долях шага, только в области с линиями: между верхним и нижним
+ * полями, от линии поля слева до концов линий справа. Границы берутся на
+ * высоте самой линии: у повёрнутого снимка линия поля и концы линий уходят
+ * вбок по высоте кадра. Линия разлиновки сопоставляется с линией снимка по
+ * высоте у левого края кадра.
+ *
+ * @param photo — описание снимка
+ * @param ruling — разлиновка листа
+ * @returns промах в долях шага снимка
+ */
+const measureRestoreError = (
+  photo: SyntheticSheetParams,
+  ruling: SheetRuling
+): number => {
+  const { step = 0, phase = 0, height = 0, width = 0, margins } = photo;
+  const tangent = Math.tan((ruling.skewAngle * Math.PI) / 180);
+  const firstIndex = Math.ceil(((margins?.top || 0) - phase) / step);
+  const lastIndex = Math.floor((height - (margins?.bottom || 0) - phase) / step);
+  let miss = 0;
+
+  for (let index = firstIndex; index <= lastIndex; index += 1) {
+    const line = Math.round((phase + index * step - ruling.firstLinePhase) / ruling.step);
+
+    for (let x = 0; x < width; x += RESTORE_COLUMN_STEP) {
+      const lineY = computeSyntheticLineY(photo, index, x);
+      const ends = computeSyntheticLineEnds(photo, lineY);
+      const left = Math.max(computeSyntheticMarginLineX(photo, lineY) || 0, ends.left);
+
+      if (x >= left && x < ends.right) {
+        const straight = ruling.firstLinePhase + line * ruling.step + x * tangent;
+        const restored =
+          straight +
+          (ruling.bend
+            ? sampleRulingBend(ruling.bend, ruling.skewAngle, x, straight)
+            : 0);
+
+        miss = Math.max(miss, Math.abs(restored - lineY));
+      }
+    }
+  }
+
+  return miss / step;
+};
+
+/**
+ * Та же разлиновка с идеальным изгибом: смещения узлов её сетки сняты с
+ * нарисованных линий в центрах узлов. Её промах — предел самой раскладки
+ * узлов, без ошибки их замера.
+ *
+ * @param photo — описание снимка
+ * @param ruling — разлиновка листа
+ * @returns разлиновка с идеальными смещениями узлов
+ */
+const toIdealBendRuling = (
+  photo: SyntheticSheetParams,
+  ruling: SheetRuling
+): SheetRuling => {
+  const { bend, skewAngle, firstLinePhase, step } = ruling;
+
+  if (!bend) {
+    return ruling;
+  }
+
+  const { columnOrigin, columnSpacing, columnCount, rowOrigin, rowSpacing } = bend;
+  const tangent = Math.tan((skewAngle * Math.PI) / 180);
+  const firstLine = Math.round((rowOrigin - firstLinePhase) / step);
+  const offsets = bend.offsets.map((_offset, node) => {
+    const row = Math.floor(node / columnCount);
+    const x = columnOrigin + (node % columnCount) * columnSpacing;
+    const index = Math.round(
+      (firstLinePhase + (firstLine + row) * step - (photo.phase || 0)) / (photo.step || 1)
+    );
+
+    return (
+      computeSyntheticLineY(photo, index, x) -
+      (rowOrigin + row * rowSpacing + x * tangent)
+    );
+  });
+
+  return { ...ruling, bend: { ...bend, offsets } };
 };
 
 beforeEach(() => {
@@ -141,6 +265,145 @@ describe('импорт фотографии листа', () => {
 
     expect(readUserRuling()?.bend).toStrictEqual(bend);
   });
+
+  /**
+   * Угол сверяется с наклоном там, где линейной части у прогиба в области нет:
+   * прогиб симметричен в области или идёт дугой во всю ширину кадра. У прогиба
+   * на одной половине области линейная часть уходит в угол, и сверяются только
+   * линии, бока и линия поля.
+   *
+   * У предела раскладки узлов промах выше допуска спеки и при идеальных узлах:
+   * прогиб на половине области короче восьми шагов, а дуга и прогиб на
+   * половине у края, срезанного наклоном, выходят за крайний узел области,
+   * суженной наклоном в два градуса. Там промах сверяется с пределом той же
+   * сетки.
+   */
+  it.each([
+    ['прогиб в середине области без наклона', BENT_PHOTO, 0, true, false],
+    ['прогиб в середине области с наклоном 1°', BENT_PHOTO, 1, true, false],
+    ['прогиб в середине области с наклоном −2°', BENT_PHOTO, -2, true, false],
+    ['прогиб в середине области с наклоном 2°', BENT_PHOTO, 2, true, false],
+    [
+      'втрое крупный кадр, прогиб в середине, наклон 2°',
+      scalePhoto(BENT_PHOTO, 3),
+      2,
+      true,
+      false,
+    ],
+    [
+      'втрое крупный кадр, прогиб в середине, наклон −2°',
+      scalePhoto(BENT_PHOTO, 3),
+      -2,
+      true,
+      false,
+    ],
+    ['дуга во всю ширину кадра', ARC_PHOTO, 0, true, false],
+    ['втрое крупный кадр, дуга во всю ширину', scalePhoto(ARC_PHOTO, 3), 0, true, false],
+    ['прогиб на левой половине области', LEFT_HALF_BENT_PHOTO, 0, false, false],
+    [
+      'втрое крупный кадр, прогиб на левой половине, наклон 2°',
+      scalePhoto(LEFT_HALF_BENT_PHOTO, 3),
+      2,
+      false,
+      false,
+    ],
+    [
+      'втрое крупный кадр, прогиб на правой половине, наклон −2°',
+      scalePhoto(RIGHT_HALF_BENT_PHOTO, 3),
+      -2,
+      false,
+      false,
+    ],
+    [
+      'предел раскладки: втрое крупный кадр, прогиб на левой половине',
+      scalePhoto(LEFT_HALF_BENT_PHOTO, 3),
+      0,
+      false,
+      true,
+    ],
+    [
+      'предел раскладки: втрое крупный кадр, прогиб на левой половине у среза, наклон −2°',
+      scalePhoto(LEFT_HALF_BENT_PHOTO, 3),
+      -2,
+      false,
+      true,
+    ],
+    [
+      'предел раскладки: втрое крупный кадр, прогиб на правой половине у среза, наклон 2°',
+      scalePhoto(RIGHT_HALF_BENT_PHOTO, 3),
+      2,
+      false,
+      true,
+    ],
+    ['предел раскладки: дуга, наклон 2°', ARC_PHOTO, 2, true, true],
+    ['предел раскладки: дуга, наклон −2°', ARC_PHOTO, -2, true, true],
+    [
+      'предел раскладки: втрое крупный кадр, дуга, наклон 2°',
+      scalePhoto(ARC_PHOTO, 3),
+      2,
+      true,
+      true,
+    ],
+    [
+      'предел раскладки: втрое крупный кадр, дуга, наклон −2°',
+      scalePhoto(ARC_PHOTO, 3),
+      -2,
+      true,
+      true,
+    ],
+  ] as const)(
+    'импорт изогнутого листа (%s): линии, бока и линия поля — как у ровного',
+    async (_name, bentPhoto, angle, isAngleChecked, isLayoutLimit) => {
+      const user = userEvent.setup();
+      const photo = { ...bentPhoto, angle };
+      const { bend: _bend, ...flatPhoto } = photo;
+      const image = createSyntheticSheet(photo);
+
+      decodeSheetImage.mockResolvedValue(image);
+
+      render(<PaperGroup />);
+      await uploadUserPhoto(user);
+
+      const ruling = readUserRuling();
+
+      if (!ruling) {
+        throw new Error('Лист не добавлен');
+      }
+
+      const flat = buildSheetRuling(detectRuling(createSyntheticSheet(flatPhoto)));
+      const sweepRuling = buildSheetRuling(
+        detectRuling(image, { skewAngle: detectRowSkewAngle(image) })
+      );
+      const restoreError = measureRestoreError(photo, ruling);
+
+      expect(ruling.bend).not.toBeNull();
+      expect(restoreError).toBeLessThanOrEqual(
+        isLayoutLimit
+          ? measureRestoreError(photo, toIdealBendRuling(photo, ruling)) +
+              LAYOUT_LIMIT_MARGIN
+          : RESTORE_TOLERANCE
+      );
+      expect(restoreError).toBeLessThanOrEqual(
+        measureRestoreError(photo, sweepRuling) + SWEEP_ANGLE_MARGIN
+      );
+      expect(ruling.marginLineSide).toBe(flat.marginLineSide);
+      expect(
+        Math.abs((ruling.marginLineX || 0) - (flat.marginLineX || 0))
+      ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+      expect(
+        measureMarginMiss(ruling.margins, {
+          ...flat.margins,
+          top: ruling.margins.top,
+          bottom: ruling.margins.bottom,
+        })
+      ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
+
+      if (isAngleChecked) {
+        expect(Math.abs(ruling.skewAngle - angle)).toBeLessThanOrEqual(ANGLE_TOLERANCE);
+      }
+    },
+    60_000
+  );
 
   it('на ненайденной разлиновке оставляет лист с нулевым шагом и без линии поля', async () => {
     const user = userEvent.setup();

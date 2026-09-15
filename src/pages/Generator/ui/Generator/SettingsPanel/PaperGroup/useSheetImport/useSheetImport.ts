@@ -9,7 +9,6 @@ import type {
 import {
   buildSheetRuling,
   detectRuling,
-  detectSkewAngle,
   encodeTextureMap,
   extractLighting,
   extractTexture,
@@ -59,16 +58,20 @@ const toSheetLabel = (fileName: string): string => {
 };
 
 /**
- * Измеряет фотографию: сначала наклон, потом по нему — разлиновку.
+ * Измеряет фотографию одним вызовом детектора, тем же, что собирает пресеты:
+ * наклон он ищет сам и поправляет по изгибу линий, поэтому угол берётся из
+ * детекции, а не из отдельного свипа.
  *
  * @param image — полутоновая выжимка фотографии
  * @returns измерения; разлиновка `null`, если её не нашли
  */
 const measureSheet = (image: SheetImageData): SheetMeasurement => {
-  const skewAngle = detectSkewAngle(image);
-  const detection = detectRuling(image, { skewAngle });
+  const detection = detectRuling(image);
 
-  return { skewAngle, detection: detection.isDetected ? detection : null };
+  return {
+    skewAngle: detection.skewAngle,
+    detection: detection.isDetected ? detection : null,
+  };
 };
 
 /**

@@ -131,6 +131,25 @@ const CLUTTERED_SHEET = {
   bend: REGION_SAG,
 } satisfies SyntheticSheetParams;
 
+/**
+ * Прогиб в треть шага на левой половине области: крутой склон стоит внутри
+ * области, и соседние узлы расходятся больше окна трассы в шестую шага.
+ */
+const HALF_REGION_SAG: SyntheticField = (x) => {
+  const half = (MARGIN_LINE_X - LINE_START) / 4;
+  const share = Math.max(-1, Math.min(1, (x - LINE_START - half) / half));
+
+  return (STEP / 3) * Math.cos((Math.PI * share) / 2) ** 2;
+};
+
+/**
+ * Лист со спиралью и чужой линейкой с прогибом на половине области.
+ */
+const HALF_SAG_CLUTTERED_SHEET = {
+  ...STRAIGHT_CLUTTERED_SHEET,
+  bend: HALF_REGION_SAG,
+} satisfies SyntheticSheetParams;
+
 const detectSheetRuling = (params: SyntheticSheetParams): SheetRuling => {
   const skewAngle = params.angle || 0;
   const detection = detectRuling(createSyntheticSheet(params), { skewAngle });
@@ -213,6 +232,19 @@ describe('detectRuling: изгиб линий', () => {
     expect(ruling.bend).not.toBeNull();
     expect(
       measureRestoreError(CLUTTERED_SHEET, ruling, findLinedRegion(CLUTTERED_SHEET))
+    ).toBeLessThanOrEqual(LINE_TOLERANCE);
+  });
+
+  it('прослеживает прогиб на половине области на листе со спиралью и чужой линейкой', () => {
+    const ruling = detectSheetRuling(HALF_SAG_CLUTTERED_SHEET);
+
+    expect(ruling.bend).not.toBeNull();
+    expect(
+      measureRestoreError(
+        HALF_SAG_CLUTTERED_SHEET,
+        ruling,
+        findLinedRegion(HALF_SAG_CLUTTERED_SHEET)
+      )
     ).toBeLessThanOrEqual(LINE_TOLERANCE);
   });
 

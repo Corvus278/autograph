@@ -26,7 +26,6 @@ import type {
 import {
   buildSheetRuling,
   detectRuling,
-  detectSkewAngle,
   sampleRulingBend,
   sampleRulingBendSlope,
 } from '../../../lib/paper';
@@ -2155,8 +2154,11 @@ const createBentSheet = (): PaperSheet => {
     height: BENT_SHEET_HEIGHT,
     luminance: toLuminance(data, BENT_SHEET_WIDTH * BENT_SHEET_HEIGHT),
   };
-  const skewAngle = detectSkewAngle(image);
-  const detection = detectRuling(image, { skewAngle });
+  /**
+   * Лист разбирается тем же вызовом, что и при импорте фотографии: наклон
+   * детектор ищет сам.
+   */
+  const detection = detectRuling(image);
 
   if (!detection.isDetected) {
     throw new Error('Разлиновка изогнутого листа не нашлась');
@@ -2168,7 +2170,7 @@ const createBentSheet = (): PaperSheet => {
     src: canvas.toDataURL('image/png'),
     width: BENT_SHEET_WIDTH,
     height: BENT_SHEET_HEIGHT,
-    ruling: buildSheetRuling({ ...detection, skewAngle }),
+    ruling: buildSheetRuling(detection),
     lighting: null,
     texture: null,
   };

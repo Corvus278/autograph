@@ -33,16 +33,21 @@ export const RULED_PHOTO_FOUND_MARGINS = {
 };
 
 /**
- * Прогиб линий между линией поля и правыми концами линий: в середине на три
- * десятых шага вниз, к краям области сходит на нет без излома — за крайним
- * узлом сетка изгиба держит смещение постоянным.
+ * Прогиб линий между линией поля и правыми концами линий: в середине на треть
+ * шага вниз — наибольший прогиб, который допускает спека, — к краям области
+ * сходит на нет без излома: за крайним узлом сетка изгиба держит смещение
+ * постоянным.
+ *
+ * Область смещена к правому краю кадра, и крутая половина прогиба наклонена
+ * круче свипа угла: такой лист уводил бы угол, найденный по всему кадру, к
+ * наклону одной половины линии.
  */
 const sagInsideRuledArea: SyntheticField = (x) => {
   const left = RULED_PHOTO.marginLineX;
   const right = RULED_PHOTO.width - RULED_PHOTO.margins.right;
   const share = Math.max(-1, Math.min(1, (2 * x - left - right) / (right - left)));
 
-  return 0.3 * RULED_PHOTO.step * Math.cos((Math.PI * share) / 2) ** 2;
+  return (RULED_PHOTO.step / 3) * Math.cos((Math.PI * share) / 2) ** 2;
 };
 
 /**
@@ -52,6 +57,103 @@ export const BENT_PHOTO = {
   ...RULED_PHOTO,
   bend: sagInsideRuledArea,
 } satisfies SyntheticSheetParams;
+
+/**
+ * Прогиб во всю ширину кадра: парабола, в середине кадра ниже краёв на треть
+ * шага. Область с линиями — от линии поля до концов линий — стоит в кадре
+ * несимметрично, и прямая, ближайшая к дуге внутри области, наклонена.
+ */
+const sagAcrossFrame: SyntheticField = (x) => {
+  return (RULED_PHOTO.step / 3) * (1 - ((2 * x) / RULED_PHOTO.width - 1) ** 2);
+};
+
+/**
+ * Снимок с линиями, прогнутыми параболой во всю ширину кадра.
+ */
+export const ARC_PHOTO = {
+  ...RULED_PHOTO,
+  bend: sagAcrossFrame,
+} satisfies SyntheticSheetParams;
+
+/**
+ * Прогиб в треть шага только на одной половине области с линиями, другая
+ * половина прямая: крутой склон прогиба стоит внутри области.
+ *
+ * @param from — левый край половины в пикселях снимка
+ * @param to — правый край половины
+ * @returns смещение линий
+ */
+const createHalfSag = (from: number, to: number): SyntheticField => {
+  return (x) => {
+    const share = Math.max(-1, Math.min(1, (2 * x - from - to) / (to - from)));
+
+    return (RULED_PHOTO.step / 3) * Math.cos((Math.PI * share) / 2) ** 2;
+  };
+};
+
+/**
+ * Середина области с линиями: между линией поля и правыми концами линий.
+ */
+const RULED_AREA_MIDDLE =
+  (RULED_PHOTO.marginLineX + RULED_PHOTO.width - RULED_PHOTO.margins.right) / 2;
+
+/**
+ * Снимок с прогибом на левой половине области.
+ */
+export const LEFT_HALF_BENT_PHOTO = {
+  ...RULED_PHOTO,
+  bend: createHalfSag(RULED_PHOTO.marginLineX, RULED_AREA_MIDDLE),
+} satisfies SyntheticSheetParams;
+
+/**
+ * Снимок с прогибом на правой половине области.
+ */
+export const RIGHT_HALF_BENT_PHOTO = {
+  ...RULED_PHOTO,
+  bend: createHalfSag(RULED_AREA_MIDDLE, RULED_PHOTO.width - RULED_PHOTO.margins.right),
+} satisfies SyntheticSheetParams;
+
+/**
+ * Снимок листа в линейку с полями и линией поля, изогнутый или ровный.
+ */
+type RuledPhoto = typeof RULED_PHOTO & Pick<SyntheticSheetParams, 'bend'>;
+
+/**
+ * Тот же снимок в `factor` раз крупнее: кадр, шаг, поля, линия поля и прогиб
+ * растут вместе, толщина линий остаётся прежней — как у фотографии, снятой в
+ * большем разрешении.
+ *
+ * @param photo — снимок
+ * @param factor — во сколько раз крупнее
+ * @returns увеличенный снимок
+ */
+export const scalePhoto = (photo: RuledPhoto, factor: number): RuledPhoto => {
+  const { width, height, step, phase, margins, marginLineX, bend } = photo;
+  const scaled = {
+    width: width * factor,
+    height: height * factor,
+    step: step * factor,
+    phase: phase * factor,
+    margins: {
+      top: margins.top * factor,
+      right: margins.right * factor,
+      bottom: margins.bottom * factor,
+      left: margins.left * factor,
+    },
+    marginLineX: marginLineX * factor,
+  };
+
+  if (!bend) {
+    return scaled;
+  }
+
+  return {
+    ...scaled,
+    bend: (x, y) => {
+      return factor * bend(x / factor, y / factor);
+    },
+  };
+};
 
 /**
  * Наклон повёрнутого снимка в градусах: в пределах свипа детектора и заметно
