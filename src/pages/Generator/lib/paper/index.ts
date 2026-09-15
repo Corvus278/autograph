@@ -1,5 +1,6 @@
 export type { RulingDetectionOptions } from './detectRuling';
 export { detectRuling } from './detectRuling';
+export { measureBendDeviation } from './detectRulingBend';
 export type { SkewDetectionOptions } from './detectSkewAngle';
 export { detectSkewAngle, MAX_SKEW_ANGLE, SKEW_ANGLE_STEP } from './detectSkewAngle';
 export { ANALYSIS_IMAGE_SIZE, downsampleSheetImage } from './downsampleSheetImage';

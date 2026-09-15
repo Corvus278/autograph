@@ -59,21 +59,33 @@ export const BENT_PHOTO = {
 } satisfies SyntheticSheetParams;
 
 /**
- * Прогиб во всю ширину кадра: парабола, в середине кадра ниже краёв на треть
+ * Прогиб во всю ширину кадра: парабола, в середине кадра ниже краёв на `share`
  * шага. Область с линиями — от линии поля до концов линий — стоит в кадре
  * несимметрично, и прямая, ближайшая к дуге внутри области, наклонена.
+ *
+ * @param share — прогиб в середине кадра в долях шага
+ * @returns смещение линий
  */
-const sagAcrossFrame: SyntheticField = (x) => {
-  return (RULED_PHOTO.step / 3) * (1 - ((2 * x) / RULED_PHOTO.width - 1) ** 2);
+const createSagAcrossFrame = (share: number): SyntheticField => {
+  return (x) => {
+    return share * RULED_PHOTO.step * (1 - ((2 * x) / RULED_PHOTO.width - 1) ** 2);
+  };
+};
+
+/**
+ * Снимок с дугой во всю ширину кадра в `share` шага.
+ *
+ * @param share — прогиб в середине кадра в долях шага
+ * @returns снимок с дугой
+ */
+export const createArcPhoto = (share: number): RuledPhoto => {
+  return { ...RULED_PHOTO, bend: createSagAcrossFrame(share) };
 };
 
 /**
  * Снимок с линиями, прогнутыми параболой во всю ширину кадра.
  */
-export const ARC_PHOTO = {
-  ...RULED_PHOTO,
-  bend: sagAcrossFrame,
-} satisfies SyntheticSheetParams;
+export const ARC_PHOTO = createArcPhoto(1 / 3);
 
 /**
  * Прогиб в треть шага только на одной половине области с линиями, другая

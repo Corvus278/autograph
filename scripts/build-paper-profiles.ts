@@ -22,6 +22,7 @@ import {
   detectRuling,
   extractLighting,
   extractTexture,
+  measureBendDeviation,
   toTexturePixels,
 } from '../src/pages/Generator/lib/paper';
 
@@ -225,7 +226,9 @@ const buildSheetProfile = (
 /**
  * Изгиб экземпляра для отчёта: наибольший отход линии от прямой гребёнки в
  * долях шага и доля найденных узлов — по ним видно, насколько лист изогнут и
- * почему изгиб отброшен.
+ * почему изгиб отброшен. Отход — тот же, по которому проверка надёжности решает
+ * сохранить изгиб, с краями области за крайними узлами: наибольшее смещение
+ * узла на дуге под наклоном ниже порога, хотя изгиб сохранён.
  */
 const describeBend = (ruling: SheetRuling, foundNodeShare: number): string => {
   const { bend, step } = ruling;
@@ -235,11 +238,9 @@ const describeBend = (ruling: SheetRuling, foundNodeShare: number): string => {
     return `изгиба нет (${nodesText})`;
   }
 
-  const maxOffset = bend.offsets.reduce((max, offset) => {
-    return Math.max(max, Math.abs(offset));
-  }, 0);
+  const deviation = measureBendDeviation(bend.offsets, bend.columnCount);
 
-  return `изгиб до ${(maxOffset / step).toFixed(3)} шага (${nodesText})`;
+  return `изгиб до ${(deviation / step).toFixed(3)} шага (${nodesText})`;
 };
 
 /**

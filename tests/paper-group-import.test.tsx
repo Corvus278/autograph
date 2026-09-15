@@ -30,6 +30,7 @@ import {
   ANGLE_TOLERANCE,
   ARC_PHOTO,
   BENT_PHOTO,
+  createArcPhoto,
   LEFT_HALF_BENT_PHOTO,
   MARGIN_TOLERANCE,
   readUserRuling,
@@ -97,6 +98,47 @@ const LAYOUT_LIMIT_MARGIN = 0.01;
  * замера — у дуги во всю ширину втрое крупного кадра это три тысячных шага.
  */
 const SWEEP_ANGLE_MARGIN = 0.005;
+
+/**
+ * Ширина кадра фотографии среднего разрешения в точках.
+ */
+const FRAME_1550_WIDTH = 1550;
+
+/**
+ * Шум ровного снимка: зерно бумаги сдвигает узлы изгиба, и на пути импорта
+ * этот сдвиг не должен превращаться в изгиб.
+ */
+const FLAT_PHOTO_NOISE = 0.04;
+
+const FLAT_PHOTO_SEED = 7;
+
+/**
+ * Тот же снимок на кадре шириной в 1550 точек. Множитель до него дробный,
+ * поэтому кадр округляется до целых точек, как у настоящей фотографии.
+ *
+ * @param photo — снимок
+ * @returns снимок на кадре 1550 точек
+ */
+const toFrame1550 = (photo: typeof ARC_PHOTO): SyntheticSheetParams => {
+  const factor = FRAME_1550_WIDTH / RULED_PHOTO.width;
+
+  return {
+    ...scalePhoto(photo, factor),
+    width: FRAME_1550_WIDTH,
+    height: Math.round(RULED_PHOTO.height * factor),
+  };
+};
+
+/**
+ * Ровные снимки пути импорта: масштаб кадра, вид разлиновки и наклон.
+ */
+const FLAT_IMPORT_CASES = [1, 3].flatMap((scale) => {
+  return (['lined', 'grid'] as const).flatMap((kind) => {
+    return [0, 2, -2].map((angle) => {
+      return [scale, kind, angle] as const;
+    });
+  });
+});
 
 /**
  * Наибольший промах линий, восстановленных по разлиновке листа, мимо линий
@@ -401,6 +443,88 @@ describe('импорт фотографии листа', () => {
       if (isAngleChecked) {
         expect(Math.abs(ruling.skewAngle - angle)).toBeLessThanOrEqual(ANGLE_TOLERANCE);
       }
+    },
+    60_000
+  );
+
+  /**
+   * Дуга во всю ширину кадра под наклоном: в узлах сетки линия отходит от
+   * прямой разлиновки меньше двадцатой шага, а у краёв области, за крайними
+   * узлами, — больше. Проверяется только решение «ровный или изогнутый» и
+   * попадание линий; угол и бока против ровного двойника сверяет тест выше.
+   */
+  it.each([
+    ['дуга 0,15 шага, наклон 1°', createArcPhoto(0.15), 1],
+    ['дуга 0,15 шага, наклон −1°', createArcPhoto(0.15), -1],
+    [
+      'втрое крупный кадр, дуга 0,15 шага, наклон 1°',
+      scalePhoto(createArcPhoto(0.15), 3),
+      1,
+    ],
+    [
+      'втрое крупный кадр, дуга 0,15 шага, наклон −1°',
+      scalePhoto(createArcPhoto(0.15), 3),
+      -1,
+    ],
+    ['кадр 1550 px, дуга 0,15 шага, наклон 1°', toFrame1550(createArcPhoto(0.15)), 1],
+    ['кадр 1550 px, дуга 0,15 шага, наклон −1°', toFrame1550(createArcPhoto(0.15)), -1],
+    ['дуга 0,2 шага, наклон 1,5°', createArcPhoto(0.2), 1.5],
+    ['кадр 1550 px, дуга 0,2 шага, наклон 1,5°', toFrame1550(createArcPhoto(0.2)), 1.5],
+    ['кадр 1550 px, дуга 0,2 шага, наклон −1,5°', toFrame1550(createArcPhoto(0.2)), -1.5],
+  ] as const)(
+    'импорт дуги под наклоном (%s): лист не сохраняется ровным',
+    async (_name, bentPhoto, angle) => {
+      const user = userEvent.setup();
+      const photo = { ...bentPhoto, angle };
+
+      decodeSheetImage.mockResolvedValue(createSyntheticSheet(photo));
+
+      render(<PaperGroup />);
+      await uploadUserPhoto(user);
+
+      const ruling = readUserRuling();
+
+      if (!ruling) {
+        throw new Error('Лист не добавлен');
+      }
+
+      expect(measureRestoreError(photo, { ...ruling, bend: null })).toBeGreaterThan(
+        RESTORE_TOLERANCE
+      );
+      expect(ruling.bend).not.toBeNull();
+      expect(measureRestoreError(photo, ruling)).toBeLessThanOrEqual(RESTORE_TOLERANCE);
+    },
+    60_000
+  );
+
+  /**
+   * Шаг сверяется, чтобы лист не остался ровным только из-за того, что
+   * разлиновка не нашлась.
+   */
+  it.each(FLAT_IMPORT_CASES)(
+    'импорт ровного листа (кадр ×%i, %s, наклон %i°): изгиб не сохраняется',
+    async (scale, kind, angle) => {
+      const user = userEvent.setup();
+
+      decodeSheetImage.mockResolvedValue(
+        createSyntheticSheet({
+          ...scalePhoto(RULED_PHOTO, scale),
+          kind,
+          angle,
+          noise: FLAT_PHOTO_NOISE,
+          seed: FLAT_PHOTO_SEED,
+        })
+      );
+
+      render(<PaperGroup />);
+      await uploadUserPhoto(user);
+
+      const ruling = readUserRuling();
+
+      expect(
+        Math.abs((ruling?.step || 0) - RULED_PHOTO.step * scale)
+      ).toBeLessThanOrEqual(STEP_TOLERANCE * scale);
+      expect(ruling?.bend).toBeNull();
     },
     60_000
   );

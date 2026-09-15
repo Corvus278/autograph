@@ -151,6 +151,13 @@ const MAX_ROW_JUMP_SHARE = 0.25;
 const MIN_BEND_SHARE = 1 / 20;
 
 /**
+ * Веса трёх крайних узлов строки, от крайнего внутрь, для значения параболы
+ * через них на краю области — в половине расстояния между узлами за крайним.
+ * Это многочлен Лагранжа по узлам 0, 1, 2 в точке −½.
+ */
+const EDGE_WEIGHTS = [15 / 8, -5 / 4, 3 / 8] as const;
+
+/**
  * Узел строки: положение линии в полосе.
  */
 type LineDip = {
@@ -555,8 +562,49 @@ const roundOffset = (offset: number): number => {
 };
 
 /**
+ * Наибольший отход линий от прямой разлиновки во всей области, а не только в
+ * узлах: крайний узел стоит в центре крайней полосы, и за ним до края области
+ * остаётся полполосы. У дуги во всю ширину кадра под наклоном линия отходит от
+ * прямой сильнее всего как раз там — узлы держатся ниже двадцатой шага, а у
+ * края области линия уходит дальше, и лист сохранялся бы ровным.
+ *
+ * Отход у края — парабола через три крайних узла строки, продолженная на
+ * полполосы. Прямая через два узла не видит кривизны линии у края и на дуге
+ * недобирает до пяти тысячных шага — ровно столько, чтобы дуга в 0,15 шага
+ * под наклоном в градус осталась ровной. Шум узлов парабола усиливает сильнее
+ * прямой, но на ровных листах отход у края не выходит за три сотых шага.
+ *
+ * @param offsets — округлённые смещения узлов, построчно
+ * @param columnCount — число узлов в строке, не меньше трёх
+ * @returns наибольший отход в пикселях
+ */
+export const measureBendDeviation = (
+  offsets: readonly number[],
+  columnCount: number
+): number => {
+  return offsets.reduce((max, offset, index) => {
+    const column = index % columnCount;
+    const isEdge = column === 0 || column === columnCount - 1;
+
+    if (!isEdge) {
+      return Math.max(max, Math.abs(offset));
+    }
+
+    const inward = column === 0 ? 1 : -1;
+    const edge =
+      EDGE_WEIGHTS[0] * offset +
+      EDGE_WEIGHTS[1] * (offsets[index + inward] || 0) +
+      EDGE_WEIGHTS[2] * (offsets[index + 2 * inward] || 0);
+
+    return Math.max(max, Math.abs(offset), Math.abs(edge));
+  }, 0);
+};
+
+/**
  * Проверка надёжности измеренного изгиба. Ненадёжный изгиб хуже прямой
  * гребёнки: он уводит строки с линий там, где прямая разлиновка попала бы.
+ * Ровным лист считается, только если линии нигде в области, включая края за
+ * крайними узлами, не отходят от прямой на двадцатую шага.
  *
  * @param offsets — округлённые смещения узлов, построчно
  * @param columnCount — число узлов в строке
@@ -586,7 +634,7 @@ const isReliableBend = (
     foundShare >= MIN_FOUND_SHARE &&
     replacedShare <= MAX_REPLACED_SHARE &&
     maxOffset < MAX_OFFSET_SHARE * step &&
-    maxOffset >= MIN_BEND_SHARE * step &&
+    measureBendDeviation(offsets, columnCount) >= MIN_BEND_SHARE * step &&
     !hasRowJump
   );
 };
