@@ -54,20 +54,44 @@ const STRIP_COUNT = 32;
 const SILENT_END_SHARE = 0.08;
 
 /**
- * Участок профиля, по которому берётся уровень бумаги, — от пятой до половины
- * стороны кадра внутрь. Ближе к краю в него попал бы сам стол, дальше —
- * середина листа, а уровень нужен местный: свет садится от края к краю, и один
- * общий уровень на весь кадр увёл бы порог у тёмной стороны.
+ * Наименьшая доля кадра, которую лист занимает по ширине и по высоте, —
+ * гарантия spec.
  */
-const PAPER_LEVEL_FROM_SHARE = 0.2;
-
-const PAPER_LEVEL_TO_SHARE = 0.5;
+const MIN_SHEET_SHARE = 0.5;
 
 /**
  * Перцентиль уровня бумаги. Не максимум: блик на пару точек профиля поднял бы
  * уровень, и порог перестал бы отличать стол от бумаги.
  */
 const PAPER_LEVEL_PERCENTILE = 0.9;
+
+/**
+ * Начало участка профиля, по которому берётся уровень бумаги, — пятая часть
+ * стороны кадра внутрь. Ближе к краю в него попал бы сам стол, а уровень нужен
+ * местный: свет садится от края к краю, и один общий уровень на весь кадр увёл
+ * бы порог у тёмной стороны.
+ */
+const PAPER_LEVEL_FROM_SHARE = 0.2;
+
+/**
+ * Какая доля участка уровня обязана быть бумагой: вдвое больше той, что
+ * перцентиль отбрасывает сверху. Тогда перцентиль попадает в середину точек
+ * бумаги, а не в самую тёмную из них — у края листа, в размытой ступени.
+ */
+const MIN_PAPER_LEVEL_SHARE = 2 * (1 - PAPER_LEVEL_PERCENTILE);
+
+/**
+ * Конец участка уровня бумаги — чуть дальше середины кадра. Хуже всего лист,
+ * прижатый к противоположному краю кадра: его край отсюда лежит на глубине
+ * `1 − MIN_SHEET_SHARE`, и бумаги в участке `[FROM, TO]` остаётся
+ * `TO − (1 − MIN_SHEET_SHARE)`. Конец выбран так, чтобы эта бумага занимала
+ * `MIN_PAPER_LEVEL_SHARE` участка: `(0,5 − 0,2 · 0,2) / 0,8 = 0,575`. Участок,
+ * обрезанный серединой кадра, у такого листа бумаги почти не видел бы, и порог
+ * падал бы до стола.
+ */
+const PAPER_LEVEL_TO_SHARE =
+  (1 - MIN_SHEET_SHARE - MIN_PAPER_LEVEL_SHARE * PAPER_LEVEL_FROM_SHARE) /
+  (1 - MIN_PAPER_LEVEL_SHARE);
 
 /**
  * Доля уровня бумаги, ниже которой яркость считается поверхностью. Порог и
@@ -92,18 +116,54 @@ const FIT_TOLERANCE_SHARE = 0.006;
 const MIN_FIT_TOLERANCE = 2;
 
 /**
- * Какая доля всех полос стороны обязана лечь на прямую. Считается от всех, а
- * не от голосовавших: сторона, где край нашёлся в трёх полосах из тридцати
- * двух, — это не сторона, а тень или пятно.
- */
-const MIN_INLIER_SHARE = 0.5;
-
-/**
- * Наибольший наклон стороны листа к краю кадра.
+ * Наибольший наклон стороны листа к краю кадра — гарантия spec.
  */
 const MAX_SIDE_ANGLE = 5;
 
 const MAX_SIDE_SLOPE = Math.tan((MAX_SIDE_ANGLE * Math.PI) / 180);
+
+/**
+ * Сколько полос стороны обязано лечь на прямую. Считается от всех полос, а не
+ * от голосовавших: сторона, где край нашёлся в трёх полосах из тридцати двух,
+ * — это не сторона, а тень или пятно.
+ *
+ * Число выведено из гарантии для худшего положения листа. Сторона листа в
+ * половину кадра под наклоном в пять градусов проходит вдоль края кадра
+ * `ℓ = 32 · 0,5 · cos 5° ≈ 15,9` полосы. Хуже всего, когда её начало лежит у
+ * самого края кадра: тогда первые полосы стороны попадают в немые концы, и
+ * голосуют только полосы с середины `≥ 32 · 0,08`, то есть с третьей.
+ * Целиком сторона накрывает полосы до `⌊ℓ⌋ − 1`-й: последнюю полосу она
+ * накрывает частично, край в ней размыт столом и уходит с прямой. Итого
+ * `⌊ℓ⌋ − ⌈32 · 0,08 − ½⌉ = 12`. Сдвиг начала стороны внутрь кадра голосующих
+ * полос только добавляет.
+ */
+const MIN_INLIER_COUNT =
+  Math.floor(STRIP_COUNT * MIN_SHEET_SHARE * Math.cos((MAX_SIDE_ANGLE * Math.PI) / 180)) -
+  Math.ceil(STRIP_COUNT * SILENT_END_SHARE - 0.5);
+
+/**
+ * Разброс глубины края в голосах: одна точка профиля уменьшенной копии — край
+ * ступенью ложится в какую-то её точку целиком.
+ */
+const DEPTH_QUANTUM = 1;
+
+/**
+ * На сколько полос друг от друга отстоят голоса больше чем в половине пар,
+ * если голосов столько, сколько требует `MIN_INLIER_COUNT`. Пар с разносом не
+ * меньше `k` у `n` голосов `(n − k)(n − k + 1) / 2`; наибольшее `k`, при котором
+ * их больше половины всех `n(n − 1) / 2`, — разнос, на котором держится медиана
+ * наклонов.
+ */
+const MEDIAN_PAIR_SEPARATION = ((count: number): number => {
+  const halfPairs = (count * (count - 1)) / 4;
+  let separation = 1;
+
+  while (((count - separation - 1) * (count - separation)) / 2 > halfPairs) {
+    separation += 1;
+  }
+
+  return separation;
+})(MIN_INLIER_COUNT);
 
 /**
  * Насколько хотя бы один конец стороны обязан отстоять от края кадра. Прямая,
@@ -205,8 +265,8 @@ const measureStripProfile = (
 };
 
 /**
- * Уровень бумаги в полосе — перцентиль профиля на участке вдали и от края
- * кадра, и от середины листа.
+ * Уровень бумаги в полосе — перцентиль профиля на участке вдали от края кадра
+ * и от дальней половины кадра.
  *
  * @param profile — профиль полосы
  * @param depthSpan — сторона кадра поперёк стороны листа
@@ -317,6 +377,28 @@ const fitSideLine = (votes: SheetSideVote[]): SheetLine | null => {
 };
 
 /**
+ * Наибольший наклон, который принимается у стороны вдоль края длиной
+ * `alongSpan`: гарантия плюс разброс оценки.
+ *
+ * Оценка у стороны под самым пределом рассыпается по обе стороны от него:
+ * глубина края дискретна. Отказ по голой гарантии терял бы примерно каждую
+ * вторую такую сторону, а прижим к пределу сдвигал бы стороны круче него.
+ * Поэтому сторона внутри запаса измеряется как есть, круче — отказ.
+ *
+ * Запас — худший разброс медианы наклонов: больше половины пар голосов
+ * разнесены не меньше чем на `MEDIAN_PAIR_SEPARATION` полос, и наклон каждой
+ * такой пары ошибается не больше чем на `DEPTH_QUANTUM` на этот разнос.
+ *
+ * @param alongSpan — длина стороны кадра в точках уменьшенной копии
+ * @returns наибольший модуль наклона
+ */
+const measureMaxSideSlope = (alongSpan: number): number => {
+  return (
+    MAX_SIDE_SLOPE + (DEPTH_QUANTUM * STRIP_COUNT) / (MEDIAN_PAIR_SEPARATION * alongSpan)
+  );
+};
+
+/**
  * Прямая стороны листа в координатах полос или `null`, если стороны на
  * фотографии нет и лист уходит за край кадра.
  *
@@ -328,6 +410,10 @@ const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null =>
   const alongSpan = isHorizontalSide(side) ? image.width : image.height;
   const depthSpan = isHorizontalSide(side) ? image.height : image.width;
   const depthCount = Math.floor(depthSpan / 2);
+  const levelDepthCount = Math.max(
+    depthCount,
+    Math.floor(depthSpan * PAPER_LEVEL_TO_SHARE)
+  );
 
   if (depthCount < MIN_DEPTH_COUNT || alongSpan < STRIP_COUNT) {
     return null;
@@ -343,9 +429,9 @@ const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null =>
     const along = (from + to) / 2;
 
     if (along >= silentEnd && along <= alongSpan - silentEnd) {
-      const profile = measureStripProfile(image, side, from, to, depthCount);
+      const profile = measureStripProfile(image, side, from, to, levelDepthCount);
       const threshold = measurePaperLevel(profile, depthSpan) * EDGE_LEVEL_SHARE;
-      const depth = findEdgeDepth(profile, threshold, runLength);
+      const depth = findEdgeDepth(profile.subarray(0, depthCount), threshold, runLength);
 
       if (depth >= 0) {
         votes.push({ along, depth });
@@ -355,7 +441,7 @@ const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null =>
 
   const line = fitSideLine(votes);
 
-  if (line === null || Math.abs(line.slope) > MAX_SIDE_SLOPE) {
+  if (line === null || Math.abs(line.slope) > measureMaxSideSlope(alongSpan)) {
     return null;
   }
 
@@ -366,7 +452,7 @@ const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null =>
   const farthestEnd = Math.max(line.intercept, line.intercept + line.slope * alongSpan);
 
   if (
-    inliers.length < STRIP_COUNT * MIN_INLIER_SHARE ||
+    inliers.length < MIN_INLIER_COUNT ||
     farthestEnd <= depthSpan * MIN_EDGE_DEPTH_SHARE
   ) {
     return null;
@@ -412,7 +498,7 @@ const toFrameLine = (
 /**
  * Пересечение прямой верхней или нижней стороны (`y = a·x + b`) с прямой
  * боковой (`x = c·y + d`). Знаменатель к нулю не подходит: наклон сторон
- * ограничен пятью градусами, поэтому `c·a` не больше сотой.
+ * ограничен шестью градусами с запасом, поэтому `c·a` меньше пятидесятой.
  *
  * @param horizontal — прямая верхней или нижней стороны
  * @param vertical — прямая боковой стороны

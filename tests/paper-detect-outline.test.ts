@@ -122,6 +122,129 @@ const TILTED_SHEET: SyntheticSheetParams = {
 };
 
 /**
+ * Наклон сторон на краю гарантии spec: «не больше чем на пять градусов».
+ */
+const GUARANTEED_SIDE_ANGLE = 5;
+
+/**
+ * Прямоугольный лист на столе, повёрнутый вокруг своей середины. Поворот
+ * вокруг середины листа, а не кадра: лист у угла кадра остаётся у угла.
+ *
+ * @param sheetWidth — ширина листа
+ * @param sheetHeight — высота листа
+ * @param degrees — угол поворота в градусах
+ * @param left — левый край листа до поворота; по умолчанию лист по середине
+ * @param top — верхний край листа до поворота; по умолчанию лист по середине
+ * @returns параметры листа
+ */
+const createRotatedSheet = (
+  sheetWidth: number,
+  sheetHeight: number,
+  degrees: number,
+  left = (WIDTH - sheetWidth) / 2,
+  top = (HEIGHT - sheetHeight) / 2
+): SyntheticSheetParams => {
+  const shiftX = left + sheetWidth / 2 - WIDTH / 2;
+  const shiftY = top + sheetHeight / 2 - HEIGHT / 2;
+
+  const toCorner = (offsetX: number, offsetY: number): SheetPoint => {
+    const { x, y } = rotateAroundCenter(
+      { x: WIDTH / 2 + offsetX, y: HEIGHT / 2 + offsetY },
+      degrees
+    );
+
+    return { x: x + shiftX, y: y + shiftY };
+  };
+
+  return {
+    ...SHEET_BASE,
+    surface: {
+      outline: {
+        topLeft: toCorner(-sheetWidth / 2, -sheetHeight / 2),
+        topRight: toCorner(sheetWidth / 2, -sheetHeight / 2),
+        bottomRight: toCorner(sheetWidth / 2, sheetHeight / 2),
+        bottomLeft: toCorner(-sheetWidth / 2, sheetHeight / 2),
+      },
+      cornerRadius: 70,
+      brightness: 0.3,
+    },
+  };
+};
+
+/**
+ * Отступ листа у угла кадра: при повороте на пять градусов углы листа в
+ * половину кадра ещё остаются в кадре.
+ */
+const CORNER_GAP = 150;
+
+/**
+ * Листы на краях гарантии: наклон ±5° на нескольких размерах — оценка наклона
+ * под самым пределом рассыпается по-разному в зависимости от того, как стороны
+ * ложатся на полосы, — и лист ровно в половину кадра по ширине и по высоте, без
+ * наклона и под пределом, по середине кадра и у каждого его угла. У угла часть
+ * стороны попадает в немые концы, а дальняя сторона лежит почти в середине
+ * кадра. Стол виден со всех четырёх сторон, ни один угол не уходит за кадр.
+ */
+const EDGE_GUARANTEE_SHEETS: [string, SyntheticSheetParams][] = [
+  [2000, 3000, GUARANTEED_SIDE_ANGLE],
+  [2000, 3000, -GUARANTEED_SIDE_ANGLE],
+  [2200, 3200, GUARANTEED_SIDE_ANGLE],
+  [2200, 3200, -GUARANTEED_SIDE_ANGLE],
+  [2400, 3400, GUARANTEED_SIDE_ANGLE],
+  [2400, 3400, -GUARANTEED_SIDE_ANGLE],
+  [WIDTH / 2, HEIGHT / 2, 0],
+  [WIDTH / 2, HEIGHT / 2, GUARANTEED_SIDE_ANGLE],
+  [WIDTH / 2, HEIGHT / 2, -GUARANTEED_SIDE_ANGLE],
+].map(([sheetWidth = 0, sheetHeight = 0, degrees = 0]) => {
+  return [
+    `${sheetWidth}×${sheetHeight} по середине под ${degrees}°`,
+    createRotatedSheet(sheetWidth, sheetHeight, degrees),
+  ];
+});
+
+const CORNER_GUARANTEE_SHEETS: [string, SyntheticSheetParams][] = [
+  [CORNER_GAP, CORNER_GAP],
+  [WIDTH / 2 - CORNER_GAP, CORNER_GAP],
+  [CORNER_GAP, HEIGHT / 2 - CORNER_GAP],
+  [WIDTH / 2 - CORNER_GAP, HEIGHT / 2 - CORNER_GAP],
+].flatMap(([left = 0, top = 0]) => {
+  return [GUARANTEED_SIDE_ANGLE, -GUARANTEED_SIDE_ANGLE].map<
+    [string, SyntheticSheetParams]
+  >((degrees) => {
+    return [
+      `${WIDTH / 2}×${HEIGHT / 2} с углом в (${left}, ${top}) под ${degrees}°`,
+      createRotatedSheet(WIDTH / 2, HEIGHT / 2, degrees, left, top),
+    ];
+  });
+});
+
+/**
+ * Листы, стороны которых явно круче гарантии: сторона отказывается целиком, а
+ * не встаёт сдвинутой или прижатой к пределу. Отказ всех сторон — `null`.
+ */
+const STEEP_SHEETS: [string, SyntheticSheetParams][] = [8, -8, 10, -10].map((degrees) => {
+  return [`2200×3200 под ${degrees}°`, createRotatedSheet(2200, 3200, degrees)];
+});
+
+/**
+ * Лист во весь кадр, у которого справа сверху виден клин стола под семь
+ * градусов: верхняя сторона от левого верхнего угла кадра уходит вниз круче
+ * гарантии.
+ */
+const STEEP_WEDGE_SHEET: SyntheticSheetParams = {
+  ...SHEET_BASE,
+  surface: {
+    outline: {
+      topLeft: { x: 0, y: 0 },
+      topRight: { x: WIDTH, y: WIDTH * Math.tan((7 * Math.PI) / 180) },
+      bottomRight: { x: WIDTH, y: HEIGHT },
+      bottomLeft: { x: 0, y: HEIGHT },
+    },
+    brightness: 0.3,
+  },
+};
+
+/**
  * Лист шире кадра с трёх сторон: стол виден только полосой сверху.
  */
 const TOP_BAND_OUTLINE: SheetOutline = {
@@ -223,6 +346,20 @@ describe('detectSheetOutline: лист на поверхности', () => {
     });
   });
 
+  it.each([...EDGE_GUARANTEE_SHEETS, ...CORNER_GUARANTEE_SHEETS])(
+    'находит четыре стороны листа на краю гарантии: %s',
+    (_name, params) => {
+      const outline = detectSheetOutline(createSyntheticSheet(params));
+      const expected = computeSyntheticOutline(params);
+
+      expect(outline).not.toBeNull();
+      toCornerPairs(outline || expected, expected).forEach(([corner, reference]) => {
+        expect(Math.abs(corner.x - reference.x)).toBeLessThanOrEqual(X_TOLERANCE);
+        expect(Math.abs(corner.y - reference.y)).toBeLessThanOrEqual(Y_TOLERANCE);
+      });
+    }
+  );
+
   it('находит одну верхнюю сторону, когда стол виден только полосой сверху', () => {
     const outline = detectSheetOutline(createSyntheticSheet(TOP_BAND_SHEET));
     const expected = computeSyntheticOutline(TOP_BAND_SHEET);
@@ -252,6 +389,8 @@ describe('detectSheetOutline: лист на поверхности', () => {
     ['обрезанная по краям листа фотография', CROPPED_SHEET],
     ['поверхность светлее бумаги', PALE_SURFACE_SHEET],
     ['лист во весь кадр с виньеткой', VIGNETTE_SHEET],
+    ...STEEP_SHEETS,
+    ['клин стола под 7° у листа во весь кадр', STEEP_WEDGE_SHEET],
   ])('не находит ни одной стороны: %s', (_name, params) => {
     expect(detectSheetOutline(createSyntheticSheet(params))).toBeNull();
   });

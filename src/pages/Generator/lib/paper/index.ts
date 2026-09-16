@@ -51,6 +51,5 @@ export {
   lineHeightSlopeAt,
 } from './rulingPerspective';
 export { sampleRulingBend, sampleRulingBendSlope } from './sampleRulingBend';
-export { isInsideSheetOutline } from './sheetOutlineMask';
 export { buildSheetRuling, MARGIN_FALLBACK_STEPS, resolveFirstLine } from './sheetRuling';
 export { synthesizeLighting } from './synthesizeLighting';
