@@ -5,10 +5,16 @@ import type {
   PaperSheet,
   PaperTexture,
   RulingBend,
+  RulingPerspective,
   SheetFrame,
+  SheetOutline,
+  SheetPoint,
   SheetRuling,
 } from '../lib/paper/paper.types';
+import { lineCoordinateAt } from '../lib/paper/rulingPerspective';
 import { buildSheetRuling } from '../lib/paper/sheetRuling';
+
+const DEGREES_IN_HALF_TURN = 180;
 
 /**
  * Разобранный JSON — не то же самое, что объект нужного типа: и артефакт
@@ -218,6 +224,119 @@ const parseRulingBend = (value: unknown): RulingBend | null => {
 };
 
 /**
+ * Угол контура из JSON.
+ *
+ * @param value — разобранное значение
+ * @returns угол; `null` — у угла нет конечной координаты
+ */
+const parseSheetPoint = (value: unknown): SheetPoint | null => {
+  if (!isJsonRecord(value) || !isFiniteNumber(value.x) || !isFiniteNumber(value.y)) {
+    return null;
+  }
+
+  return { x: value.x, y: value.y };
+};
+
+/**
+ * Контур листа из JSON. Контур с одним негодным углом не чиним и не дополняем
+ * краем кадра: вырезка и фолбэк полей по такому контуру ушли бы мимо листа, а
+ * лист во весь кадр рисуется так же, как до поиска контура.
+ *
+ * @param value — разобранное значение
+ * @returns контур; `null` — лист во весь кадр
+ */
+const parseSheetOutline = (value: unknown): SheetOutline | null => {
+  if (!isJsonRecord(value)) {
+    return null;
+  }
+
+  const topLeft = parseSheetPoint(value.topLeft);
+  const topRight = parseSheetPoint(value.topRight);
+  const bottomRight = parseSheetPoint(value.bottomRight);
+  const bottomLeft = parseSheetPoint(value.bottomLeft);
+
+  if (!topLeft || !topRight || !bottomRight || !bottomLeft) {
+    return null;
+  }
+
+  return { topLeft, topRight, bottomRight, bottomLeft };
+};
+
+/**
+ * Лежит ли перспектива по эту сторону горизонта во всём кадре: и вес `w`
+ * координаты вдоль линий, и знаменатель `1 − a·q` высоты линии положительны.
+ * Оба дробно-линейны по кадру, поэтому хватает его углов. Один знаменатель
+ * `1 − a·q` проверки не держит: за горизонтом вес и числитель меняют знак
+ * вместе, и знаменатель остаётся положительным там, где координата вдоль линий
+ * уже не определена.
+ *
+ * @param perspective — перспектива из записи
+ * @param skewAngle — наклон разлиновки записи в градусах
+ * @param frame — кадр фотографии записи
+ * @returns признак годной перспективы
+ */
+const isPerspectiveInFrame = (
+  perspective: RulingPerspective,
+  skewAngle: number,
+  frame: SheetFrame
+): boolean => {
+  const { originX, originY, convergenceX, convergenceY } = perspective;
+  const projection = { skewAngle, perspective };
+  const tangent = Math.tan((skewAngle * Math.PI) / DEGREES_IN_HALF_TURN);
+  const columns = [0, Math.max(frame.width - 1, 0)];
+  const rows = [0, Math.max(frame.height - 1, 0)];
+
+  return columns.every((x) => {
+    return rows.every((y) => {
+      const weight = 1 + convergenceX * (x - originX) + convergenceY * (y - originY);
+
+      if (!(weight > 0)) {
+        return false;
+      }
+
+      const offset = lineCoordinateAt(projection, x, y) - originY + originX * tangent;
+
+      return 1 - offset * convergenceY > 0;
+    });
+  });
+};
+
+/**
+ * Перспектива разлиновки из JSON. Нечитаемая или лежащая за горизонтом где-то
+ * в кадре — отсутствие перспективы: строки такого листа идут через равный шаг,
+ * а не уходят в бесконечность.
+ *
+ * @param value — разобранное значение
+ * @param skewAngle — наклон разлиновки записи в градусах
+ * @param frame — кадр фотографии записи
+ * @returns перспектива; `null` — перспективы нет или она негодна
+ */
+const parseRulingPerspective = (
+  value: unknown,
+  skewAngle: number,
+  frame: SheetFrame
+): RulingPerspective | null => {
+  if (!isJsonRecord(value)) {
+    return null;
+  }
+
+  const { originX, originY, convergenceX, convergenceY } = value;
+
+  if (
+    !isFiniteNumber(originX) ||
+    !isFiniteNumber(originY) ||
+    !isFiniteNumber(convergenceX) ||
+    !isFiniteNumber(convergenceY)
+  ) {
+    return null;
+  }
+
+  const perspective = { originX, originY, convergenceX, convergenceY };
+
+  return isPerspectiveInFrame(perspective, skewAngle, frame) ? perspective : null;
+};
+
+/**
  * Разлиновка экземпляра из JSON. Запись прежней формы разлиновки не несёт: шаг,
  * фаза и наклон берутся из полей самого экземпляра, поля и линия поля —
  * фолбэком.
@@ -243,15 +362,19 @@ const parseSheetRuling = (
     );
   }
 
+  const skewAngle = toFiniteNumber(ruling.skewAngle, 0);
+
   return buildSheetRuling(
     {
       step: toFiniteNumber(ruling.step, 0),
       firstLinePhase: toFiniteNumber(ruling.firstLinePhase, 0),
-      skewAngle: toFiniteNumber(ruling.skewAngle, 0),
+      skewAngle,
       margins: parseMargins(ruling.margins),
       marginLineX: toFiniteNumber(ruling.marginLineX, 0) || null,
       marginLineSide: parseMarginLineSide(ruling.marginLineSide),
       bend: parseRulingBend(ruling.bend),
+      perspective: parseRulingPerspective(ruling.perspective, skewAngle, frame),
+      outline: parseSheetOutline(ruling.outline),
     },
     frame
   );

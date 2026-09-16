@@ -2,7 +2,11 @@
  * @vitest-environment jsdom
  */
 import type { LayoutPage } from '@pages/Generator/lib/paginate/paginate.types';
-import type { RulingBend } from '@pages/Generator/lib/paper';
+import type {
+  RulingBend,
+  RulingPerspective,
+  SheetOutline,
+} from '@pages/Generator/lib/paper';
 import { buildSheetRuling } from '@pages/Generator/lib/paper';
 import { clearLayoutCache } from '@pages/Generator/model/measureLayout';
 import {
@@ -372,4 +376,101 @@ describe('изгиб при ручной правке разлиновки', () 
     expect(readUserRuling()?.firstLinePhase).toBe(20);
     expect(readUserRuling()?.bend).toBeNull();
   });
+});
+
+/**
+ * Перспектива своего листа, снятого на столе: начало в середине кадра,
+ * знаменатель модели на кадре далеко от нуля.
+ */
+const SHEET_PERSPECTIVE: RulingPerspective = {
+  originX: 240,
+  originY: 320,
+  convergenceX: 0.000_02,
+  convergenceY: -0.000_15,
+};
+
+/**
+ * Контур своего листа на столе: несимметричный, чтобы подмена краем кадра или
+ * вписанным прямоугольником была видна.
+ */
+const SHEET_OUTLINE: SheetOutline = {
+  topLeft: { x: 22, y: 31 },
+  topRight: { x: 455, y: 18 },
+  bottomRight: { x: 462, y: 610 },
+  bottomLeft: { x: 15, y: 622 },
+};
+
+/**
+ * Кладёт в стор свой лист на столе с перспективой, изгибом и дробными шагом и
+ * фазой.
+ */
+const seedTableSheet = () => {
+  useGeneratorStore.getState().addUserSheet({
+    familyId: DEFAULT_GENERATOR_STATE.familyId,
+    isAnalyzed: true,
+    sheet: {
+      id: 'user-table',
+      label: 'Лист на столе',
+      src: 'data:image/jpeg;base64,0123456789',
+      width: 480,
+      height: 640,
+      ruling: buildSheetRuling(
+        {
+          step: 47.9312,
+          firstLinePhase: 19.2587,
+          skewAngle: 0.4,
+          margins: { top: 70, right: 40, bottom: 50, left: 45 },
+          bend: SHEET_BEND,
+          perspective: SHEET_PERSPECTIVE,
+          outline: SHEET_OUTLINE,
+        },
+        { width: 480, height: 640 }
+      ),
+      lighting: null,
+      texture: null,
+    },
+  });
+};
+
+describe('перспектива и контур при ручной правке разлиновки', () => {
+  it('правка одних полей сохраняет перспективу, изгиб и контур', async () => {
+    const user = userEvent.setup();
+
+    seedTableSheet();
+    render(<PaperGroup />);
+
+    await fillField(user, 'Левое поле, px', 70);
+    await applyRuling(user);
+
+    expect(readUserRuling()?.margins.left).toBe(70);
+    expect(readUserRuling()?.perspective).toStrictEqual(SHEET_PERSPECTIVE);
+    expect(readUserRuling()?.bend).toStrictEqual(SHEET_BEND);
+    expect(readUserRuling()?.outline).toStrictEqual(SHEET_OUTLINE);
+  });
+
+  it.each([
+    ['шага', 'Шаг строк, px', 48],
+    ['фазы', 'Первая строка от верха, px', 20],
+  ] as const)(
+    'правка %s снимает перспективу и изгиб, а контур сохраняет',
+    async (_name, label, value) => {
+      const user = userEvent.setup();
+
+      seedTableSheet();
+      render(<PaperGroup />);
+
+      /**
+       * Без перспективы у посеянного листа проверка ниже прошла бы и на форме,
+       * которая перспективу не переносит вовсе.
+       */
+      expect(readUserRuling()?.perspective).not.toBeNull();
+
+      await fillField(user, label, value);
+      await applyRuling(user);
+
+      expect(readUserRuling()?.perspective).toBeNull();
+      expect(readUserRuling()?.bend).toBeNull();
+      expect(readUserRuling()?.outline).toStrictEqual(SHEET_OUTLINE);
+    }
+  );
 });

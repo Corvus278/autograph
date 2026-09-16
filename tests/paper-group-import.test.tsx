@@ -4,6 +4,7 @@
 import {
   buildSheetRuling,
   detectRuling,
+  measureSheetPhoto,
   type PaperMargins,
   sampleRulingBend,
   type SheetRuling,
@@ -222,6 +223,52 @@ const toIdealBendRuling = (
   return { ...ruling, bend: { ...bend, offsets } };
 };
 
+/**
+ * Клетка на листе, лежащем на столе: стол темнее бумаги и с крупным зерном, и
+ * по всему кадру его ступени и шум забивают разлиновку — детектор, которому
+ * достался кадр целиком, шага не находит.
+ */
+const TABLE_PHOTO: SyntheticSheetParams = {
+  width: 900,
+  height: 1200,
+  step: 30,
+  phase: 7,
+  angle: 1,
+  kind: 'grid',
+  margins: { top: 200, right: 160, bottom: 180, left: 170 },
+  lineWidth: 2,
+  lineDarkness: 0.3,
+  noise: 0.04,
+  lighting: 0.2,
+  seed: 5,
+  surface: {
+    outline: {
+      topLeft: { x: 130, y: 120 },
+      topRight: { x: 790, y: 110 },
+      bottomRight: { x: 800, y: 1110 },
+      bottomLeft: { x: 140, y: 1120 },
+    },
+    cornerRadius: 20,
+    brightness: 0.3,
+    grain: 0.3,
+  },
+};
+
+/**
+ * Форма показывает длины, округлённые до сотых.
+ */
+const FORM_ROUNDING = 0.005;
+
+/**
+ * Значение поля формы разлиновки числом.
+ *
+ * @param label — подпись поля
+ * @returns число из поля; `NaN` — поле пустое
+ */
+const readFormLength = (label: string): number => {
+  return Number.parseFloat(screen.getByLabelText(label).getAttribute('value') || '');
+};
+
 beforeEach(() => {
   useGeneratorStore.setState(DEFAULT_GENERATOR_STATE);
   globalThis.localStorage?.clear();
@@ -254,6 +301,42 @@ describe('импорт фотографии листа', () => {
       Math.abs((ruling?.marginLineX || 0) - RULED_PHOTO.marginLineX)
     ).toBeLessThanOrEqual(MARGIN_TOLERANCE);
   });
+
+  it('лист на столе: форма показывает найденные шаг и поля, контур листа сохранён', async () => {
+    const user = userEvent.setup();
+    const image = createSyntheticSheet(TABLE_PHOTO);
+    const { step = 0 } = TABLE_PHOTO;
+
+    expect(detectRuling(image).isDetected).toBe(false);
+
+    decodeSheetImage.mockResolvedValue(image);
+
+    render(<PaperGroup />);
+    await uploadUserPhoto(user);
+
+    const ruling = readUserRuling();
+
+    expect(ruling?.outline).not.toBeNull();
+    expect(Math.abs(readFormLength('Шаг строк, px') - step)).toBeLessThanOrEqual(
+      STEP_TOLERANCE
+    );
+    /**
+     * Точность самих полей держат юнит-тесты измерения фото; здесь — что до
+     * формы доезжают поля, найденные внутри контура, а не по кадру целиком.
+     */
+    expect(
+      measureMarginMiss(
+        {
+          top: readFormLength('Верхнее поле, px'),
+          right: readFormLength('Правое поле, px'),
+          bottom: readFormLength('Нижнее поле, px'),
+          left: readFormLength('Левое поле, px'),
+        },
+        buildSheetRuling(measureSheetPhoto(image, { kind: 'grid' }).source, image).margins
+      )
+    ).toBeLessThanOrEqual(FORM_ROUNDING);
+    expect(readUserSheets()[0]?.sheet.ruling.outline).toStrictEqual(ruling?.outline);
+  }, 60_000);
 
   it('сохраняет у повёрнутого листа найденный угол наклона', async () => {
     const user = userEvent.setup();

@@ -1,4 +1,4 @@
-import type { PaperFamily, RulingDetection } from '../../../../../lib/paper';
+import type { PaperFamily } from '../../../../../lib/paper';
 
 /**
  * С чем добавляется фотография листа.
@@ -14,22 +14,6 @@ export type SheetImportOptions = {
    * строк задаёт пользователь.
    */
   isBlank: boolean;
-};
-
-/**
- * Измерения, снятые с фотографии.
- */
-export type SheetMeasurement = {
-  /**
-   * Угол наклона разлиновки в кадре в градусах.
-   */
-  skewAngle: number;
-
-  /**
-   * Найденная разлиновка. `null` — не нашлась: экземпляр остаётся, а шаг и
-   * поля задаются руками.
-   */
-  detection: RulingDetection | null;
 };
 
 /**

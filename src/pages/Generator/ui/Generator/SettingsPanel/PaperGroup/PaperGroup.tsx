@@ -5,7 +5,7 @@ import type { FC } from 'react';
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import type { PaperSheet } from '../../../../lib/paper';
+import type { PaperMargins, PaperSheet } from '../../../../lib/paper';
 import { buildSheetRuling } from '../../../../lib/paper';
 import { selectPageSheetId } from '../../../../model/recipeSelectors';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
@@ -13,8 +13,10 @@ import type { UserSheetRecord } from '../../../../model/userSheetsStorage.types'
 
 import type { ManualRuling } from './RulingForm';
 import { RulingForm } from './RulingForm';
+import { SheetBoundsForm } from './SheetBoundsForm';
 import { UserSheetList } from './UserSheetList';
 import { useSheetImport } from './useSheetImport';
+import { useSheetRemeasure } from './useSheetRemeasure';
 
 /**
  * Сколько долей пикселя различает форма разлиновки: она показывает длины
@@ -84,6 +86,7 @@ export const PaperGroup: FC = () => {
     return state.removeUserSheet;
   });
   const sheetImport = useSheetImport();
+  const sheetRemeasure = useSheetRemeasure();
   const [isBlankSheet, setBlankSheet] = useState(false);
 
   const activeFamily =
@@ -178,6 +181,21 @@ export const PaperGroup: FC = () => {
     });
   };
 
+  const handleBoundsApply = (bounds: PaperMargins) => {
+    if (!activeFamily || !activeSheet) {
+      return;
+    }
+
+    void sheetRemeasure.remeasure({ family: activeFamily, sheet: activeSheet, bounds });
+  };
+
+  /**
+   * Формы берут начальные значения из характеристик листа один раз, поэтому
+   * пересоздаются и по смене листа, и по перемеру: иначе после перемера они
+   * показывали бы введённое до него, а не измеренное заново.
+   */
+  const sheetFormKey = `${activeSheet?.id || ''}:${sheetRemeasure.revision}`;
+
   return (
     <div className="flex flex-col gap-4">
       <RadioGroup
@@ -219,8 +237,18 @@ export const PaperGroup: FC = () => {
       <UserSheetList sheets={ownSheets} onRemove={handleSheetRemove} />
 
       {activeFamily && activeSheet && isOwnSheetSelected ? (
+        <SheetBoundsForm
+          key={`bounds:${sheetFormKey}`}
+          sheet={activeSheet}
+          isBusy={sheetRemeasure.isBusy}
+          error={sheetRemeasure.error}
+          onApply={handleBoundsApply}
+        />
+      ) : null}
+
+      {activeFamily && activeSheet && isOwnSheetSelected ? (
         <RulingForm
-          key={activeSheet.id}
+          key={`ruling:${sheetFormKey}`}
           ruling={activeSheet.ruling}
           onApply={handleRulingApply}
         />

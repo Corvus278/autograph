@@ -14,15 +14,14 @@ import {
 import type {
   PaperMargins,
   PaperSheet,
+  RulingKind,
   SheetImageData,
   SheetRuling,
 } from '../src/pages/Generator/lib/paper';
 import {
   buildSheetRuling,
-  detectRuling,
-  extractLighting,
-  extractTexture,
   measureBendDeviation,
+  measureSheetPhoto,
   toTexturePixels,
 } from '../src/pages/Generator/lib/paper';
 
@@ -62,6 +61,11 @@ type PaperFamilyPreset = {
    * Подпись, от которой строятся подписи экземпляров.
    */
   label: string;
+
+  /**
+   * Вид разлиновки семьи.
+   */
+  kind: RulingKind;
 };
 
 /**
@@ -137,8 +141,8 @@ type TextureEncodeInput = {
  * Семьи пресет-пака. Фотографии лежат в `public/paper/<id>`.
  */
 const FAMILIES: PaperFamilyPreset[] = [
-  { id: GRID_FAMILY_ID, label: 'Клетка' },
-  { id: LINED_FAMILY_ID, label: 'Линейка' },
+  { id: GRID_FAMILY_ID, label: 'Клетка', kind: 'grid' },
+  { id: LINED_FAMILY_ID, label: 'Линейка', kind: 'lined' },
 ];
 
 /**
@@ -183,30 +187,29 @@ const decodePhoto = async (
 const buildSheetProfile = (
   photo: DecodedPhoto,
   path: string,
-  sheet: Pick<PaperSheet, 'id' | 'label' | 'src'>
+  sheet: Pick<PaperSheet, 'id' | 'label' | 'src'>,
+  kind: RulingKind
 ): SheetProfileResult => {
   /**
-   * Наклон ищет сам детектор, как и при импорте своей фотографии: найденный
-   * свипом угол он поправляет по изгибу линий, и угол берётся из детекции.
+   * Измерение тем же путём, что импорт своей фотографии: контур листа,
+   * разлиновка внутри него, свет и текстура только по бумаге.
    */
-  const detection = detectRuling(photo);
-  const { skewAngle } = detection;
+  const { source, lighting, textureMap, diagnostics } = measureSheetPhoto(photo, {
+    kind,
+  });
 
-  if (!detection.isDetected || detection.step <= 0) {
+  if (!diagnostics.isRulingDetected || source.step <= 0) {
     throw new Error(
-      `Разлиновка не найдена: ${path} (уверенность ${detection.confidence.toFixed(3)})`
+      `Разлиновка не найдена: ${path} (уверенность ${diagnostics.confidence.toFixed(3)})`
     );
   }
-
-  const lighting = extractLighting(photo);
-  const textureMap = extractTexture(photo, lighting);
 
   return {
     sheet: {
       ...sheet,
       width: photo.width,
       height: photo.height,
-      ruling: buildSheetRuling({ ...detection, skewAngle }, photo),
+      ruling: buildSheetRuling(source, photo),
       lighting,
       texture: {
         src: `${sheet.src.replace(/\.[^.]+$/, '')}.texture.png`,
@@ -216,9 +219,9 @@ const buildSheetProfile = (
       },
     },
     fallbackSides: MARGIN_SIDES.filter((side) => {
-      return !detection.margins[side];
+      return !source.margins?.[side];
     }),
-    bendFoundNodeShare: detection.bendFoundNodeShare,
+    bendFoundNodeShare: diagnostics.bendFoundNodeShare,
     texturePixels: toTexturePixels(textureMap),
   };
 };
@@ -366,11 +369,16 @@ const main = async (): Promise<void> => {
         const index = sheets.length + 1;
         const path = join(directory, file);
         const photo = await decodePhoto(decodeInPage, path);
-        const result = buildSheetProfile(photo, path, {
-          id: `${family.id}-${index}`,
-          label: `${family.label} ${index}`,
-          src: `/paper/${family.id}/${file}`,
-        });
+        const result = buildSheetProfile(
+          photo,
+          path,
+          {
+            id: `${family.id}-${index}`,
+            label: `${family.label} ${index}`,
+            src: `/paper/${family.id}/${file}`,
+          },
+          family.kind
+        );
         const { sheet, texturePixels } = result;
 
         if (texturePixels && sheet.texture) {

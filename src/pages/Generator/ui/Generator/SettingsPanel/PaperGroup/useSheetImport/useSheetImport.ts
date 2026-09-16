@@ -1,32 +1,22 @@
 import { readFileAsDataUrl } from '@shared/lib/files';
 import { useState } from 'react';
 
-import type {
-  LightingField,
-  PaperTexture,
-  SheetImageData,
-} from '../../../../../lib/paper';
+import type { PaperTexture, TextureMap } from '../../../../../lib/paper';
 import {
   buildSheetRuling,
-  detectRuling,
   encodeTextureMap,
-  extractLighting,
-  extractTexture,
+  measureSheetPhoto,
 } from '../../../../../lib/paper';
 import { useGeneratorStore } from '../../../../../model/useGeneratorStore';
 
 import { decodeSheetImage } from './decodeSheetImage';
-import type {
-  SheetImport,
-  SheetImportOptions,
-  SheetMeasurement,
-} from './useSheetImport.types';
+import type { SheetImport, SheetImportOptions } from './useSheetImport.types';
 
 /**
  * Разлиновка, которой нет: нулевой шаг помечает экземпляр как ждущий ручного
  * ввода — по нему панель и понимает, что автоопределение не дало результата.
  */
-const MISSING_RULING = { step: 0, firstLinePhase: 0 };
+const MISSING_RULING = { step: 0, firstLinePhase: 0, skewAngle: 0 };
 
 /**
  * Счётчик добавленных за сессию листов. Нужен вместе со временем: два файла,
@@ -58,36 +48,15 @@ const toSheetLabel = (fileName: string): string => {
 };
 
 /**
- * Измеряет фотографию одним вызовом детектора, тем же, что собирает пресеты:
- * наклон он ищет сам и поправляет по изгибу линий, поэтому угол берётся из
- * детекции, а не из отдельного свипа.
- *
- * @param image — полутоновая выжимка фотографии
- * @returns измерения; разлиновка `null`, если её не нашли
- */
-const measureSheet = (image: SheetImageData): SheetMeasurement => {
-  const detection = detectRuling(image);
-
-  return {
-    skewAngle: detection.skewAngle,
-    detection: detection.isDetected ? detection : null,
-  };
-};
-
-/**
  * Кодирует карту текстуры. Кодирование идёт через канву, и там, где её нет,
  * лист остаётся без текстуры: она украшает чернила, но не влияет на раскладку.
  *
- * @param image — полутоновая выжимка фотографии
- * @param lighting — поле освещения того же листа
+ * @param textureMap — карта текстуры листа
  * @returns карта текстуры; `null` — закодировать не удалось
  */
-const encodeTexture = async (
-  image: SheetImageData,
-  lighting: LightingField
-): Promise<PaperTexture | null> => {
+const encodeTexture = async (textureMap: TextureMap): Promise<PaperTexture | null> => {
   try {
-    return await encodeTextureMap(extractTexture(image, lighting));
+    return await encodeTextureMap(textureMap);
   } catch {
     return null;
   }
@@ -115,27 +84,31 @@ export const useSheetImport = (): SheetImport => {
     try {
       const src = await readFileAsDataUrl(file);
       const image = await decodeSheetImage(src);
-      const measurement = image && !isBlank ? measureSheet(image) : null;
-      const lighting = image ? extractLighting(image) : null;
-      const texture = image && lighting ? await encodeTexture(image, lighting) : null;
+      /**
+       * Измерение тем же путём, что собирает пресеты: контур листа, разлиновка
+       * внутри него с наклоном, перспективой и изгибом, свет и текстура только
+       * по бумаге. У чистого листа разлиновка не ищется, остальное — так же.
+       */
+      const measurement = image
+        ? measureSheetPhoto(image, { kind: isBlank ? 'blank' : family.kind })
+        : null;
+      const texture = measurement ? await encodeTexture(measurement.textureMap) : null;
       /**
        * Кадр неразобранной фотографии неизвестен, а сама она не отбрасывается:
        * берётся кадр первого листа семьи. Без него страница такого листа
        * вышла бы нулевого размера, а разлиновку к нему всё равно задают руками.
        */
-      const source = image || family.sheets[0];
-      const frame = { width: source?.width || 0, height: source?.height || 0 };
+      const frameSource = image || family.sheets[0];
+      const frame = {
+        width: frameSource?.width || 0,
+        height: frameSource?.height || 0,
+      };
       /**
-       * В разлиновку идёт всё найденное — и поля, и линия поля со стороной:
-       * по ним выкладывается блок текста, а не по общему для семьи отступу.
+       * В разлиновку идёт всё найденное — и поля, и линия поля со стороной, и
+       * контур листа: по ним выкладывается блок текста, а не по общему для
+       * семьи отступу.
        */
-      const ruling = buildSheetRuling(
-        {
-          ...(measurement?.detection || MISSING_RULING),
-          skewAngle: measurement?.skewAngle || 0,
-        },
-        frame
-      );
+      const ruling = buildSheetRuling(measurement?.source || MISSING_RULING, frame);
 
       addUserSheet({
         familyId: family.id,
@@ -146,7 +119,7 @@ export const useSheetImport = (): SheetImport => {
           width: frame.width,
           height: frame.height,
           ruling,
-          lighting,
+          lighting: measurement?.lighting || null,
           texture,
         },
         /**

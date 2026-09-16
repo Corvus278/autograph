@@ -1,4 +1,8 @@
-import type { RulingBend } from '@pages/Generator/lib/paper/paper.types';
+import type {
+  RulingBend,
+  RulingPerspective,
+  SheetOutline,
+} from '@pages/Generator/lib/paper/paper.types';
 import { parsePaperSheet } from '@pages/Generator/model/paperSheetJson';
 import { describe, expect, it } from 'vitest';
 
@@ -126,6 +130,150 @@ describe('разбор изгиба линий из JSON', () => {
       expect(sheet).not.toBeNull();
       expect(sheet?.ruling.step).toBe(40);
       expect(sheet?.ruling.bend).toBeNull();
+    }
+  );
+});
+
+/**
+ * Контур листа на столе с несимметричными углами: по ним видно, что разбор
+ * не переставил углы местами.
+ */
+const OUTLINE: SheetOutline = {
+  topLeft: { x: 20.5, y: 14 },
+  topRight: { x: 455, y: 9.25 },
+  bottomRight: { x: 462, y: 628 },
+  bottomLeft: { x: 12, y: 633.5 },
+};
+
+/**
+ * Перспектива с началом в середине кадра записи: знаменатель модели на кадре
+ * не меньше 0,9.
+ */
+const PERSPECTIVE: RulingPerspective = {
+  originX: 240,
+  originY: 320,
+  convergenceX: 0.000_01,
+  convergenceY: 0.000_2,
+};
+
+/**
+ * Случай испорченного поля записи.
+ */
+type CorruptedField = {
+  /**
+   * Признак порчи — попадает в название теста.
+   */
+  name: string;
+
+  /**
+   * Поле так, как оно лежит в записи.
+   */
+  value: unknown;
+};
+
+/**
+ * Контур без одного угла.
+ *
+ * @param key — какой угол убрать
+ * @returns контур без угла
+ */
+const omitOutlineCorner = (key: keyof SheetOutline): Record<string, unknown> => {
+  return Object.fromEntries(
+    Object.entries(OUTLINE).filter(([name]) => {
+      return name !== key;
+    })
+  );
+};
+
+/**
+ * Каждый признак порчи контура — отдельным случаем: контур, прочитанный с
+ * одним негодным углом, увёл бы вырезку и фолбэк полей мимо листа.
+ */
+const CORRUPTED_OUTLINES: CorruptedField[] = [
+  { name: 'три угла', value: omitOutlineCorner('bottomLeft') },
+  { name: 'угол null', value: { ...OUTLINE, topRight: null } },
+  { name: 'угол без координаты', value: { ...OUTLINE, bottomRight: { x: 462 } } },
+  { name: 'координата строкой', value: { ...OUTLINE, topLeft: { x: '20.5', y: 14 } } },
+  { name: 'координата NaN', value: { ...OUTLINE, bottomLeft: { x: Number.NaN, y: 1 } } },
+  {
+    name: 'координата бесконечна',
+    value: { ...OUTLINE, topLeft: { x: 20.5, y: Number.POSITIVE_INFINITY } },
+  },
+  { name: 'углы массивом', value: Object.values(OUTLINE) },
+  { name: 'контур не объектом', value: 'outline' },
+];
+
+/**
+ * Каждый признак порчи перспективы — отдельным случаем: у перспективы за
+ * горизонтом на кадре координата вдоль линий не определена, и строки ушли бы
+ * в бесконечность.
+ */
+const CORRUPTED_PERSPECTIVES: CorruptedField[] = [
+  { name: 'нет начала по ширине', value: { ...PERSPECTIVE, originX: undefined } },
+  { name: 'схождение строкой', value: { ...PERSPECTIVE, convergenceX: '0.00001' } },
+  { name: 'схождение null', value: { ...PERSPECTIVE, convergenceY: null } },
+  { name: 'начало NaN', value: { ...PERSPECTIVE, originY: Number.NaN } },
+  {
+    name: 'схождение бесконечно',
+    value: { ...PERSPECTIVE, convergenceY: Number.NEGATIVE_INFINITY },
+  },
+  {
+    name: '1 − a·q < 0 у правого края при начале под кадром',
+    value: { originX: 240, originY: 2000, convergenceX: -0.005, convergenceY: -0.001 },
+  },
+  {
+    name: 'горизонт внизу кадра',
+    value: { ...PERSPECTIVE, convergenceX: 0, convergenceY: -0.004 },
+  },
+  {
+    name: 'горизонт по ширине внутри кадра',
+    value: { ...PERSPECTIVE, convergenceX: -0.005, convergenceY: 0 },
+  },
+  { name: 'перспектива не объектом', value: [240, 320, 0, 0] },
+];
+
+describe('разбор контура листа и перспективы из JSON', () => {
+  it('читает контур и перспективу строго равными записанным', () => {
+    const sheet = parsePaperSheet(
+      buildEntry({ ...RULING, outline: OUTLINE, perspective: PERSPECTIVE })
+    );
+
+    expect(sheet?.ruling.outline).toStrictEqual(OUTLINE);
+    expect(sheet?.ruling.perspective).toStrictEqual(PERSPECTIVE);
+  });
+
+  it('читает запись без контура и перспективы листом во весь кадр без перспективы', () => {
+    const sheet = parsePaperSheet(buildEntry(RULING));
+
+    expect(sheet?.ruling.step).toBe(40);
+    expect(sheet?.ruling.margins).toStrictEqual(RULING.margins);
+    expect(sheet?.ruling.outline).toBeNull();
+    expect(sheet?.ruling.perspective).toBeNull();
+  });
+
+  it.each(CORRUPTED_OUTLINES)(
+    'оставляет в списке листом во весь кадр лист с испорченным контуром: $name',
+    ({ value }) => {
+      const sheet = parsePaperSheet(
+        buildEntry({ ...RULING, outline: value, perspective: PERSPECTIVE })
+      );
+
+      expect(sheet?.ruling.step).toBe(40);
+      expect(sheet?.ruling.outline).toBeNull();
+      expect(sheet?.ruling.perspective).toStrictEqual(PERSPECTIVE);
+    }
+  );
+
+  it.each(CORRUPTED_PERSPECTIVES)(
+    'оставляет в списке без перспективы лист с испорченной перспективой: $name',
+    ({ value }) => {
+      const sheet = parsePaperSheet(
+        buildEntry({ ...RULING, outline: OUTLINE, perspective: value })
+      );
+
+      expect(sheet?.ruling.step).toBe(40);
+      expect(sheet?.ruling.perspective).toBeNull();
+      expect(sheet?.ruling.outline).toStrictEqual(OUTLINE);
     }
   );
 });
