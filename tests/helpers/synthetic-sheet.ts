@@ -1,7 +1,10 @@
 import type {
   PaperMargins,
   RulingKind,
+  RulingPerspective,
   SheetImageData,
+  SheetOutline,
+  SheetPoint,
 } from '@pages/Generator/lib/paper';
 import { mulberry32 } from '@shared/lib/random';
 
@@ -124,6 +127,128 @@ export type SyntheticLineEnds = {
    * Самый правый столбец, где линия ещё рисуется.
    */
   right: number;
+};
+
+/**
+ * Сторона листа, наружу от которой лежит полоса поверхности.
+ */
+export type SyntheticSide = 'top' | 'right' | 'bottom' | 'left';
+
+/**
+ * Полоса поверхности вдоль одной стороны листа: обложка тетради или соседний
+ * лист, видный за спиралью.
+ */
+export type SyntheticSurfaceBand = {
+  /**
+   * Сторона листа, наружу от которой лежит полоса.
+   */
+  side: SyntheticSide;
+
+  /**
+   * Толщина полосы наружу от стороны листа. Дальше неё — яркость поверхности.
+   */
+  width: number;
+
+  /**
+   * Яркость полосы, от 0 до 1.
+   */
+  brightness: number;
+};
+
+/**
+ * Поверхность вокруг листа: всё, что видно за его контуром.
+ */
+export type SyntheticSurface = {
+  /**
+   * Контур листа в пикселях кадра. За ним бумаги нет: линии разлиновки,
+   * поля и линия поля туда не рисуются.
+   */
+  outline: SheetOutline;
+
+  /**
+   * Радиус скругления углов листа. Ноль — углы прямые.
+   */
+  cornerRadius?: number;
+
+  /**
+   * Яркость поверхности за пределами полос, от 0 до 1.
+   */
+  brightness?: number;
+
+  /**
+   * Размах равномерного шума яркости поверхности: зерно стола отличается от
+   * зерна бумаги.
+   */
+  grain?: number;
+
+  /**
+   * Полоса обложки. Не задана — обложки нет.
+   */
+  cover?: SyntheticSurfaceBand;
+
+  /**
+   * Полоса соседнего листа — она светлее бумаги, и поиск края, идущий снаружи
+   * внутрь, принял бы её за сам лист. Не задана — соседнего листа нет.
+   */
+  neighbour?: SyntheticSurfaceBand;
+
+  /**
+   * Доля яркости, теряемая в углах кадра: мягкая виньетка объектива. Ноль —
+   * виньетки нет.
+   */
+  vignette?: number;
+};
+
+/**
+ * Перспектива разлиновки: линии сходятся по ширине кадра и меняют шаг по его
+ * высоте. Горизонтальная линия с координатой `U` лежит на `Y(x, U)`.
+ */
+export type SyntheticRulingPerspective = {
+  /**
+   * Схождение линий по ширине кадра, 1/px.
+   */
+  convergenceX: number;
+
+  /**
+   * Изменение шага по высоте кадра, 1/px.
+   */
+  convergenceY: number;
+
+  /**
+   * Начало отсчёта по ширине. Не задано — середина кадра.
+   */
+  originX?: number;
+
+  /**
+   * Начало отсчёта по высоте. Не задано — середина кадра.
+   */
+  originY?: number;
+};
+
+/**
+ * Стороны листа в точке кадра: столбцы боковых сторон на её высоте и строки
+ * верхней и нижней сторон в её столбце.
+ */
+type SyntheticSheetEdges = {
+  /**
+   * Столбец левой стороны листа.
+   */
+  left: number;
+
+  /**
+   * Столбец правой стороны листа.
+   */
+  right: number;
+
+  /**
+   * Строка верхней стороны листа.
+   */
+  top: number;
+
+  /**
+   * Строка нижней стороны листа.
+   */
+  bottom: number;
 };
 
 /**
@@ -288,6 +413,18 @@ export type SyntheticSheetParams = {
    * проверяет устойчивость измерения самой разлиновки.
    */
   lowContrastArea?: SyntheticArea;
+
+  /**
+   * Поверхность вокруг листа. Не задана — лист занимает весь кадр.
+   */
+  surface?: SyntheticSurface | null;
+
+  /**
+   * Перспектива горизонтальных линий. Не задана — линии идут через равный шаг.
+   * Поле `perspective` этим не заменяется: оно разводит концы линий без
+   * эталона, а здесь у каждой линии есть точное место — `computeSyntheticLineY`.
+   */
+  rulingPerspective?: SyntheticRulingPerspective | null;
 };
 
 const DEFAULT_WIDTH = 420;
@@ -437,6 +574,354 @@ const isInsideArea = (area: SyntheticArea, x: number, y: number): boolean => {
   return x >= left && x <= right && y >= top && y <= bottom;
 };
 
+const DEFAULT_SURFACE_BRIGHTNESS = 0.3;
+
+/**
+ * Координата вдоль линий `U` в точке кадра. Формула перспективы записана здесь
+ * своя, а не взята из `lib/paper`: синтетика — эталон для измерений, и общая
+ * запись сделала бы проверку попадания на линии круговой.
+ *
+ * @param perspective — перспектива разлиновки; `null` — равный шаг
+ * @param tangent — тангенс наклона разлиновки
+ * @param x — столбец кадра
+ * @param y — строка кадра
+ * @returns координата вдоль линий
+ */
+const computeLineCoordinate = (
+  perspective: RulingPerspective | null,
+  tangent: number,
+  x: number,
+  y: number
+): number => {
+  if (perspective === null) {
+    return y - x * tangent;
+  }
+
+  const { originX, originY, convergenceX, convergenceY } = perspective;
+  const offsetX = x - originX;
+  const weight = 1 + convergenceX * offsetX + convergenceY * (y - originY);
+
+  return originY - originX * tangent + (y - originY - offsetX * tangent) / weight;
+};
+
+/**
+ * Высота линии с координатой `u` в столбце `x` — обращение
+ * `computeLineCoordinate`.
+ *
+ * @param perspective — перспектива разлиновки; `null` — равный шаг
+ * @param tangent — тангенс наклона разлиновки
+ * @param x — столбец кадра
+ * @param u — координата вдоль линий
+ * @returns строка линии в столбце
+ */
+const computeLineHeight = (
+  perspective: RulingPerspective | null,
+  tangent: number,
+  x: number,
+  u: number
+): number => {
+  if (perspective === null) {
+    return u + x * tangent;
+  }
+
+  const { originX, originY, convergenceX, convergenceY } = perspective;
+  const offsetX = x - originX;
+  const offset = u - originY + originX * tangent;
+
+  return (
+    originY +
+    (offset * (1 + convergenceX * offsetX) + offsetX * tangent) /
+      (1 - offset * convergenceY)
+  );
+};
+
+/**
+ * Строка центра горизонтальной линии, стоящей на гребёнке в месте `center`:
+ * перспектива, уход `drift` и изгиб вместе. Одна запись и для отрисовки, и для
+ * эталона — иначе они разошлись бы на долю пикселя и тест ловил бы не изгиб.
+ *
+ * @param perspective — перспектива разлиновки; `null` — равный шаг
+ * @param tangent — тангенс наклона разлиновки
+ * @param center — место линии на гребёнке
+ * @param x — столбец кадра
+ * @param driftFrom — место на гребёнке, с которого линии уходят на `drift`
+ * @param drift — уход линий от `driftFrom`
+ * @param bend — изгиб линии в точке, где она прошла бы без него
+ * @returns строка центра линии
+ */
+const computeLineCenterY = (
+  perspective: RulingPerspective | null,
+  tangent: number,
+  center: number,
+  x: number,
+  driftFrom: number,
+  drift: number,
+  bend: SyntheticField
+): number => {
+  const lineY = computeLineHeight(perspective, tangent, x, center);
+  const shift = center >= driftFrom ? drift : 0;
+
+  return lineY + shift + bend(x, lineY);
+};
+
+/**
+ * Чернила гребёнки в перспективе: расстояние до линии меряется по высоте
+ * кадра, а не вдоль координаты `U`, — местный шаг по кадру меняется, и в `U`
+ * гауссиана линии расплывалась бы к одному краю листа и сжималась к другому.
+ *
+ * @param coordinate — координата пикселя вдоль линий
+ * @param y — строка пикселя
+ * @param step — шаг гребёнки
+ * @param phase — фаза гребёнки
+ * @param sigma — сигма гауссианы линии
+ * @param from — наименьшее место линии на гребёнке, которое рисуется
+ * @param to — наибольшее место линии на гребёнке, которое рисуется
+ * @param lineYAt — строка центра линии по её месту на гребёнке
+ * @returns глубина чернил от 0 до 1
+ */
+const computePerspectiveCombInk = (
+  coordinate: number,
+  y: number,
+  step: number,
+  phase: number,
+  sigma: number,
+  from: number,
+  to: number,
+  lineYAt: (center: number) => number
+): number => {
+  const nearest = Math.round((coordinate - phase) / step);
+  let closest = Number.POSITIVE_INFINITY;
+
+  for (let index = nearest - 1; index <= nearest + 1; index += 1) {
+    const center = index * step + phase;
+
+    if (center >= from && center <= to) {
+      const distance = y - lineYAt(center);
+
+      closest = Math.abs(distance) < Math.abs(closest) ? distance : closest;
+    }
+  }
+
+  return computeInk(closest, sigma);
+};
+
+/**
+ * Столбец боковой стороны листа на высоте `y`.
+ *
+ * @param top — верхний конец стороны
+ * @param bottom — нижний конец стороны
+ * @param y — строка кадра
+ * @returns столбец стороны
+ */
+const computeSheetSideX = (top: SheetPoint, bottom: SheetPoint, y: number): number => {
+  const span = bottom.y - top.y;
+
+  return span === 0 ? top.x : top.x + ((bottom.x - top.x) * (y - top.y)) / span;
+};
+
+/**
+ * Строка горизонтальной стороны листа в столбце `x`.
+ *
+ * @param left — левый конец стороны
+ * @param right — правый конец стороны
+ * @param x — столбец кадра
+ * @returns строка стороны
+ */
+const computeSheetSideY = (left: SheetPoint, right: SheetPoint, x: number): number => {
+  const span = right.x - left.x;
+
+  return span === 0 ? left.y : left.y + ((right.y - left.y) * (x - left.x)) / span;
+};
+
+/**
+ * Стороны листа в точке кадра.
+ *
+ * @param outline — контур листа
+ * @param x — столбец кадра
+ * @param y — строка кадра
+ * @returns столбцы боковых сторон и строки верхней и нижней
+ */
+const computeSheetEdges = (
+  outline: SheetOutline,
+  x: number,
+  y: number
+): SyntheticSheetEdges => {
+  const { topLeft, topRight, bottomRight, bottomLeft } = outline;
+
+  return {
+    left: computeSheetSideX(topLeft, bottomLeft, y),
+    right: computeSheetSideX(topRight, bottomRight, y),
+    top: computeSheetSideY(topLeft, topRight, x),
+    bottom: computeSheetSideY(bottomLeft, bottomRight, x),
+  };
+};
+
+/**
+ * Точка за контуром листа: за одной из сторон или за скруглением угла.
+ *
+ * @param edges — стороны листа в этой точке
+ * @param cornerRadius — радиус скругления углов
+ * @param x — столбец кадра
+ * @param y — строка кадра
+ * @returns `true`, если точка лежит на поверхности, а не на бумаге
+ */
+const isOutsideSheet = (
+  edges: SyntheticSheetEdges,
+  cornerRadius: number,
+  x: number,
+  y: number
+): boolean => {
+  const insideX = Math.min(x - edges.left, edges.right - x);
+  const insideY = Math.min(y - edges.top, edges.bottom - y);
+
+  if (insideX < 0 || insideY < 0) {
+    return true;
+  }
+
+  if (insideX >= cornerRadius || insideY >= cornerRadius) {
+    return false;
+  }
+
+  return Math.hypot(cornerRadius - insideX, cornerRadius - insideY) > cornerRadius;
+};
+
+/**
+ * Насколько точка отстоит от стороны листа наружу. Отрицательное — точка с
+ * другой стороны листа или внутри него.
+ *
+ * @param edges — стороны листа в этой точке
+ * @param side — сторона листа
+ * @param x — столбец кадра
+ * @param y — строка кадра
+ * @returns расстояние наружу от стороны
+ */
+const computeOutwardDistance = (
+  edges: SyntheticSheetEdges,
+  side: SyntheticSide,
+  x: number,
+  y: number
+): number => {
+  switch (side) {
+    case 'top': {
+      return edges.top - y;
+    }
+
+    case 'right': {
+      return x - edges.right;
+    }
+
+    case 'bottom': {
+      return y - edges.bottom;
+    }
+
+    case 'left': {
+      return edges.left - x;
+    }
+
+    default: {
+      throw new Error(`Unknown side: ${side}`);
+    }
+  }
+};
+
+/**
+ * Яркость поверхности в точке за контуром: полоса обложки или соседнего листа,
+ * если точка попала в неё, иначе — сама поверхность.
+ *
+ * @param surface — поверхность вокруг листа
+ * @param edges — стороны листа в этой точке
+ * @param x — столбец кадра
+ * @param y — строка кадра
+ * @returns яркость от 0 до 1
+ */
+const computeSurfaceBrightness = (
+  surface: SyntheticSurface,
+  edges: SyntheticSheetEdges,
+  x: number,
+  y: number
+): number => {
+  const { brightness = DEFAULT_SURFACE_BRIGHTNESS, cover, neighbour } = surface;
+  const band = [cover, neighbour].find((item) => {
+    if (!item) {
+      return false;
+    }
+
+    const distance = computeOutwardDistance(edges, item.side, x, y);
+
+    return distance > 0 && distance <= item.width;
+  });
+
+  return band ? band.brightness : brightness;
+};
+
+/**
+ * Множитель виньетки: единица в середине кадра, наибольшая потеря — в углах.
+ *
+ * @param vignette — доля яркости, теряемая в углах кадра
+ * @param widthShare — доля ширины от −1 у левого края до 1 у правого
+ * @param heightShare — доля высоты от −1 у верха до 1 у низа
+ * @returns множитель яркости
+ */
+const computeVignetteScale = (
+  vignette: number,
+  widthShare: number,
+  heightShare: number
+): number => {
+  return 1 - (vignette * (widthShare ** 2 + heightShare ** 2)) / 2;
+};
+
+/**
+ * Эталонный контур листа в форме модели. Без поверхности — весь кадр: лист
+ * снят обрезанным по краям.
+ *
+ * @param params — описание листа
+ * @returns четыре угла листа в пикселях кадра
+ */
+export const computeSyntheticOutline = (params: SyntheticSheetParams): SheetOutline => {
+  const { width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT, surface = null } = params;
+
+  if (surface !== null) {
+    return surface.outline;
+  }
+
+  return {
+    topLeft: { x: 0, y: 0 },
+    topRight: { x: width, y: 0 },
+    bottomRight: { x: width, y: height },
+    bottomLeft: { x: 0, y: height },
+  };
+};
+
+/**
+ * Эталонная перспектива разлиновки в форме модели: начало отсчёта разрешено до
+ * чисел, чтобы сравнение с измеренной перспективой шло без домысливания.
+ *
+ * @param params — описание листа
+ * @returns перспектива; `null` — линии идут через равный шаг
+ */
+export const computeSyntheticPerspective = (
+  params: SyntheticSheetParams
+): RulingPerspective | null => {
+  const {
+    width = DEFAULT_WIDTH,
+    height = DEFAULT_HEIGHT,
+    rulingPerspective = null,
+  } = params;
+
+  if (rulingPerspective === null) {
+    return null;
+  }
+
+  const {
+    convergenceX,
+    convergenceY,
+    originX = width / 2,
+    originY = height / 2,
+  } = rulingPerspective;
+
+  return { originX, originY, convergenceX, convergenceY };
+};
+
 /**
  * Рисует полутоновый лист с заданной разлиновкой: шагом, фазой, наклоном,
  * полями, линией поля, изгибом линий и границ, помехами у края, зерном и
@@ -477,6 +962,7 @@ export const createSyntheticSheet = (
     spiral = null,
     outerRuling = null,
     lowContrastArea = null,
+    surface = null,
   } = params;
   const { left: leftEndBend = computeNoShift, right: rightEndBend = computeNoShift } =
     lineEndsBend;
@@ -489,6 +975,11 @@ export const createSyntheticSheet = (
   const leftEdge = margins.left;
   const rightEdge = width - margins.right;
   const isOuterRulingOnLeft = marginLineX !== null && marginLineX < width / 2;
+  const perspectiveModel = computeSyntheticPerspective(params);
+  const bendField = bend || computeNoShift;
+  const surfaceCornerRadius = surface === null ? 0 : surface.cornerRadius || 0;
+  const surfaceGrain = surface === null ? 0 : surface.grain || 0;
+  const surfaceVignette = surface === null ? 0 : surface.vignette || 0;
 
   for (let y = 0; y < height; y += 1) {
     const row = y * width;
@@ -508,37 +999,69 @@ export const createSyntheticSheet = (
         lowContrastArea !== null && isInsideArea(lowContrastArea, x, y)
           ? lowContrastArea.contrast
           : 1;
-      let value = 1 - lighting * shade;
+      const edges = surface === null ? null : computeSheetEdges(surface.outline, x, y);
+      const surfaceValue =
+        surface !== null &&
+        edges !== null &&
+        isOutsideSheet(edges, surfaceCornerRadius, x, y)
+          ? computeSurfaceBrightness(surface, edges, x, y)
+          : null;
+      const isOnPaper = surfaceValue === null;
+      let value = surfaceValue === null ? 1 - lighting * shade : surfaceValue;
 
-      if (kind !== 'blank') {
+      if (kind !== 'blank' && isOnPaper) {
         const isAcrossInside = acrossLines >= rowLeftEdge && acrossLines <= rowRightEdge;
 
         if (isAcrossInside) {
-          const lineInk =
-            bend === null
-              ? computeCombInk(
-                  alongLines - perspectiveShift,
-                  step,
-                  phase,
-                  sigma,
-                  topEdge,
-                  bottomEdge,
-                  driftFrom,
-                  drift
-                )
-              : computeBentCombInk(
-                  alongLines - perspectiveShift,
-                  step,
-                  phase,
-                  sigma,
-                  topEdge,
-                  bottomEdge,
+          let lineInk = 0;
+
+          if (perspectiveModel !== null) {
+            lineInk = computePerspectiveCombInk(
+              computeLineCoordinate(perspectiveModel, tangent, x, y),
+              y,
+              step,
+              phase,
+              sigma,
+              topEdge,
+              bottomEdge,
+              (center) => {
+                return computeLineCenterY(
+                  perspectiveModel,
+                  tangent,
+                  center,
+                  x,
                   driftFrom,
                   drift,
-                  (center) => {
-                    return bend(x, center + x * tangent);
-                  }
+                  bendField
                 );
+              }
+            );
+          } else if (bend === null) {
+            lineInk = computeCombInk(
+              alongLines - perspectiveShift,
+              step,
+              phase,
+              sigma,
+              topEdge,
+              bottomEdge,
+              driftFrom,
+              drift
+            );
+          } else {
+            lineInk = computeBentCombInk(
+              alongLines - perspectiveShift,
+              step,
+              phase,
+              sigma,
+              topEdge,
+              bottomEdge,
+              driftFrom,
+              drift,
+              (center) => {
+                return bend(x, center + x * tangent);
+              }
+            );
+          }
 
           value -= rowDarkness * contrast * lineInk;
         }
@@ -572,7 +1095,7 @@ export const createSyntheticSheet = (
         }
       }
 
-      if (rowMarginLineX !== null && isAlongInside) {
+      if (rowMarginLineX !== null && isAlongInside && isOnPaper) {
         value -= marginLineDarkness * computeInk(acrossLines - rowMarginLineX, sigma);
 
         const isBeyondMarginLine = isOuterRulingOnLeft
@@ -597,7 +1120,11 @@ export const createSyntheticSheet = (
         value -= computeSpiralInk(spiral, x, y, sigma);
       }
 
-      value += (random() - 0.5) * noise;
+      if (surfaceVignette !== 0) {
+        value *= computeVignetteScale(surfaceVignette, (2 * x) / width - 1, heightShare);
+      }
+
+      value += (random() - 0.5) * (isOnPaper ? noise : surfaceGrain);
       luminance[row + x] = Math.max(0, Math.min(1, value));
     }
   }
@@ -606,10 +1133,11 @@ export const createSyntheticSheet = (
 };
 
 /**
- * Эталонный центр горизонтальной линии в столбце: наклон, изгиб `bend` и уход
- * `drift`. Перспектива `perspective` не входит: её сдвиг зависит от строки
- * пикселя, а не от линии, и точного положения линии у неё нет — изгиб с
- * эталоном задаётся через `bend`.
+ * Эталонный центр горизонтальной линии в столбце: наклон, перспектива
+ * `rulingPerspective`, изгиб `bend` и уход `drift`. Перспектива `perspective`
+ * не входит: её сдвиг зависит от строки пикселя, а не от линии, и точного
+ * положения линии у неё нет — линия с эталоном задаётся через
+ * `rulingPerspective` и `bend`.
  *
  * @param params — описание листа, тот же объект, что ушёл в
  *   `createSyntheticSheet`
@@ -631,11 +1159,16 @@ export const computeSyntheticLineY = (
     drift = 0,
     bend = computeNoShift,
   } = params;
-  const center = phase + index * step;
-  const straightY = center + x * Math.tan(angle * DEGREES_TO_RADIANS);
-  const shift = center >= driftFrom ? drift : 0;
 
-  return straightY + shift + bend(x, straightY);
+  return computeLineCenterY(
+    computeSyntheticPerspective(params),
+    Math.tan(angle * DEGREES_TO_RADIANS),
+    phase + index * step,
+    x,
+    driftFrom,
+    drift,
+    bend
+  );
 };
 
 /**

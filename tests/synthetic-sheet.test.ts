@@ -1,4 +1,8 @@
-import type { SheetImageData } from '@pages/Generator/lib/paper';
+import type {
+  RulingPerspective,
+  SheetImageData,
+  SheetOutline,
+} from '@pages/Generator/lib/paper';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -6,6 +10,8 @@ import {
   computeSyntheticLineEnds,
   computeSyntheticLineY,
   computeSyntheticMarginLineX,
+  computeSyntheticOutline,
+  computeSyntheticPerspective,
   createSyntheticSheet,
   type SyntheticSheetParams,
 } from './helpers/synthetic-sheet';
@@ -69,8 +75,21 @@ const toHeightShare = (y: number): number => {
  * @param y — строка
  * @returns глубина от 0 до 1
  */
+const readLuminance = (image: SheetImageData, x: number, y: number): number => {
+  return image.luminance[y * image.width + x] || 0;
+};
+
+/**
+ * Насколько пиксель темнее бумаги. Бумага в тестах без шума и света, поэтому
+ * тёмное — это только нарисованное.
+ *
+ * @param image — кадр
+ * @param x — столбец
+ * @param y — строка
+ * @returns глубина от 0 до 1
+ */
 const readInk = (image: SheetImageData, x: number, y: number): number => {
-  return 1 - (image.luminance[y * image.width + x] || 0);
+  return 1 - readLuminance(image, x, y);
 };
 
 /**
@@ -324,6 +343,226 @@ describe('createSyntheticSheet: изогнутые вертикали', () => {
     expect(
       computeSyntheticColumnX(params, 1, 60) - (45 - 60 * Math.tan(Math.PI / 360))
     ).toBeGreaterThan(MIN_VISIBLE_BEND);
+  });
+});
+
+/**
+ * Яркость стола за листом: вдвое темнее бумаги, как на замерах фотографий.
+ */
+const SURFACE_BRIGHTNESS = 0.3;
+
+/**
+ * Обложка светлее стола, но темнее бумаги.
+ */
+const COVER_BRIGHTNESS = 0.55;
+
+/**
+ * Неравномерность освещения листа: без неё бумага упирается в единицу, и ничто
+ * за контуром не может оказаться светлее её.
+ */
+const SHEET_LIGHTING = 0.35;
+
+/**
+ * Соседний лист за спиралью светлее бумаги у левого края ниже середины кадра —
+ * там, где он и меряется: при `SHEET_LIGHTING` свет садится к низу и к правому
+ * краю. У верхнего левого угла бумага пока светлее него. Поиск края, идущий
+ * снаружи внутрь, принял бы такую полосу за бумагу.
+ */
+const NEIGHBOUR_BRIGHTNESS = 0.95;
+
+/**
+ * Контур листа: стороны наклонены к краям кадра, лист занимает большую часть
+ * кадра.
+ */
+const SHEET_OUTLINE: SheetOutline = {
+  topLeft: { x: 60, y: 50 },
+  topRight: { x: 545, y: 40 },
+  bottomRight: { x: 555, y: 440 },
+  bottomLeft: { x: 70, y: 450 },
+};
+
+const SURFACE_SHEET: SyntheticSheetParams = {
+  width: WIDTH,
+  height: HEIGHT,
+  step: STEP,
+  phase: 15,
+  angle: 0.5,
+  lighting: SHEET_LIGHTING,
+  margins: { top: 90, right: 80, bottom: 80, left: 100 },
+  surface: {
+    outline: SHEET_OUTLINE,
+    cornerRadius: 12,
+    brightness: SURFACE_BRIGHTNESS,
+    cover: { side: 'right', width: 30, brightness: COVER_BRIGHTNESS },
+    neighbour: { side: 'left', width: 40, brightness: NEIGHBOUR_BRIGHTNESS },
+  },
+  spiral: { x: 62, period: 37, phase: 10, radius: 5, darkness: 0.7 },
+};
+
+/**
+ * Высота центра пятна спирали, лежащего поверх левого края листа.
+ */
+const SPIRAL_SPOT_Y = 232;
+
+/**
+ * Линия, по которой сверяется глубина чернил: первая нарисованная ниже
+ * верхнего поля.
+ */
+const LINE_PROBE_INDEX = 3;
+
+/**
+ * Какая доля глубины линии достаётся ближайшей к её центру строке растра:
+ * центр дробный, и строка отстоит от него до полупикселя.
+ */
+const INK_ON_LINE_SHARE = 0.8;
+
+describe('createSyntheticSheet: лист на поверхности', () => {
+  it.each([
+    { place: 'стол сверху', x: 300, y: 10, expected: SURFACE_BRIGHTNESS },
+    { place: 'стол снизу', x: 300, y: 470, expected: SURFACE_BRIGHTNESS },
+    { place: 'стол за соседним листом', x: 10, y: 240, expected: SURFACE_BRIGHTNESS },
+    { place: 'обложка справа', x: 565, y: 240, expected: COVER_BRIGHTNESS },
+    { place: 'соседний лист слева', x: 40, y: 240, expected: NEIGHBOUR_BRIGHTNESS },
+  ])('за контуром листа $place имеет свою яркость', ({ x, y, expected }) => {
+    expect(readLuminance(createSyntheticSheet(SURFACE_SHEET), x, y)).toBeCloseTo(
+      expected,
+      3
+    );
+  });
+
+  it('внутри контура между линиями лежит бумага без чернил', () => {
+    const image = createSyntheticSheet(SURFACE_SHEET);
+    const paper = readLuminance(image, 300, 122);
+    const lineRow = Math.round(
+      computeSyntheticLineY(SURFACE_SHEET, LINE_PROBE_INDEX, 300)
+    );
+
+    expect(paper).toBeGreaterThan(COVER_BRIGHTNESS);
+    expect(paper - readLuminance(image, 300, lineRow)).toBeGreaterThan(
+      LINE_DARKNESS * INK_ON_LINE_SHARE
+    );
+  });
+
+  it('соседний лист светлее бумаги рядом с ним', () => {
+    const image = createSyntheticSheet(SURFACE_SHEET);
+    const paper = readLuminance(image, 120, 241);
+
+    expect(readLuminance(image, 40, 240)).toBeGreaterThan(paper);
+    expect(paper).toBeGreaterThan(COVER_BRIGHTNESS);
+  });
+
+  it('пятно спирали ложится поверх края листа', () => {
+    expect(
+      readLuminance(createSyntheticSheet(SURFACE_SHEET), 62, SPIRAL_SPOT_Y)
+    ).toBeCloseTo(NEIGHBOUR_BRIGHTNESS - 0.7, 3);
+  });
+
+  it('эталонный контур — заданный, без поверхности — кадр целиком', () => {
+    expect(computeSyntheticOutline(SURFACE_SHEET)).toEqual(SHEET_OUTLINE);
+    expect(computeSyntheticOutline({ width: WIDTH, height: HEIGHT })).toEqual({
+      topLeft: { x: 0, y: 0 },
+      topRight: { x: WIDTH, y: 0 },
+      bottomRight: { x: WIDTH, y: HEIGHT },
+      bottomLeft: { x: 0, y: HEIGHT },
+    });
+  });
+});
+
+/**
+ * Схождение линий по ширине и рост шага по высоте: шаг у нижних линий больше,
+ * чем у верхних, на единицы процентов — как на снимке тетради телефоном.
+ */
+const PERSPECTIVE = { convergenceX: 0.00015, convergenceY: 0.00015 };
+
+const PERSPECTIVE_SHEET: SyntheticSheetParams = {
+  width: WIDTH,
+  height: HEIGHT,
+  step: STEP,
+  phase: 15,
+  angle: 1,
+  margins: { top: 60, right: 0, bottom: 60, left: 0 },
+  rulingPerspective: PERSPECTIVE,
+};
+
+const PERSPECTIVE_BENT_SHEET: SyntheticSheetParams = {
+  ...PERSPECTIVE_SHEET,
+  bend: (x, y) => {
+    return 0.2 * STEP * ((2 * x) / WIDTH - 1) ** 2 * toHeightShare(y);
+  },
+};
+
+/**
+ * Пять столбцов от края до края: перспектива меняет положение линии по всей
+ * ширине кадра, и середины мало.
+ */
+const PERSPECTIVE_COLUMNS = [30, 170, 300, 440, 570];
+
+/**
+ * Полпикселя — допуск задачи: перспектива, применённая не в той точке, уводит
+ * линию на пиксели.
+ */
+const PERSPECTIVE_TOLERANCE = 0.5;
+
+describe.each([
+  { title: 'перспектива', params: PERSPECTIVE_SHEET },
+  { title: 'перспектива и изгиб вместе', params: PERSPECTIVE_BENT_SHEET },
+])('createSyntheticSheet: $title', ({ params }) => {
+  it.each([2, 7, 13])('центр линии %i в пяти столбцах лежит на эталоне', (index) => {
+    const image = createSyntheticSheet(params);
+
+    PERSPECTIVE_COLUMNS.forEach((x) => {
+      const expectedY = computeSyntheticLineY(params, index, x);
+
+      expect(Math.abs(measureColumnCenter(image, x, expectedY) - expectedY)).toBeLessThan(
+        PERSPECTIVE_TOLERANCE
+      );
+    });
+  });
+});
+
+/**
+ * Высота линии `Y(x, U)` при `PERSPECTIVE`, посчитанная по формуле проектного
+ * решения вне хелпера и вне `lib/paper`. Растр и эталон хелпера считает одна
+ * запись формулы, поэтому согласованная ошибка в ней взаимно сократилась бы и
+ * проверками попадания на линии не ловилась — числа держат эту запись снаружи.
+ */
+const PERSPECTIVE_LINE_HEIGHTS = [
+  { index: 2, x: 30, lineY: 85.691990606916988 },
+  { index: 2, x: 570, lineY: 82.25915012737326 },
+  { index: 7, x: 300, lineY: 230.25079740091678 },
+  { index: 13, x: 30, lineY: 402.78588836734878 },
+  { index: 13, x: 570, lineY: 426.60911908844582 },
+];
+
+describe('createSyntheticSheet: эталон перспективы', () => {
+  it.each(PERSPECTIVE_LINE_HEIGHTS)(
+    'эталон линии $index в столбце $x совпадает с числом по формуле перспективы',
+    ({ index, x, lineY }) => {
+      expect(computeSyntheticLineY(PERSPECTIVE_SHEET, index, x)).toBeCloseTo(lineY, 9);
+    }
+  );
+
+  it('линия в перспективе отходит от равномерной гребёнки', () => {
+    const bentY = computeSyntheticLineY(PERSPECTIVE_SHEET, 13, 570);
+    const straightY = computeSyntheticLineY(
+      { ...PERSPECTIVE_SHEET, rulingPerspective: null },
+      13,
+      570
+    );
+
+    expect(Math.abs(bentY - straightY)).toBeGreaterThan(MIN_VISIBLE_BEND);
+  });
+
+  it('эталонная перспектива отсчитана от середины кадра', () => {
+    const expected: RulingPerspective = {
+      originX: WIDTH / 2,
+      originY: HEIGHT / 2,
+      convergenceX: PERSPECTIVE.convergenceX,
+      convergenceY: PERSPECTIVE.convergenceY,
+    };
+
+    expect(computeSyntheticPerspective(PERSPECTIVE_SHEET)).toEqual(expected);
+    expect(computeSyntheticPerspective(SURFACE_SHEET)).toBeNull();
   });
 });
 
