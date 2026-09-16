@@ -12,6 +12,13 @@ export {
   resolveLightingGrid,
 } from './extractLighting';
 export { extractTexture } from './extractTexture';
+export { measureSheetPhoto } from './measureSheetPhoto';
+export type {
+  SheetPhotoDiagnostics,
+  SheetPhotoMeasurement,
+  SheetPhotoOptions,
+  SheetPhotoPerspectiveReport,
+} from './measureSheetPhoto.types';
 export { mirrorSheetRuling } from './mirrorSheetRuling';
 export type {
   ExtractLightingOptions,
