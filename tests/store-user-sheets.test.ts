@@ -65,7 +65,7 @@ const buildMeasuredSheet = (id: string): PaperSheet => {
 };
 
 const buildRecord = (id: string, isAnalyzed = true): UserSheetRecord => {
-  return { familyId: 'grid', sheet: buildMeasuredSheet(id), isAnalyzed };
+  return { familyId: 'grid', sheet: buildMeasuredSheet(id), isAnalyzed, isBlank: false };
 };
 
 /**
@@ -203,6 +203,7 @@ describe('форма записи в хранилище', () => {
       'height',
       'id',
       'isAnalyzed',
+      'isBlank',
       'label',
       'ruling',
       'width',

@@ -5,7 +5,7 @@ import type { PaperFamily, PaperMargins, PaperSheet } from '../../../../../lib/p
  */
 export type SheetRemeasureOptions = {
   /**
-   * Семья, в которой лежит лист: её вид разлиновки решает, искать ли линии.
+   * Семья, в которой лежит лист: её вид разлиновки решает, какие линии искать.
    */
   family: PaperFamily;
 
@@ -15,9 +15,30 @@ export type SheetRemeasureOptions = {
   sheet: PaperSheet;
 
   /**
+   * Лист добавлен без разлиновки: линии на нём не ищутся, а шаг, фаза и поля,
+   * заданные руками, остаются.
+   */
+  isBlank: boolean;
+
+  /**
    * Границы листа — отступы от краёв кадра в пикселях фотографии.
    */
   bounds: PaperMargins;
+};
+
+/**
+ * Ошибка перемера вместе с листом, на котором она случилась.
+ */
+export type SheetRemeasureFailure = {
+  /**
+   * Идентификатор листа, перемер которого не удался.
+   */
+  sheetId: string;
+
+  /**
+   * Сообщение об ошибке.
+   */
+  message: string;
 };
 
 /**
@@ -36,7 +57,7 @@ export type SheetRemeasure = {
   isBusy: boolean;
 
   /**
-   * Сообщение об ошибке. `null` — ошибки нет.
+   * Сообщение об ошибке перемера текущего листа. `null` — ошибки нет.
    */
   error: string | null;
 

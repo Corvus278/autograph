@@ -86,7 +86,6 @@ export const PaperGroup: FC = () => {
     return state.removeUserSheet;
   });
   const sheetImport = useSheetImport();
-  const sheetRemeasure = useSheetRemeasure();
   const [isBlankSheet, setBlankSheet] = useState(false);
 
   const activeFamily =
@@ -102,6 +101,10 @@ export const PaperGroup: FC = () => {
   const isOwnSheetSelected = ownSheets.some((sheet) => {
     return sheet.id === activeSheet?.id;
   });
+  const isActiveSheetBlank = userSheets.some((record) => {
+    return record.sheet.id === activeSheet?.id && record.isBlank;
+  });
+  const sheetRemeasure = useSheetRemeasure(activeSheet?.id || '');
 
   const handleFamilyChange = (value: string) => {
     selectFamily(value);
@@ -178,6 +181,7 @@ export const PaperGroup: FC = () => {
       familyId: activeFamily.id,
       sheet: { ...activeSheet, ruling },
       isAnalyzed: true,
+      isBlank: isActiveSheetBlank,
     });
   };
 
@@ -186,7 +190,12 @@ export const PaperGroup: FC = () => {
       return;
     }
 
-    void sheetRemeasure.remeasure({ family: activeFamily, sheet: activeSheet, bounds });
+    void sheetRemeasure.remeasure({
+      family: activeFamily,
+      sheet: activeSheet,
+      isBlank: isActiveSheetBlank,
+      bounds,
+    });
   };
 
   /**

@@ -1,8 +1,10 @@
 /**
  * @vitest-environment jsdom
  */
+import type * as PaperModule from '@pages/Generator/lib/paper';
 import {
   buildSheetRuling,
+  measureSheetPhoto,
   type PaperMargins,
   type PaperSheet,
   type SheetOutline,
@@ -37,6 +39,17 @@ vi.mock(
     return { decodeSheetImage };
   }
 );
+
+/**
+ * Измерение остаётся настоящим, но с записью вызовов: вид, с которым перемер
+ * зовёт измерение, по одному результату не виден — ручная разлиновка чистого
+ * листа от него не зависит.
+ */
+vi.mock('@pages/Generator/lib/paper', async (importOriginal) => {
+  const paper = await importOriginal<typeof PaperModule>();
+
+  return { ...paper, measureSheetPhoto: vi.fn(paper.measureSheetPhoto) };
+});
 
 const WIDTH = 900;
 
@@ -151,13 +164,38 @@ const toRectOutline = (bounds: PaperMargins): SheetOutline => {
 
 /**
  * Кладёт свой лист в стор.
+ *
+ * @param isBlank — лист добавлен без разлиновки; семья у него всё равно клетка
  */
-const seedSheet = () => {
+const seedSheet = (isBlank = false) => {
   useGeneratorStore.getState().addUserSheet({
     familyId: 'grid',
     isAnalyzed: true,
+    isBlank,
     sheet: SEEDED_SHEET,
   });
+};
+
+/**
+ * Ключ списка своих листов в локальном хранилище.
+ */
+const INDEX_KEY = 'handwriting.paper.user-sheets';
+
+/**
+ * Превращает записи хранилища в записи прежней формы — без вида листа — и
+ * перечитывает их, как при перезагрузке.
+ */
+const restoreWithoutKind = () => {
+  const entries: Record<string, unknown>[] = JSON.parse(
+    globalThis.localStorage.getItem(INDEX_KEY) || '[]'
+  );
+  const legacy = entries.map(({ isBlank: _isBlank, ...rest }) => {
+    return rest;
+  });
+
+  globalThis.localStorage.setItem(INDEX_KEY, JSON.stringify(legacy));
+  useGeneratorStore.setState({ userSheets: [] });
+  useGeneratorStore.getState().restoreUserSheets();
 };
 
 /**
@@ -210,6 +248,7 @@ beforeEach(() => {
   useGeneratorStore.setState(DEFAULT_GENERATOR_STATE);
   globalThis.localStorage?.clear();
   decodeSheetImage.mockReset();
+  vi.mocked(measureSheetPhoto).mockClear();
   decodeSheetImage.mockResolvedValue(createSyntheticSheet(TABLE_PHOTO));
 });
 
@@ -327,5 +366,93 @@ describe('ручная правка границ листа', () => {
 
     expect(readUserSheet()?.ruling.outline).toStrictEqual(toRectOutline(MANUAL_BOUNDS));
     expect(readUserSheet()?.ruling).toEqual(measured?.ruling);
+  }, 60_000);
+
+  it('сообщение об ошибке не переходит на форму другого листа', async () => {
+    const user = userEvent.setup();
+
+    seedSheet();
+    useGeneratorStore.getState().addUserSheet({
+      familyId: 'grid',
+      isAnalyzed: true,
+      isBlank: false,
+      sheet: { ...SEEDED_SHEET, id: 'user-other', label: 'Другой лист' },
+    });
+    render(<PaperGroup />);
+
+    await user.click(screen.getByRole('radio', { name: SEEDED_SHEET.label }));
+    await fillBounds(user, { top: 450, right: 0, bottom: 460, left: 0 });
+    await remeasure(user);
+
+    expect(
+      await screen.findByText('Границы оставляют слишком маленький лист')
+    ).toBeDefined();
+
+    await user.click(screen.getByRole('radio', { name: 'Другой лист' }));
+
+    expect(screen.queryByText('Границы оставляют слишком маленький лист')).toBeNull();
+
+    await user.click(screen.getByRole('radio', { name: SEEDED_SHEET.label }));
+
+    expect(screen.queryByText('Границы оставляют слишком маленький лист')).toBeNull();
+  });
+});
+
+describe('перемер чистого листа', () => {
+  it('меняет контур и свет, а шаг, фазу и поля оставляет заданными руками', async () => {
+    const user = userEvent.setup();
+
+    seedSheet(true);
+    render(<PaperGroup />);
+
+    await fillBounds(user, MANUAL_BOUNDS);
+    await remeasure(user);
+
+    await waitFor(() => {
+      expect(readUserSheet()?.ruling.outline).toStrictEqual(toRectOutline(MANUAL_BOUNDS));
+    });
+
+    const [record] = useGeneratorStore.getState().userSheets;
+    const { step, firstLinePhase, skewAngle, margins } = SEEDED_SHEET.ruling;
+
+    expect(measureSheetPhoto).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ kind: 'blank' })
+    );
+    expect(record?.isBlank).toBe(true);
+    expect(record?.sheet.lighting).not.toBeNull();
+    expect(record?.sheet.ruling).toMatchObject({
+      step,
+      firstLinePhase,
+      skewAngle,
+      margins,
+    });
+    expect(readUserSheets()[0]).toStrictEqual(record);
+  }, 60_000);
+
+  it('запись прежней формы без вида листа читается видом семьи: перемер ищет разлиновку', async () => {
+    const user = userEvent.setup();
+
+    seedSheet();
+    restoreWithoutKind();
+
+    expect(useGeneratorStore.getState().userSheets[0]?.isBlank).toBe(false);
+
+    render(<PaperGroup />);
+
+    await fillBounds(user, MANUAL_BOUNDS);
+    await remeasure(user);
+
+    await waitFor(() => {
+      expect(readUserSheet()?.ruling.outline).toStrictEqual(toRectOutline(MANUAL_BOUNDS));
+    });
+
+    expect(measureSheetPhoto).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ kind: 'grid' })
+    );
+    expect(Math.abs((readUserSheet()?.ruling.step || 0) - STEP)).toBeLessThanOrEqual(
+      STEP_TOLERANCE
+    );
   }, 60_000);
 });

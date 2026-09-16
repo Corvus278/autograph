@@ -5,6 +5,7 @@ import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
 } from '@pages/Generator/model/useGeneratorStore';
+import { readUserSheets } from '@pages/Generator/model/userSheetsStorage';
 import { SettingsPanel } from '@pages/Generator/ui/Generator/SettingsPanel';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -365,6 +366,37 @@ describe('группа «Бумага»', () => {
     await applyRuling(user, '32', '60');
 
     expect(readUserSheet()?.ruling.step).toBe(32);
+  });
+
+  it('помнит, что лист добавлен чистым, и после правки разлиновки, и после перезагрузки', async () => {
+    const user = userEvent.setup();
+
+    decodeSheetImage.mockResolvedValue(createSyntheticSheet(RULED_PHOTO));
+
+    render(<SettingsPanel />);
+    await openSection(user, 'Бумага');
+    await user.click(screen.getByRole('checkbox', { name: 'Лист без разлиновки' }));
+    await uploadPhoto(user);
+
+    expect(store().userSheets[0]?.isBlank).toBe(true);
+
+    await applyRuling(user, '32', '60');
+
+    expect(store().userSheets[0]?.isBlank).toBe(true);
+    expect(readUserSheets()[0]?.isBlank).toBe(true);
+  });
+
+  it('лист с разлиновкой записывается не чистым', async () => {
+    const user = userEvent.setup();
+
+    decodeSheetImage.mockResolvedValue(createSyntheticSheet(RULED_PHOTO));
+
+    render(<SettingsPanel />);
+    await openSection(user, 'Бумага');
+    await uploadPhoto(user);
+
+    expect(store().userSheets[0]?.isBlank).toBe(false);
+    expect(readUserSheets()[0]?.isBlank).toBe(false);
   });
 
   it('удаляет свой лист из списка', async () => {

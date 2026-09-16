@@ -108,10 +108,11 @@ const toIndexEntry = ({
   familyId,
   sheet,
   isAnalyzed,
+  isBlank,
 }: UserSheetRecord): UserSheetIndexEntry => {
   const { id, label, width, height, ruling } = sheet;
 
-  return { familyId, isAnalyzed, id, label, width, height, ruling };
+  return { familyId, isAnalyzed, isBlank, id, label, width, height, ruling };
 };
 
 /**
@@ -144,6 +145,11 @@ const readRecord = (
     familyId: toText(entry.familyId),
     sheet,
     isAnalyzed: entry.isAnalyzed === true,
+    /**
+     * Запись без вида листа читается листом с разлиновкой семьи, а не
+     * отбрасывается: у записи прежней формы поля нет, и это не порча.
+     */
+    isBlank: entry.isBlank === true,
   };
 };
 

@@ -128,6 +128,7 @@ export const useSheetImport = (): SheetImport => {
          * заданное руками затёр бы.
          */
         isAnalyzed: true,
+        isBlank,
       });
     } catch {
       setError('Не удалось прочитать фотографию');

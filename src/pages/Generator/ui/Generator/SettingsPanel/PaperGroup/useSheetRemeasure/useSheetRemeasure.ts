@@ -15,7 +15,11 @@ import {
 import { useGeneratorStore } from '../../../../../model/useGeneratorStore';
 import { decodeSheetImage } from '../useSheetImport';
 
-import type { SheetRemeasure, SheetRemeasureOptions } from './useSheetRemeasure.types';
+import type {
+  SheetRemeasure,
+  SheetRemeasureFailure,
+  SheetRemeasureOptions,
+} from './useSheetRemeasure.types';
 
 /**
  * Какая доля кадра по ширине и по высоте должна остаться внутри границ: в
@@ -88,70 +92,93 @@ const encodeTexture = async (textureMap: TextureMap): Promise<PaperTexture | nul
  *
  * @returns метод перемера вместе с его состоянием
  */
-export const useSheetRemeasure = (): SheetRemeasure => {
+export const useSheetRemeasure = (sheetId: string): SheetRemeasure => {
   const addUserSheet = useGeneratorStore((state) => {
     return state.addUserSheet;
   });
   const [isBusy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<SheetRemeasureFailure | null>(null);
   const [revision, setRevision] = useState(0);
 
+  /**
+   * Ошибка относится к границам одного листа: на форме другого она сбивала бы
+   * с толку, а вернувшись к прежнему листу, пользователь видит форму заново.
+   */
+  if (failure && failure.sheetId !== sheetId) {
+    setFailure(null);
+  }
+
   const remeasure = async (options: SheetRemeasureOptions) => {
-    const { family, sheet, bounds } = options;
+    const { family, sheet, isBlank, bounds } = options;
+
+    const fail = (message: string) => {
+      setFailure({ sheetId: sheet.id, message });
+    };
 
     /**
      * Границы проверяются до декодирования: негодные не должны ни тратить
      * время на фотографию, ни трогать лист.
      */
     if (!isBoundsUsable(bounds, sheet)) {
-      setError(SMALL_BOUNDS_ERROR);
+      fail(SMALL_BOUNDS_ERROR);
 
       return;
     }
 
     setBusy(true);
-    setError(null);
+    setFailure(null);
 
     try {
       const image = await decodeSheetImage(sheet.src);
 
       if (!image) {
-        setError(DECODE_ERROR);
+        fail(DECODE_ERROR);
 
         return;
       }
 
       const measurement = measureSheetPhoto(image, {
-        kind: family.kind,
+        kind: isBlank ? 'blank' : family.kind,
         outline: toBoundsOutline(bounds, image),
       });
       const texture = await encodeTexture(measurement.textureMap);
-
       /**
-       * Перемер заменяет всё измеримое, включая заданное руками: поля ручной
-       * правки меряли по прежним границам и к новым не относятся.
+       * Лист с разлиновкой получает всё измеримое, включая заданное руками:
+       * поля ручной правки меряли по прежним границам и к новым не относятся.
+       * У чистого листа мерить разлиновку не по чему — шаг, фаза и поля есть
+       * только ручные, и перемер меняет в ней один контур.
        */
+      const ruling = isBlank
+        ? buildSheetRuling({ ...sheet.ruling, outline: measurement.outline }, image)
+        : buildSheetRuling(measurement.source, image);
+
       addUserSheet({
         familyId: family.id,
         sheet: {
           ...sheet,
           width: image.width,
           height: image.height,
-          ruling: buildSheetRuling(measurement.source, image),
+          ruling,
           lighting: measurement.lighting,
           texture,
         },
         isAnalyzed: true,
+        isBlank,
       });
       setRevision((current) => {
         return current + 1;
       });
     } catch {
-      setError(DECODE_ERROR);
+      fail(DECODE_ERROR);
     } finally {
       setBusy(false);
     }
   };
 
-  return { remeasure, isBusy, error, revision };
+  return {
+    remeasure,
+    isBusy,
+    error: failure?.sheetId === sheetId ? failure.message : null,
+    revision,
+  };
 };

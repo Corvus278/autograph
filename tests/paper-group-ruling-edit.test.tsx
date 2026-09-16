@@ -307,6 +307,7 @@ const seedBentSheet = () => {
   useGeneratorStore.getState().addUserSheet({
     familyId: DEFAULT_GENERATOR_STATE.familyId,
     isAnalyzed: true,
+    isBlank: false,
     sheet: {
       id: 'user-bent',
       label: 'Изогнутый лист',
@@ -408,6 +409,7 @@ const seedTableSheet = () => {
   useGeneratorStore.getState().addUserSheet({
     familyId: DEFAULT_GENERATOR_STATE.familyId,
     isAnalyzed: true,
+    isBlank: false,
     sheet: {
       id: 'user-table',
       label: 'Лист на столе',

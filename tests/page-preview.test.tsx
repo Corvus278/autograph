@@ -338,7 +338,12 @@ describe('кэш разбивки', () => {
     act(() => {
       useGeneratorStore.setState({
         userSheets: [
-          { familyId: FAMILY.id, sheet: buildSheet('user-1'), isAnalyzed: true },
+          {
+            familyId: FAMILY.id,
+            sheet: buildSheet('user-1'),
+            isAnalyzed: true,
+            isBlank: false,
+          },
         ],
       });
     });

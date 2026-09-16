@@ -71,7 +71,7 @@ describe('восстановление своих листов при откры
   });
 
   it('возвращает лист из хранилища в стор', () => {
-    writeUserSheet({ familyId: 'lined', sheet: SHEET, isAnalyzed: true });
+    writeUserSheet({ familyId: 'lined', sheet: SHEET, isAnalyzed: true, isBlank: false });
 
     renderHook(() => {
       return useStoredUserSheets();
@@ -84,7 +84,12 @@ describe('восстановление своих листов при откры
   });
 
   it('возвращает лист с контуром и перспективой теми же, что записаны', () => {
-    writeUserSheet({ familyId: 'grid', sheet: TABLE_SHEET, isAnalyzed: true });
+    writeUserSheet({
+      familyId: 'grid',
+      sheet: TABLE_SHEET,
+      isAnalyzed: true,
+      isBlank: false,
+    });
 
     renderHook(() => {
       return useStoredUserSheets();
@@ -101,7 +106,7 @@ describe('восстановление своих листов при откры
   });
 
   it('не ставит восстановленный лист в очередь на повторный анализ', () => {
-    writeUserSheet({ familyId: 'lined', sheet: SHEET, isAnalyzed: true });
+    writeUserSheet({ familyId: 'lined', sheet: SHEET, isAnalyzed: true, isBlank: false });
 
     renderHook(() => {
       return useStoredUserSheets();
