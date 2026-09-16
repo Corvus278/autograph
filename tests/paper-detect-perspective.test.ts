@@ -3,6 +3,7 @@ import type {
   PerspectiveFrame,
   RulingPerspectiveDetection,
 } from '@pages/Generator/lib/paper/detectRulingPerspective.types';
+import type { SheetImageData } from '@pages/Generator/lib/paper/paper.types';
 import { lineHeightAt } from '@pages/Generator/lib/paper/rulingPerspective';
 import { describe, expect, it } from 'vitest';
 
@@ -75,6 +76,8 @@ const CONVERGENCE_X = 0.5 / DEGREES_IN_RADIAN / RULED_HEIGHT;
 
 const DRIFT_4 = { convergenceX: CONVERGENCE_X, convergenceY: toConvergenceY(0.04) };
 
+const DRIFT_5 = { convergenceX: CONVERGENCE_X, convergenceY: toConvergenceY(0.05) };
+
 const DRIFT_8 = { convergenceX: CONVERGENCE_X, convergenceY: toConvergenceY(0.08) };
 
 /**
@@ -130,10 +133,27 @@ const TWISTED_SAG: SyntheticField = (x, y) => {
  * листе нет: расхождение гребёнок выходит далеко за порог хранения, и отбраковать
  * лист может только невязка. Квадратичная по ширине часть на модель не ложится
  * ни при каких параметрах — она эту невязку и даёт.
+ *
+ * Амплитуда — 0,9 шага, а не глубина прогиба живого снимка. Форма фикстуры даёт
+ * меньшую невязку, чем IMG_1602: при 0,6–0,8 шага она не доходит до порога в
+ * пятую шага, и такой прогиб выдаётся за перспективу. При 0,9 невязка около 0,26
+ * шага — того же порядка, что у IMG_1602, и с запасом над порогом. Сам IMG_1602
+ * проверяется замером на снимке, а не этой фикстурой.
  */
 const OFF_CENTRE_SAG: SyntheticField = (x, y) => {
-  return 0.6 * STEP * (1 - (toFrameShare(x, WIDTH) - 0.4) ** 2) * toFrameShare(y, HEIGHT);
+  return 0.9 * STEP * (1 - (toFrameShare(x, WIDTH) - 0.4) ** 2) * toFrameShare(y, HEIGHT);
 };
+
+/**
+ * Первый столбец крайней правой из пяти полос детектора.
+ */
+const TORN_STRIP_LEFT = (4 * WIDTH) / 5;
+
+/**
+ * Сдвиг сорванного участка трассы: больше порога невязки в пятую шага, но
+ * внутри окна поиска в треть шага, — трасса берёт сдвинутый провал за свою линию.
+ */
+const TORN_SHIFT = Math.round(0.3 * STEP);
 
 /**
  * Пятно во всю ширину кадра, под которым не видно десяти линий из тридцати
@@ -279,6 +299,33 @@ const measureRestoreSpread = (
   return max - min;
 };
 
+/**
+ * Срывает трассу у края листа: в крайней правой полосе сдвигает вниз участок
+ * растра вокруг каждой из заданных линий, так что провал линии оказывается
+ * ниже своего места. Так выглядит узел, взятый трассой не у своей линии.
+ *
+ * @param params — описание листа
+ * @param lines — номера сдвигаемых линий
+ * @returns растр листа с сорванным участком
+ */
+const createTornSheet = (params: PerspectiveSheet, lines: number[]): SheetImageData => {
+  const image = createSyntheticSheet(params);
+  const luminance = Float32Array.from(image.luminance);
+  const halfStep = STEP / 2;
+
+  lines.forEach((line) => {
+    for (let x = TORN_STRIP_LEFT; x < WIDTH; x += 1) {
+      const center = Math.round(computeSyntheticLineY(params, line, x));
+
+      for (let y = center - halfStep + TORN_SHIFT; y <= center + halfStep; y += 1) {
+        luminance[y * WIDTH + x] = image.luminance[(y - TORN_SHIFT) * WIDTH + x] || 0;
+      }
+    }
+  });
+
+  return { ...image, luminance };
+};
+
 const computeMean = (values: number[]): number => {
   return (
     values.reduce((sum, value) => {
@@ -398,6 +445,25 @@ describe('detectRulingPerspective: перспектива найдена', () =>
 
   it.each(PERSPECTIVE_CASES)('$title: линии прослежены', ({ params }) => {
     expect(detect(params).foundNodeShare).toBeGreaterThan(0.6);
+  });
+
+  /**
+   * Две нижние линии в правой полосе сдвинуты на треть шага: невязка в этих
+   * узлах выше порога, и без отброса выбросов перспектива пропала бы вместе с
+   * ними. Узлов два из ста семидесяти — внутри запаса выбросов.
+   */
+  it('дрейф 5 % с сорванным участком трассы у края листа: линии восстановлены', () => {
+    const params: PerspectiveSheet = { ...BASE_SHEET, rulingPerspective: DRIFT_5 };
+    const { step, phase, angle, margins } = params;
+    const lastLines = toDrawnLines(params).slice(-2);
+    const detection = detectRulingPerspective(
+      createTornSheet(params, lastLines),
+      { step, firstLinePhase: phase, skewAngle: angle, margins },
+      WHOLE_FRAME
+    );
+
+    expect(detection.perspective).not.toBeNull();
+    expect(measureRestoreError(detection, params)).toBeLessThan(LINE_TOLERANCE);
   });
 
   /**

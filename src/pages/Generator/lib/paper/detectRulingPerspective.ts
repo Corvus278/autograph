@@ -66,7 +66,17 @@ const MIN_FOUND_SHARE = 0.6;
  * Прогиб, меняющийся от линии к линии, в невязке остаётся: наклонную его часть
  * модель описывает и выдала бы за перспективу.
  */
-const MAX_RESIDUAL_SHARE = 1 / 10;
+const MAX_RESIDUAL_SHARE = 1 / 5;
+
+/**
+ * Наибольшая доля узлов, которую подгонка отбрасывает как выбросы сорванной
+ * трассы. Сорванный узел — провал, взятый не у своей линии: пятно, текст,
+ * тень у края листа. Он один уводит невязку за порог, хотя остальные линии с
+ * перспективой согласны. Две сотых — единичные узлы, а не целая полоса или
+ * линия: прогиб, который модель не описывает, сидит во многих узлах сразу, и
+ * такая доля его невязку не снимет.
+ */
+const MAX_OUTLIER_SHARE = 0.02;
 
 /**
  * Наибольшее изменение шага между крайними найденными линиями. Спека
@@ -566,6 +576,124 @@ const fitPerspectiveComb = (
 };
 
 /**
+ * Подгонка обеих гребёнок по одному набору узлов.
+ */
+type NodesFit = {
+  /**
+   * Узлы, по которым шла подгонка.
+   */
+  nodes: TracedNode[];
+
+  /**
+   * Ближайшая ровная гребёнка.
+   */
+  straight: CombFit;
+
+  /**
+   * Перспективная гребёнка.
+   */
+  fit: CombFit;
+
+  /**
+   * Модули невязок в узлах за вычетом среднего по полосе.
+   */
+  residuals: number[];
+
+  /**
+   * Наибольшая из них.
+   */
+  maxResidual: number;
+};
+
+/**
+ * Подгоняет ровную и перспективную гребёнки по узлам и меряет невязку.
+ *
+ * Из невязок снимается постоянная по столбцу часть — ровно то, что заберёт себе
+ * модель изгиба: её узлы стоят столбцами, и одинаковый для всех линий столбца
+ * сдвиг она описывает целиком, какой бы он ни был. Дальше снимать нечего: всё,
+ * что меняется от линии к линии, — предмет самой проверки, и вместе с ним ушёл
+ * бы прогиб, наклонную часть которого подгонка выдаёт за перспективу.
+ *
+ * @param nodes — узлы трассы
+ * @param originX — начало перспективы по ширине
+ * @param originY — начало перспективы по высоте
+ * @param fallback — гребёнка ровного прохода на случай вырожденной системы
+ * @returns обе гребёнки и невязки
+ */
+const fitNodes = (
+  nodes: TracedNode[],
+  originX: number,
+  originY: number,
+  fallback: CombFit
+): NodesFit => {
+  const straight = fitStraightComb(nodes, fallback);
+  const fit = fitPerspectiveComb(nodes, originX, originY, straight);
+  const rawResiduals = computeResiduals(nodes, originX, originY, fit);
+  const stripSums = new Float64Array(STRIP_COUNT);
+  const stripCounts = new Float64Array(STRIP_COUNT);
+
+  rawResiduals.forEach((residual, index) => {
+    const strip = nodes[index]?.strip || 0;
+
+    stripSums[strip] = (stripSums[strip] || 0) + residual;
+    stripCounts[strip] = (stripCounts[strip] || 0) + 1;
+  });
+
+  const residuals = rawResiduals.map((residual, index) => {
+    const strip = nodes[index]?.strip || 0;
+
+    return Math.abs(residual - (stripSums[strip] || 0) / (stripCounts[strip] || 1));
+  });
+
+  return { nodes, straight, fit, residuals, maxResidual: Math.max(0, ...residuals) };
+};
+
+/**
+ * Подгоняет гребёнки, отбрасывая по одному узлу с наибольшей невязкой, пока она
+ * выше порога и не исчерпан запас выбросов.
+ *
+ * Выброс ищется по невязке, а не обрывом трассы на скачке местного шага.
+ * Сорванный узел у низа листа IMG_1596 меняет местный шаг на 0,12–0,32 шага, а
+ * волна прогиба от линии к линии на том же снимке — до 0,17: порог скачка либо
+ * пропустил бы срыв, либо оборвал бы здоровые трассы вместе со всеми узлами за
+ * обрывом. Невязка против подгонки по всем узлам отделяет одиночный срыв от
+ * волны, которая сидит во многих узлах сразу.
+ *
+ * @param nodes — узлы трассы
+ * @param originX — начало перспективы по ширине
+ * @param originY — начало перспективы по высоте
+ * @param fallback — гребёнка ровного прохода на случай вырожденной системы
+ * @param residualLimit — порог невязки в пикселях
+ * @returns подгонка по оставшимся узлам
+ */
+const fitNodesWithoutOutliers = (
+  nodes: TracedNode[],
+  originX: number,
+  originY: number,
+  fallback: CombFit,
+  residualLimit: number
+): NodesFit => {
+  const outlierLimit = Math.floor(nodes.length * MAX_OUTLIER_SHARE);
+  let result = fitNodes(nodes, originX, originY, fallback);
+
+  for (
+    let dropped = 0;
+    dropped < outlierLimit && result.maxResidual > residualLimit;
+    dropped += 1
+  ) {
+    const { residuals, maxResidual } = result;
+    const worst = residuals.indexOf(maxResidual);
+    const kept = result.nodes.filter((_node, index) => {
+      return index !== worst;
+    });
+
+    result = fitNodes(kept, originX, originY, fallback);
+  }
+
+  return result;
+};
+
+/**
  * Старт опорной линии в полосе.
  */
 type StripStart = {
@@ -949,42 +1077,17 @@ export const detectRulingPerspective = (
 
   const originX = width / 2;
   const originY = height / 2;
-  const straight = fitStraightComb(nodes, {
-    skewAngle,
-    firstLinePhase,
-    step,
-    convergenceX: 0,
-    convergenceY: 0,
-  });
-  const fit = fitPerspectiveComb(nodes, originX, originY, straight);
+  const residualLimit = step * MAX_RESIDUAL_SHARE;
+  const { straight, fit, maxResidual, ...fitted } = fitNodesWithoutOutliers(
+    nodes,
+    originX,
+    originY,
+    { skewAngle, firstLinePhase, step, convergenceX: 0, convergenceY: 0 },
+    residualLimit
+  );
   const projection = toProjection(fit, originX, originY);
   const perspective = projection.perspective || null;
-  const residuals = computeResiduals(nodes, originX, originY, fit);
-  /**
-   * Из невязок снимается постоянная по столбцу часть — ровно то, что заберёт
-   * себе модель изгиба: её узлы стоят столбцами, и одинаковый для всех линий
-   * столбца сдвиг она описывает целиком, какой бы он ни был. Дальше снимать
-   * нечего: всё, что меняется от линии к линии, — предмет самой проверки, и
-   * вместе с ним ушёл бы прогиб, наклонную часть которого подгонка выдаёт за
-   * перспективу.
-   */
-  const stripSums = new Float64Array(STRIP_COUNT);
-  const stripCounts = new Float64Array(STRIP_COUNT);
-
-  residuals.forEach((residual, index) => {
-    const strip = nodes[index]?.strip || 0;
-
-    stripSums[strip] = (stripSums[strip] || 0) + residual;
-    stripCounts[strip] = (stripCounts[strip] || 0) + 1;
-  });
-
-  const maxResidual = residuals.reduce((limit, residual, index) => {
-    const strip = nodes[index]?.strip || 0;
-    const mean = (stripSums[strip] || 0) / (stripCounts[strip] || 1);
-
-    return Math.max(limit, Math.abs(residual - mean));
-  }, 0);
-  const foundLines = nodes.map((node) => {
+  const foundLines = fitted.nodes.map((node) => {
     return node.line;
   });
   const topLine = Math.min(...foundLines);
@@ -1026,7 +1129,7 @@ export const detectRulingPerspective = (
     perspective !== null &&
     fit.step > 0 &&
     foundNodeShare >= MIN_FOUND_SHARE &&
-    maxResidual <= step * MAX_RESIDUAL_SHARE &&
+    maxResidual <= residualLimit &&
     Math.abs(bottomStep - topStep) <= MAX_STEP_DRIFT * Math.min(topStep, bottomStep) &&
     minWeight >= MIN_LINE_WEIGHT &&
     deviation >= step * MIN_DEVIATION_SHARE;
