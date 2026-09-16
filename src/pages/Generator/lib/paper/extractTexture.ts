@@ -3,8 +3,10 @@ import type {
   ExtractTextureOptions,
   LightingField,
   SheetImageData,
+  SheetOutline,
   TextureMap,
 } from './paper.types';
+import { isInsideSheetOutline } from './sheetOutlineMask';
 
 /**
  * Доля отклонений, которая обязана уложиться в размах карты. Верхние
@@ -75,11 +77,16 @@ const sampleLighting = (
  * Точки берутся с шагом прореживания: множитель — одно число на весь лист, и
  * миллион выборок оценивает его не лучше, чем десятки тысяч, зато стоит
  * секунды в основном потоке.
+ *
+ * Блок за контуром в подгонку не идёт: там лежит стол, и его яркость увела бы
+ * множитель от экспозиции самой бумаги. Точка блока берётся прежняя, а решает
+ * его середина — так у листа без контура выборка та же, что и была.
  */
 const fitLightingLevel = (
   image: SheetImageData,
   lighting: LightingField,
-  step: number
+  step: number,
+  outline: SheetOutline | null
 ): number => {
   const { width, height, luminance } = image;
 
@@ -88,10 +95,12 @@ const fitLightingLevel = (
 
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {
-      const expected = sampleLighting(lighting, width, height, x, y);
+      if (outline === null || isInsideSheetOutline(outline, x + step / 2, y + step / 2)) {
+        const expected = sampleLighting(lighting, width, height, x, y);
 
-      product += (luminance[y * width + x] || 0) * expected;
-      square += expected * expected;
+        product += (luminance[y * width + x] || 0) * expected;
+        square += expected * expected;
+      }
     }
   }
 
@@ -103,19 +112,21 @@ const fitLightingLevel = (
 };
 
 /**
- * Размах отклонений по перцентилю модуля. Копию сортируем, потому что порядок
- * значений карты трогать нельзя.
+ * Размах отклонений по перцентилю модуля. Буфер сортируется на месте: в него
+ * сложены модули только тех блоков, что легли на бумагу, и порядок в нём уже
+ * ничего не значит, а сама карта остаётся нетронутой.
+ *
+ * @param magnitudes — буфер модулей отклонений
+ * @param count — сколько значений буфера заполнено
+ * @param percentile — доля отклонений, укладывающихся в размах
+ * @returns размах отклонений
  */
-const measureAmplitude = (values: Float32Array, percentile: number): number => {
-  const magnitudes = new Float32Array(values.length);
-
-  for (let index = 0; index < values.length; index += 1) {
-    magnitudes[index] = Math.abs(values[index] || 0);
-  }
-
-  magnitudes.sort();
-
-  return percentileOf(magnitudes, percentile);
+const measureAmplitude = (
+  magnitudes: Float32Array,
+  count: number,
+  percentile: number
+): number => {
+  return percentileOf(magnitudes.subarray(0, count).sort(), percentile);
 };
 
 /**
@@ -152,7 +163,11 @@ export const extractTexture = (
   options?: ExtractTextureOptions
 ): TextureMap => {
   const { width, height, luminance } = image;
-  const { downscale, amplitudePercentile = AMPLITUDE_PERCENTILE } = options || {};
+  const {
+    downscale,
+    amplitudePercentile = AMPLITUDE_PERCENTILE,
+    outline = null,
+  } = options || {};
 
   if (width <= 0 || height <= 0 || lighting.gridWidth === 0) {
     return { width: 0, height: 0, values: new Float32Array(0), amplitude: 0 };
@@ -161,23 +176,34 @@ export const extractTexture = (
   const step = resolveStep(width, height, downscale);
   const mapWidth = Math.floor(width / step);
   const mapHeight = Math.floor(height / step);
-  const level = fitLightingLevel(image, lighting, step);
+  const level = fitLightingLevel(image, lighting, step, outline);
   const values = new Float32Array(mapWidth * mapHeight);
+  const magnitudes = new Float32Array(mapWidth * mapHeight);
   const blockSize = step * step;
+
+  let paperCount = 0;
 
   for (let row = 0; row < mapHeight; row += 1) {
     for (let column = 0; column < mapWidth; column += 1) {
-      let sum = 0;
+      const isOnPaper =
+        outline === null ||
+        isInsideSheetOutline(outline, column * step + step / 2, row * step + step / 2);
 
-      for (let inner = 0; inner < blockSize; inner += 1) {
-        const x = column * step + (inner % step);
-        const y = row * step + Math.floor(inner / step);
-        const expected = sampleLighting(lighting, width, height, x, y) * level;
+      if (isOnPaper) {
+        let sum = 0;
 
-        sum += (luminance[y * width + x] || 0) - expected;
+        for (let inner = 0; inner < blockSize; inner += 1) {
+          const x = column * step + (inner % step);
+          const y = row * step + Math.floor(inner / step);
+          const expected = sampleLighting(lighting, width, height, x, y) * level;
+
+          sum += (luminance[y * width + x] || 0) - expected;
+        }
+
+        values[row * mapWidth + column] = sum / blockSize;
+        magnitudes[paperCount] = Math.abs(sum / blockSize);
+        paperCount += 1;
       }
-
-      values[row * mapWidth + column] = sum / blockSize;
     }
   }
 
@@ -185,6 +211,6 @@ export const extractTexture = (
     width: mapWidth,
     height: mapHeight,
     values,
-    amplitude: measureAmplitude(values, amplitudePercentile),
+    amplitude: measureAmplitude(magnitudes, paperCount, amplitudePercentile),
   };
 };

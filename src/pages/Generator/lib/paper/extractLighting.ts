@@ -4,6 +4,7 @@ import type {
   LightingGrid,
   SheetImageData,
 } from './paper.types';
+import { isInsideSheetOutline } from './sheetOutlineMask';
 
 /**
  * Число клеток сетки вдоль длинной стороны листа. Шестнадцать — компромисс
@@ -121,6 +122,87 @@ const medianOf = (buffer: Float32Array, count: number): number => {
 };
 
 /**
+ * Какая доля точек клетки обязана лежать внутри контура, чтобы клетка считалась
+ * снятой с бумаги. У клетки, наполовину легшей на стол, медиана — это уже не
+ * яркость бумаги, а середина между бумагой и столом.
+ */
+const MIN_CELL_PAPER_SHARE = 0.5;
+
+/**
+ * Яркости клеток, снятых с бумаги, по возрастанию. По ним и только по ним
+ * считаются нормировка и размах: клетка со столом занизила бы и то и другое.
+ *
+ * @param cells — яркости всех клеток сетки
+ * @param paperMask — единица у клеток с бумагой
+ * @returns отсортированные яркости клеток с бумагой
+ */
+const collectPaperCells = (cells: Float32Array, paperMask: Uint8Array): Float32Array => {
+  const values = new Float32Array(cells.length);
+
+  let count = 0;
+
+  for (let index = 0; index < cells.length; index += 1) {
+    if (paperMask[index] === 1) {
+      values[count] = cells[index] || 0;
+      count += 1;
+    }
+  }
+
+  return values.subarray(0, count).sort();
+};
+
+/**
+ * Раздаёт клеткам без бумаги яркость ближайшей клетки с бумагой, при равном
+ * расстоянии — среднее таких клеток. Поле остаётся низкочастотным и за краем
+ * листа: шейдер выбирает его по координатам страницы, и провал на месте стола
+ * проступил бы тенью на самих чернилах.
+ *
+ * @param cells — яркости клеток сетки; меняются на месте
+ * @param paperMask — единица у клеток с бумагой
+ * @param gridWidth — число столбцов сетки
+ * @param gridHeight — число строк сетки
+ */
+const fillOutsideCells = (
+  cells: Float32Array,
+  paperMask: Uint8Array,
+  gridWidth: number,
+  gridHeight: number
+): void => {
+  for (let row = 0; row < gridHeight; row += 1) {
+    for (let column = 0; column < gridWidth; column += 1) {
+      const index = row * gridWidth + column;
+
+      if (paperMask[index] === 0) {
+        let nearest = Number.POSITIVE_INFINITY;
+        let sum = 0;
+        let count = 0;
+
+        for (let otherRow = 0; otherRow < gridHeight; otherRow += 1) {
+          for (let otherColumn = 0; otherColumn < gridWidth; otherColumn += 1) {
+            const otherIndex = otherRow * gridWidth + otherColumn;
+
+            if (paperMask[otherIndex] === 1) {
+              const distance = (otherRow - row) ** 2 + (otherColumn - column) ** 2;
+
+              if (distance < nearest) {
+                nearest = distance;
+                sum = cells[otherIndex] || 0;
+                count = 1;
+              } else if (distance === nearest) {
+                sum += cells[otherIndex] || 0;
+                count += 1;
+              }
+            }
+          }
+        }
+
+        cells[index] = count > 0 ? sum / count : 0;
+      }
+    }
+  }
+};
+
+/**
  * Извлекает из фотографии пустого листа низкочастотное поле освещения.
  *
  * Яркость клетки берётся медианой, а не средним: разлиновка и соринки — это
@@ -140,7 +222,11 @@ export const extractLighting = (
   options?: ExtractLightingOptions
 ): LightingField => {
   const { width, height, luminance } = image;
-  const { gridSize, usableContrast = LIGHTING_USABLE_CONTRAST } = options || {};
+  const {
+    gridSize,
+    usableContrast = LIGHTING_USABLE_CONTRAST,
+    outline = null,
+  } = options || {};
   const { gridWidth, gridHeight } = resolveLightingGrid(width, height, gridSize);
 
   if (gridWidth === 0 || gridHeight === 0) {
@@ -157,6 +243,7 @@ export const extractLighting = (
   const cellHeight = Math.ceil(height / gridHeight) + 1;
   const buffer = new Float32Array(cellWidth * cellHeight);
   const cells = new Float32Array(gridWidth * gridHeight);
+  const paperMask = new Uint8Array(gridWidth * gridHeight);
 
   for (let row = 0; row < gridHeight; row += 1) {
     const top = Math.floor((row * height) / gridHeight);
@@ -165,22 +252,31 @@ export const extractLighting = (
     for (let column = 0; column < gridWidth; column += 1) {
       const left = Math.floor((column * width) / gridWidth);
       const right = Math.floor(((column + 1) * width) / gridWidth);
+      const index = row * gridWidth + column;
 
       let count = 0;
+      let total = 0;
 
       for (let y = top; y < bottom; y += 1) {
         for (let x = left; x < right; x += 1) {
-          buffer[count] = luminance[y * width + x] || 0;
-          count += 1;
+          total += 1;
+
+          if (outline === null || isInsideSheetOutline(outline, x, y)) {
+            buffer[count] = luminance[y * width + x] || 0;
+            count += 1;
+          }
         }
       }
 
-      cells[row * gridWidth + column] = medianOf(buffer, count);
+      paperMask[index] = count > 0 && count >= total * MIN_CELL_PAPER_SHARE ? 1 : 0;
+      cells[index] = paperMask[index] === 1 ? medianOf(buffer, count) : 0;
     }
   }
 
-  const sorted = Float32Array.from(cells).sort();
+  const sorted = collectPaperCells(cells, paperMask);
   const brightest = sorted[sorted.length - 1] || 0;
+
+  fillOutsideCells(cells, paperMask, gridWidth, gridHeight);
 
   if (brightest <= 0) {
     return {

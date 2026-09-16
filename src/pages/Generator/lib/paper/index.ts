@@ -1,6 +1,7 @@
 export type { RulingDetectionOptions } from './detectRuling';
 export { detectRuling } from './detectRuling';
 export { measureBendDeviation } from './detectRulingBend';
+export { detectSheetOutline } from './detectSheetOutline';
 export type { SkewDetectionOptions } from './detectSkewAngle';
 export { detectSkewAngle, MAX_SKEW_ANGLE, SKEW_ANGLE_STEP } from './detectSkewAngle';
 export { ANALYSIS_IMAGE_SIZE, downsampleSheetImage } from './downsampleSheetImage';
@@ -43,5 +44,6 @@ export {
   lineHeightSlopeAt,
 } from './rulingPerspective';
 export { sampleRulingBend, sampleRulingBendSlope } from './sampleRulingBend';
+export { isInsideSheetOutline } from './sheetOutlineMask';
 export { buildSheetRuling, MARGIN_FALLBACK_STEPS, resolveFirstLine } from './sheetRuling';
 export { synthesizeLighting } from './synthesizeLighting';
