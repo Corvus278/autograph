@@ -111,6 +111,7 @@ const buildParams = (): PageRenderParams => {
       blockRotate: 0,
       fontMetrics: { fontAscent: 0.8, lineHeight: 1.2 },
       bend: null,
+      perspective: null,
     },
     scale: 1,
   };

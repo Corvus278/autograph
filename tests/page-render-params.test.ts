@@ -120,11 +120,30 @@ const BENT_SHEET: PaperSheet = {
   },
 };
 
+/**
+ * Наклонный лист с перспективой. Начало отсчёта не в середине кадра, схождение
+ * по ширине ненулевое: отражённая перспектива отличается от исходной и
+ * началом, и знаком схождения.
+ */
+const SLOPED_SHEET: PaperSheet = {
+  ...TILTED_SHEET,
+  id: 'sloped',
+  ruling: {
+    ...TILTED_SHEET.ruling,
+    perspective: {
+      originX: 700,
+      originY: 900,
+      convergenceX: 2e-5,
+      convergenceY: 2.5e-5,
+    },
+  },
+};
+
 const FAMILY: PaperFamily = {
   id: 'lined',
   label: 'В линейку',
   kind: 'lined',
-  sheets: [SHEET, TILTED_SHEET, BENT_SHEET],
+  sheets: [SHEET, TILTED_SHEET, BENT_SHEET, SLOPED_SHEET],
 };
 
 const PAGE: Page = {
@@ -261,6 +280,7 @@ describe('адаптер параметров отрисовки', () => {
         blockRotate: calibration.ruling.skewAngle,
         fontMetrics: FALLBACK_FONT_METRICS,
         bend: null,
+        perspective: null,
       });
     });
   });
@@ -329,6 +349,17 @@ describe('чётные страницы', () => {
       mirrorSheetRuling(BENT_SHEET.ruling, BENT_SHEET).bend
     );
     expect(mirrored.bend).not.toStrictEqual(straight.bend);
+  });
+
+  it('передаёт перспективу листа: на нечётной странице как есть, на чётной — отражённую', () => {
+    const straight = buildPageRenderParams(buildInput({}, 0, SLOPED_SHEET)).geometry;
+    const mirrored = buildPageRenderParams(buildInput({}, 1, SLOPED_SHEET)).geometry;
+
+    expect(straight.perspective).toStrictEqual(SLOPED_SHEET.ruling.perspective);
+    expect(mirrored.perspective).toStrictEqual(
+      mirrorSheetRuling(SLOPED_SHEET.ruling, SLOPED_SHEET).perspective
+    );
+    expect(mirrored.perspective).not.toStrictEqual(straight.perspective);
   });
 
   it('кладёт базовые линии на линии отражённой фотографии наклонного листа', () => {

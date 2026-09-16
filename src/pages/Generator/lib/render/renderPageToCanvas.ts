@@ -2,6 +2,7 @@ import { deformGlyphPath } from '../glyph/deformGlyphPath';
 import type { GlyphPathCommand, GlyphPoint } from '../glyph/glyph.types';
 import { FALLBACK_FONT_METRICS } from '../measure/measureFontMetrics';
 import type { RulingBend, RulingProjection } from '../paper/paper.types';
+import { lineHeightAt, lineHeightSlopeAt } from '../paper/rulingPerspective';
 import { sampleRulingBend, sampleRulingBendSlope } from '../paper/sampleRulingBend';
 import type { LetterDistortion } from '../randomize/randomize.types';
 
@@ -109,20 +110,27 @@ const multiplyMatrices = (left: AffineMatrix, right: AffineMatrix): AffineMatrix
 };
 
 /**
- * Изгиб разлиновки вместе с преобразованием, которое канва применила бы к
- * точке, — без масштаба отрисовки: изгиб задан в пикселях страницы.
+ * Линии разлиновки страницы вместе с преобразованием, которое канва применила
+ * бы к точке, — без масштаба отрисовки: линии заданы в пикселях страницы.
  */
-type BendTracker = {
+type LineTracker = {
   /**
-   * Изгиб линий разлиновки страницы.
+   * Изгиб линий разлиновки страницы. `null` — линии не изогнуты, и от прямой
+   * гребёнки их уводит одна перспектива.
    */
-  bend: RulingBend;
+  bend: RulingBend | null;
 
   /**
-   * Наклон и перспектива разлиновки, в координате вдоль линий которых лежат
-   * строки узлов изгиба.
+   * Наклон и перспектива разлиновки: ими координата вдоль линий переводится в
+   * высоту линии на фотографии, в них же лежат строки узлов изгиба.
    */
   projection: RulingProjection;
+
+  /**
+   * Тангенс наклона разлиновки. Раскладка ставит точку на прямую наклонную
+   * гребёнку, поэтому координата вдоль линий точки страницы — `y − x·tgθ`.
+   */
+  tangent: number;
 
   /**
    * Текущее преобразование из системы рисования в пиксели страницы.
@@ -136,30 +144,51 @@ type BendTracker = {
 };
 
 /**
- * Точка в текущей системе рисования, образ которой на странице опущен на изгиб
- * линии в образе исходной точки: `p + L⁻¹·(0, d(M·p))`, где `L` — линейная
- * часть `M`.
+ * Высота линии фотографии под точкой страницы: `Y(x, U) + d(x, U)`. Раскладка
+ * поставила точку на прямую наклонную гребёнку, поэтому её координата вдоль
+ * линий — `U = y − x·tgθ`; перспектива переводит `U` в высоту линии на снимке,
+ * изгиб опускает линию на своё смещение.
+ *
+ * Без перспективы высота линии равна самой `y`, и выборка изгиба получает те
+ * же числа, что и на листе, у которого перспективы нет вовсе.
+ *
+ * @param tracker — линии разлиновки и текущее преобразование
+ * @param x — горизонталь точки в пикселях страницы
+ * @param y — вертикаль точки в пикселях страницы
+ * @returns высота линии в пикселях страницы
+ */
+const lineHeightOf = (tracker: LineTracker, x: number, y: number): number => {
+  const { bend, projection, tangent } = tracker;
+  const lineY = projection.perspective ? lineHeightAt(projection, x, y - x * tangent) : y;
+
+  return lineY + (bend ? sampleRulingBend(bend, projection, x, lineY) : 0);
+};
+
+/**
+ * Точка в текущей системе рисования, образ которой на странице опущен на своё
+ * место на линии фотографии: `p + L⁻¹·(0, Δ(M·p))`, где `L` — линейная часть
+ * `M`, а `Δ = Y + d − y`.
  *
  * Сдвиг переводится обратной линейной частью, а не прибавляется к `y` как
  * есть: поворот и скос строки и слова уже в преобразовании, и тот же сдвиг в
  * системе буквы увёл бы точку на странице вбок. Стык соседних букв — одна и та
  * же точка страницы, поэтому сдвиг у него один и соединение не рвётся.
  *
- * @param tracker — изгиб и текущее преобразование
+ * @param tracker — линии разлиновки и текущее преобразование
  * @param x — горизонталь точки в системе рисования
  * @param y — вертикаль точки в системе рисования
  * @returns сдвинутая точка в той же системе
  */
-const bendPoint = (tracker: BendTracker, x: number, y: number): GlyphPoint => {
-  const { bend, projection, matrix } = tracker;
-  const { a, b, c, d, e, f } = matrix;
+const linePoint = (tracker: LineTracker, x: number, y: number): GlyphPoint => {
+  const { a, b, c, d, e, f } = tracker.matrix;
   const determinant = a * d - b * c;
 
   if (determinant === 0) {
     return { x, y };
   }
 
-  const offset = sampleRulingBend(bend, projection, a * x + c * y + e, b * x + d * y + f);
+  const pageY = b * x + d * y + f;
+  const offset = lineHeightOf(tracker, a * x + c * y + e, pageY) - pageY;
 
   return {
     x: x - (c * offset) / determinant,
@@ -168,45 +197,48 @@ const bendPoint = (tracker: BendTracker, x: number, y: number): GlyphPoint => {
 };
 
 /**
- * Рисует текст жёсткой фигурой на изогнутой линии: середина текста на базовой
- * линии опускается на изгиб в своём образе на странице, а сам текст
+ * Рисует текст жёсткой фигурой на линии фотографии: середина текста на базовой
+ * линии встаёт на линию в своём образе на странице, а сам текст
  * поворачивается вокруг неё по касательной к линии.
  *
- * Согнуть текст по форме линии нечем — точек контура у него нет. Поэтому
- * рендерер в режиме изгиба рисует так по одной букве: буква шириной в доли
- * шага на касательной отходит от линии много меньше допуска, а целое слово
- * осталось бы прямым.
+ * Положить текст на форму линии нечем — точек контура у него нет. Поэтому на
+ * неровном листе рендерер рисует так по одной букве: буква шириной в доли шага
+ * на касательной отходит от линии много меньше допуска, а целое слово осталось
+ * бы прямым.
  *
- * Поворот задан в системе буквы, и при скосе слова угол на странице
- * приближённый: скос неровности почерка — единицы градусов, ошибка ничтожна.
+ * Касательная — `∂(Y + d)/∂x` при постоянной `U`; наклон блока в систему буквы
+ * уже вошёл, поэтому из угла касательной он вычитается. Поворот задан в
+ * системе буквы, и при скосе слова угол на странице приближённый: скос
+ * неровности почерка — единицы градусов, ошибка ничтожна.
  *
  * @param ctx — контекст, в который идут вызовы
- * @param tracker — изгиб и текущее преобразование
+ * @param tracker — линии разлиновки и текущее преобразование
  * @param text — текст
  * @param x — начало текста на базовой линии в системе рисования
  * @param y — базовая линия в системе рисования
  */
-const fillBentText = (
+const fillLineText = (
   ctx: RenderContext,
-  tracker: BendTracker,
+  tracker: LineTracker,
   text: string,
   x: number,
   y: number
 ): void => {
-  const { bend, projection, matrix } = tracker;
+  const { bend, projection, tangent, matrix } = tracker;
   const { a, b, c, d, e, f } = matrix;
   const centerX = x + ctx.measureText(text).width / 2;
-  const center = bendPoint(tracker, centerX, y);
-  const slope = sampleRulingBendSlope(
-    bend,
-    projection,
-    a * centerX + c * y + e,
-    b * centerX + d * y + f
-  );
+  const center = linePoint(tracker, centerX, y);
+  const pageX = a * centerX + c * y + e;
+  const pageY = b * centerX + d * y + f;
+  const u = pageY - pageX * tangent;
+  const lineY = projection.perspective ? lineHeightAt(projection, pageX, u) : pageY;
+  const slope =
+    (projection.perspective ? lineHeightSlopeAt(projection, u) : tangent) +
+    (bend ? sampleRulingBendSlope(bend, projection, pageX, lineY) : 0);
 
   ctx.save();
   ctx.translate(center.x, center.y);
-  ctx.rotate(Math.atan(slope));
+  ctx.rotate(Math.atan(slope) - toRadians(projection.skewAngle));
   ctx.translate(-centerX, -y);
   ctx.fillText(text, x, y);
   ctx.restore();
@@ -214,7 +246,7 @@ const fillBentText = (
 
 /**
  * Контекст, который рисует в `ctx` те же вызовы, но точки путей кладёт на
- * изогнутые линии разлиновки, а текст — на линию сдвигом и поворотом.
+ * линии разлиновки фотографии, а текст — на линию сдвигом и поворотом.
  *
  * Рядом со стеком канвы ведётся своё преобразование с тем же порядком
  * `rotate`, `translate`, `transform` и своим стеком на `save`/`restore`: снять
@@ -227,17 +259,23 @@ const fillBentText = (
  * отрисовки, и точки меряются в пикселях страницы.
  *
  * @param ctx — контекст, в который идут вызовы
- * @param bend — изгиб линий разлиновки страницы
- * @param projection — наклон и перспектива разлиновки, в которых заданы строки
- *   узлов изгиба
- * @returns контекст рисования по изогнутым линиям
+ * @param bend — изгиб линий разлиновки страницы; `null` — линии не изогнуты
+ * @param projection — наклон и перспектива разлиновки, в которых заданы линии
+ *   и строки узлов изгиба
+ * @returns контекст рисования по линиям фотографии
  */
-const createBentContext = (
+const createLineContext = (
   ctx: RenderContext,
-  bend: RulingBend,
+  bend: RulingBend | null,
   projection: RulingProjection
 ): RenderContext => {
-  const tracker: BendTracker = { bend, projection, matrix: IDENTITY_MATRIX, stack: [] };
+  const tracker: LineTracker = {
+    bend,
+    projection,
+    tangent: Math.tan(toRadians(projection.skewAngle)),
+    matrix: IDENTITY_MATRIX,
+    stack: [],
+  };
 
   const apply = (next: AffineMatrix): void => {
     tracker.matrix = multiplyMatrices(tracker.matrix, next);
@@ -296,31 +334,31 @@ const createBentContext = (
       return ctx.measureText(text);
     },
     fillText: (text, x, y) => {
-      fillBentText(ctx, tracker, text, x, y);
+      fillLineText(ctx, tracker, text, x, y);
     },
     beginPath: () => {
       ctx.beginPath();
     },
     moveTo: (x, y) => {
-      const point = bendPoint(tracker, x, y);
+      const point = linePoint(tracker, x, y);
 
       ctx.moveTo(point.x, point.y);
     },
     lineTo: (x, y) => {
-      const point = bendPoint(tracker, x, y);
+      const point = linePoint(tracker, x, y);
 
       ctx.lineTo(point.x, point.y);
     },
     quadraticCurveTo: (cpx, cpy, x, y) => {
-      const control = bendPoint(tracker, cpx, cpy);
-      const end = bendPoint(tracker, x, y);
+      const control = linePoint(tracker, cpx, cpy);
+      const end = linePoint(tracker, x, y);
 
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
     },
     bezierCurveTo: (cp1x, cp1y, cp2x, cp2y, x, y) => {
-      const first = bendPoint(tracker, cp1x, cp1y);
-      const second = bendPoint(tracker, cp2x, cp2y);
-      const end = bendPoint(tracker, x, y);
+      const first = linePoint(tracker, cp1x, cp1y);
+      const second = linePoint(tracker, cp2x, cp2y);
+      const end = linePoint(tracker, x, y);
 
       ctx.bezierCurveTo(first.x, first.y, second.x, second.y, end.x, end.y);
     },
@@ -461,13 +499,13 @@ const measureAdvances = (
   glyphs: PageGlyphs | null,
   fontSizePx: number,
   baseFont: string,
-  isBent: boolean
+  isCurved: boolean
 ): number[] => {
   if (glyphs) {
     return measureGlyphAdvances(ctx, word, glyphs, fontSizePx, baseFont);
   }
 
-  if (word.distortion.letters.length === 0 && !isBent) {
+  if (word.distortion.letters.length === 0 && !isCurved) {
     return [];
   }
 
@@ -630,12 +668,12 @@ const drawWordText = (
   advances: number[],
   fontSizePx: number,
   baseFont: string,
-  isBent: boolean
+  isCurved: boolean
 ): void => {
   const { text, distortion } = word;
   const { letters } = distortion;
 
-  if (letters.length === 0 && !isBent) {
+  if (letters.length === 0 && !isCurved) {
     ctx.fillText(text, x, 0);
 
     return;
@@ -681,7 +719,7 @@ const drawWord = (
   fontSizePx: number,
   baseFont: string,
   blockWidth: number,
-  isBent: boolean
+  isCurved: boolean
 ): number => {
   const { text, distortion } = word;
   const { rotate, skew, translateY, letters } = distortion;
@@ -690,8 +728,8 @@ const drawWord = (
     return 0;
   }
 
-  const isMeasuredByLetter = Boolean(glyphs) || letters.length > 0 || isBent;
-  const advances = measureAdvances(ctx, word, glyphs, fontSizePx, baseFont, isBent);
+  const isMeasuredByLetter = Boolean(glyphs) || letters.length > 0 || isCurved;
+  const advances = measureAdvances(ctx, word, glyphs, fontSizePx, baseFont, isCurved);
   const width = isMeasuredByLetter
     ? advances.reduce((sum, advance) => {
         return sum + advance;
@@ -724,7 +762,7 @@ const drawWord = (
   if (glyphs) {
     drawWordGlyphs(ctx, word, x, advances, glyphs, fontSizePx, baseFont);
   } else {
-    drawWordText(ctx, word, x, advances, fontSizePx, baseFont, isBent);
+    drawWordText(ctx, word, x, advances, fontSizePx, baseFont, isCurved);
   }
 
   ctx.restore();
@@ -749,7 +787,7 @@ const drawLine = (
   fontSizePx: number,
   baseFont: string,
   blockWidth: number,
-  isBent: boolean
+  isCurved: boolean
 ): void => {
   const { words, distortion } = line;
   const { rotate, translateX } = distortion;
@@ -789,7 +827,7 @@ const drawLine = (
       fontSizePx,
       baseFont,
       blockWidth,
-      isBent
+      isCurved
     );
   });
 
@@ -799,9 +837,10 @@ const drawLine = (
 /**
  * Рисует перечисленные слои страницы в контекст.
  *
- * Чернила изогнутого листа рисуются через контекст изгиба, созданный после
- * масштаба отрисовки: его преобразование ведётся в пикселях страницы. Ровный
- * лист рисуется прямо в `ctx`, и выборка изгиба не вызывается вовсе.
+ * Чернила листа с изгибом или перспективой рисуются через контекст линий,
+ * созданный после масштаба отрисовки: его преобразование ведётся в пикселях
+ * страницы. Лист без того и другого рисуется прямо в `ctx`, и линии не
+ * выбираются вовсе — лента вызовов у него та же, что и до появления изгиба.
  */
 const drawPage = (
   ctx: RenderContext,
@@ -818,9 +857,11 @@ const drawPage = (
     blockRotate,
     fontMetrics,
     bend,
+    perspective,
   } = geometry;
   const { fontAscent, lineHeight } = resolveMetrics(fontMetrics);
   const baseFont = buildFont(fontSizePx, fontFamily);
+  const isCurved = perspective !== null || bend !== null;
 
   ctx.save();
   ctx.scale(scale, scale);
@@ -832,10 +873,9 @@ const drawPage = (
   if (layers.hasInk) {
     ctx.save();
 
-    const inkContext =
-      bend === null
-        ? ctx
-        : createBentContext(ctx, bend, { skewAngle: blockRotate, perspective: null });
+    const inkContext = isCurved
+      ? createLineContext(ctx, bend, { skewAngle: blockRotate, perspective })
+      : ctx;
 
     if (blockRotate !== 0) {
       inkContext.rotate(toRadians(blockRotate));
@@ -861,7 +901,7 @@ const drawPage = (
         fontSizePx,
         baseFont,
         blockWidth,
-        bend !== null
+        isCurved
       );
     });
 

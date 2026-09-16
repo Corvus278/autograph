@@ -193,6 +193,7 @@ describe('источник отрисовки страницы', () => {
       blockRotate: calibration.ruling.skewAngle,
       fontMetrics: view.metrics,
       bend: calibration.ruling.bend,
+      perspective: calibration.ruling.perspective,
     });
   });
 

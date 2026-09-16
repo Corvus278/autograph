@@ -202,6 +202,7 @@ const buildGeometry = (overrides: Partial<RenderGeometry> = {}): RenderGeometry 
     blockRotate: 0,
     fontMetrics: FONT_METRICS,
     bend: null,
+    perspective: null,
     ...overrides,
   };
 };

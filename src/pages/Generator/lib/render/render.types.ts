@@ -1,5 +1,5 @@
 import type { GlyphSource } from '../glyph/glyph.types';
-import type { LightingField, RulingBend } from '../paper/paper.types';
+import type { LightingField, RulingBend, RulingPerspective } from '../paper/paper.types';
 import type { LineDistortion, WordDistortion } from '../randomize/randomize.types';
 
 /**
@@ -361,6 +361,16 @@ export type RenderGeometry = {
    * с отрисовкой без изгиба вызов в вызов.
    */
   bend: RulingBend | null;
+
+  /**
+   * Перспектива разлиновки страницы в пикселях страницы; на чётной странице —
+   * уже отражённая. Берётся с углом `blockRotate`: вместе они переводят точку
+   * ровной наклонной раскладки в высоту её линии на фотографии.
+   *
+   * `null` — линии идут через равный шаг. Вместе с `bend: null` это значит,
+   * что точки не сдвигаются вовсе.
+   */
+  perspective: RulingPerspective | null;
 };
 
 /**

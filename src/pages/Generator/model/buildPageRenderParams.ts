@@ -149,6 +149,7 @@ export const buildPageRenderParams = (input: PageRenderInput): PageRenderParams 
       blockRotate: calibration.ruling.skewAngle,
       fontMetrics: metrics,
       bend: calibration.ruling.bend,
+      perspective: calibration.ruling.perspective,
     },
     scale,
   };

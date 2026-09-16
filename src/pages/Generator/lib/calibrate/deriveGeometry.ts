@@ -1,6 +1,7 @@
 import type { FontMetrics } from '../measure/measure.types';
 import { FALLBACK_FONT_METRICS } from '../measure/measureFontMetrics';
 import type { RulingKind } from '../paper/paper.types';
+import { lineCoordinateAt } from '../paper/rulingPerspective';
 import { resolveFirstLine } from '../paper/sheetRuling';
 
 import type {
@@ -219,10 +220,14 @@ export const deriveGeometry = (
  * поля листа и запаса снизу. Запас задан в шагах разлиновки, поэтому на листах
  * с разным шагом он отнимает одно и то же число строк.
  *
+ * Высота меряется в координате вдоль линий, в которой стоят и строки: нижняя
+ * граница поля переводится в неё, а верхний отступ блока в ней уже задан. Без
+ * перспективы `U(0, y) = y`, и число прежнее.
+ *
  * @param sheet — лист страницы
  * @param geometry — геометрия блока на этом листе
  * @param bottomMargin — запас снизу в долях шага разлиновки
- * @returns высота в пикселях кадра
+ * @returns высота в координате вдоль линий, px
  */
 export const deriveTextHeight = (
   sheet: SheetCalibration,
@@ -232,9 +237,8 @@ export const deriveTextHeight = (
   const { ruling, height } = sheet;
 
   return (
-    height -
+    lineCoordinateAt(ruling, 0, height - ruling.margins.bottom) -
     geometry.topOffset -
-    ruling.margins.bottom -
     bottomMargin * resolveStep(ruling.step)
   );
 };

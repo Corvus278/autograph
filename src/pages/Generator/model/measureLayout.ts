@@ -31,8 +31,15 @@ const MAX_CACHED_LAYOUTS = 50;
  */
 const toSheetFingerprint = (sheet: PaperSheet): unknown[] => {
   const { id, width, height, ruling } = sheet;
-  const { step, firstLinePhase, skewAngle, margins, marginLineX, marginLineSide } =
-    ruling;
+  const {
+    step,
+    firstLinePhase,
+    skewAngle,
+    margins,
+    marginLineX,
+    marginLineSide,
+    perspective,
+  } = ruling;
 
   return [
     id,
@@ -47,6 +54,17 @@ const toSheetFingerprint = (sheet: PaperSheet): unknown[] => {
     margins.left,
     marginLineX,
     marginLineSide,
+    /**
+     * Перспектива входит четырьмя числами: от неё зависят первая линия и
+     * вместимость страницы. Изгиб и контур не входят — изгиб на разбивку не
+     * влияет вовсе, а контур влияет только через поля, и они уже здесь.
+     */
+    perspective && [
+      perspective.originX,
+      perspective.originY,
+      perspective.convergenceX,
+      perspective.convergenceY,
+    ],
   ];
 };
 
