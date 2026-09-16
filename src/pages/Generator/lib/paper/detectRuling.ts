@@ -15,6 +15,11 @@ import {
   type ShearedProfile,
   toTangent,
 } from './sheetProfile';
+import {
+  LINE_SEARCH_SHARE,
+  TRACE_SEARCH_SHARE,
+  traceRulingLines,
+} from './traceRulingLines';
 
 /**
  * Порог уверенности, начиная с которого разлиновка считается найденной.
@@ -77,7 +82,7 @@ const RULED_SPAN_STRIPS = 8;
  * лежат в этом разрыве. Половинный порог, как у боковых границ, отрезал бы
  * бледные верх и низ, и поле выросло бы до середины листа.
  */
-const RULED_SPAN_LEVEL = 0.2;
+export const RULED_SPAN_LEVEL = 0.2;
 
 /**
  * Зазор от найденной боковой границы разлиновки до края блока в долях шага.
@@ -99,15 +104,6 @@ const RULED_EDGE_GAP_SHARE = 0.2;
  * линиям не поднимает. Две десятых лежат в этом разрыве.
  */
 const GRID_COLUMN_LEVEL = 0.2;
-
-/**
- * Доля шага, на которую линия может уйти от арифметической гребёнки и всё ещё
- * считаться своей. У края кадра лист тянет объектив или изгиб страницы: на
- * снимках линейки пресет-пака нижние линии стоят на восьмую шага выше
- * предсказанного места. Шестая доля — запас сверх этого и всё ещё далеко от
- * половины шага, где окно доставало бы соседнюю линию.
- */
-const LINE_SEARCH_SHARE = 1 / 6;
 
 /**
  * Высота горизонтальной полосы, по которой прослеживается вертикальная
@@ -220,9 +216,58 @@ export type DetectedRuling = RulingDetection & {
    * лист, ждущий ручного ввода.
    */
   skewAngle: number;
+
+  /**
+   * Поля по ядру разлиновки — линиям, подтверждённым опросом у прямой гребёнки.
+   * Боковые совпадают с `margins`, верхнее и нижнее могут лечь внутрь них: трасса
+   * вдоль линий удерживает крайние линии, ушедшие от прямой гребёнки на волне, а
+   * перспективу по ним подгонять нельзя — волна не описывается её моделью.
+   */
+  coreMargins: PaperMargins;
+
+  /**
+   * Крайние линии области, упёршейся в край профиля: там поле не найдено, и
+   * `margins` держит ноль. Край профиля вырезки внутри листа — ещё не край
+   * листа, и по этим линиям измерение фотографии проверяет, есть ли линии за
+   * краем вырезки.
+   */
+  ruledEdges: RuledEdges;
+};
+
+/**
+ * Крайняя линия области с линиями.
+ */
+export type RuledEdgeLine = {
+  /**
+   * Координата линии вдоль линий на прямой гребёнке в пикселях изображения.
+   */
+  position: number;
+
+  /**
+   * Координата линии вдоль линий по вертикальным полосам равной ширины слева
+   * направо; `null` — в полосе линия не нашлась.
+   */
+  strips: (number | null)[];
+};
+
+/**
+ * Крайние линии области, упёршейся в край профиля.
+ */
+export type RuledEdges = {
+  /**
+   * Первая линия; `null` — верхнее поле найдено или линий нет.
+   */
+  top: RuledEdgeLine | null;
+
+  /**
+   * Последняя линия; `null` — нижнее поле найдено или линий нет.
+   */
+  bottom: RuledEdgeLine | null;
 };
 
 const NO_MARGINS: PaperMargins = { top: 0, right: 0, bottom: 0, left: 0 };
+
+const NO_RULED_EDGES: RuledEdges = { top: null, bottom: null };
 
 /**
  * Настройки поиска разлиновки.
@@ -278,6 +323,8 @@ const toMissingDetection = (confidence: number, skewAngle: number): DetectedRuli
     perspective: null,
     bendFoundNodeShare: 0,
     confidence,
+    coreMargins: NO_MARGINS,
+    ruledEdges: NO_RULED_EDGES,
   };
 };
 
@@ -311,6 +358,16 @@ type RuledSpan = {
    * сравнивается гребёнка вертикальных линий клетки.
    */
   depth: number;
+
+  /**
+   * Первая линия по полосам; `null` в полосе — линия там не нашлась.
+   */
+  firstStrips: (number | null)[];
+
+  /**
+   * Последняя линия по полосам.
+   */
+  lastStrips: (number | null)[];
 };
 
 /**
@@ -327,6 +384,28 @@ type CombDepths = {
    */
   depths: number[];
 };
+
+/**
+ * Линии гребёнки, прослеженные по полосам вдоль самих линий.
+ */
+type TracedComb = CombDepths & {
+  /**
+   * Координата каждой линии по полосам; `null` — в полосе линия не нашлась.
+   */
+  stripPositions: (number | null)[][];
+
+  /**
+   * Помещается ли окно поиска линии в профиль в большинстве полос. Цепочка,
+   * дошедшая до первой непомещающейся линии, упёрлась в край профиля: дальше
+   * линию уже не увидеть, есть она там или нет.
+   */
+  measurable: boolean[];
+};
+
+/**
+ * Полуинтервал индексов полос: первая входящая и первая невходящая.
+ */
+type StripRange = [number, number];
 
 /**
  * Крайние вертикальные линии клетки в пикселях фотографии.
@@ -585,6 +664,84 @@ const measureCombDepths = (
 };
 
 /**
+ * Прослеживает линии гребёнки по полосам вдоль самих линий
+ * (`traceRulingLines`): линия, ушедшая от прямой гребёнки на волне листа или
+ * в перспективе дальше окна опроса, остаётся своей, и цепочка у края области
+ * не рвётся перед ней.
+ *
+ * Глубина линии — медиана по полосам, где полоса без линии даёт ноль. Край
+ * профиля — линия, окно поиска которой не помещается в профиль в большинстве
+ * полос: у неё отсутствие провала ничего не говорит о листе.
+ *
+ * @param detrendedStrips — профили полос без фона с общими бинами
+ * @param origin — координата нулевого бина в пикселях фотографии
+ * @param step — шаг гребёнки в пикселях
+ * @param phase — смещение линий по модулю шага
+ * @returns линии прямой гребёнки, попавшие в профиль, с глубинами и
+ *   положениями по полосам
+ */
+const traceCombDepths = (
+  detrendedStrips: Float64Array[],
+  origin: number,
+  step: number,
+  phase: number
+): TracedComb => {
+  const size = detrendedStrips[0]?.length || 0;
+  const firstLine = Math.ceil((origin - phase) / step);
+  const lastLine = Math.floor((origin + size - 1 - phase) / step);
+  const count = Math.max(0, lastLine - firstLine + 1);
+  const reach = step * TRACE_SEARCH_SHARE;
+  const traced = traceRulingLines(detrendedStrips, {
+    lineOffset: phase - origin,
+    step,
+    firstLine,
+    lastLine,
+    middleLine: Math.round((size / 2 + origin - phase) / step),
+  });
+  const positions = Array.from({ length: count }, (_item, index) => {
+    return phase + (firstLine + index) * step;
+  });
+
+  if (traced === null) {
+    return {
+      positions,
+      depths: positions.map(() => {
+        return 0;
+      }),
+      stripPositions: positions.map(() => {
+        return [];
+      }),
+      measurable: positions.map(() => {
+        return true;
+      }),
+    };
+  }
+
+  return {
+    positions,
+    depths: traced.map((line) => {
+      return computeMedian(
+        line.map(({ dip }) => {
+          return dip === null ? 0 : dip.depth;
+        })
+      );
+    }),
+    stripPositions: traced.map((line) => {
+      return line.map(({ dip }) => {
+        return dip === null ? null : origin + dip.position;
+      });
+    }),
+    measurable: traced.map((line) => {
+      const outside = line.reduce((total, { predicted }) => {
+        return predicted - reach < 1 || predicted + reach > size - 2 ? total + 1 : total;
+      }, 0);
+
+      return outside * 2 < line.length;
+    }),
+  };
+};
+
+/**
  * Глубина провала в бине профиля полосы: насколько бин темнее скользящей
  * медианы окном в шаг. Медиана, а не среднее: узкий провал линии её не
  * сдвигает, а горизонталь, пересекающая полосу, меняется по столбцам
@@ -760,36 +917,33 @@ const pickInnermost = (positions: number[], isLeftBorder: boolean): number | nul
 };
 
 /**
- * Полосы трассировки, по высоте пересекающие область с линиями у столбца
+ * Полосы равной высоты, по высоте пересекающие область с линиями у столбца
  * `lineX`: строк над разлиновкой и под ней нет, и граница, изогнутая только
  * там, не должна сужать блок.
  *
- * @param strips — профили столбцов по полосам равной высоты, сверху вниз
+ * @param count — число полос на кадр
  * @param height — высота кадра
  * @param span — область с линиями; `null` — не найдена, берутся все полосы
  * @param tangent — тангенс наклона разлиновки
  * @param lineX — столбец, у которого стоит прослеживаемая линия
- * @returns полосы, пересекающие область, сверху вниз
+ * @returns индексы полос, пересекающих область, полуинтервалом сверху вниз
  */
-const selectSpanStrips = (
-  strips: ShearedProfile[],
+const toSpanStripRange = (
+  count: number,
   height: number,
   span: RuledSpan | null,
   tangent: number,
   lineX: number
-): ShearedProfile[] => {
-  if (!span || strips.length === 0) {
-    return strips;
+): StripRange => {
+  if (!span || count === 0) {
+    return [0, count];
   }
 
-  const stripHeight = height / strips.length;
+  const stripHeight = height / count;
   const from = Math.max(0, Math.floor((span.first + lineX * tangent) / stripHeight));
-  const to = Math.min(
-    strips.length,
-    Math.ceil((span.last + lineX * tangent) / stripHeight)
-  );
+  const to = Math.min(count, Math.ceil((span.last + lineX * tangent) / stripHeight));
 
-  return strips.slice(from, Math.max(from + 1, to));
+  return [from, Math.max(from + 1, to)];
 };
 
 /**
@@ -998,63 +1152,84 @@ const refineRowBorders = (
  * квадратная, а автокорреляцию столбцов на снимке тетради сбивают край листа и
  * спираль — периода там не находится вовсе.
  *
- * Крайняя линия прослеживается по узким полосам (`traceVerticalLine`), и
- * берётся самое внутреннее её положение, но не дальше окна `LINE_SEARCH_SHARE`
- * наружу от прямой гребёнки: на снимке телефоном вертикальная линия наклонена
- * или изогнута иначе, чем разлиновка в среднем, и граница по гребёнке у одного
- * из краёв листа легла бы за линию.
+ * Вертикали прослеживаются вдоль самих линий по полосам (`traceCombDepths`), и
+ * область с вертикалями ищется по их трассе: на снимке телефоном вертикали
+ * расходятся книзу и изогнуты, у края области прямая гребёнка проходит мимо
+ * крайней линии в части полос, и граница уходила бы на линию внутрь. Крайняя
+ * линия берётся в самом внутреннем положении по полосам, пересекающим область с
+ * горизонтальными линиями, но не дальше окна `LINE_SEARCH_SHARE` наружу от
+ * прямой гребёнки: граница по гребёнке у одного из краёв листа легла бы за
+ * линию.
  *
  * @param strips — профили столбцов по горизонтальным полосам кадра
  * @param step — шаг горизонтальных линий в пикселях
  * @param rowDepth — типичная глубина горизонтальной линии
- * @param selectTraceStrips — полосы трассировки для линии у заданного столбца
+ * @param selectSpanRange — полосы, пересекающие область с горизонтальными
+ *   линиями у заданного столбца, полуинтервалом индексов
  * @returns крайние вертикальные линии; `null` — вертикальных линий клетки нет
  */
 const findGridColumns = (
   strips: ShearedProfile[],
   step: number,
   rowDepth: number,
-  selectTraceStrips: (lineX: number) => ShearedProfile[]
+  selectSpanRange: (lineX: number) => StripRange
 ): GridColumns | null => {
   const origin = strips[0]?.origin || 0;
   const detrendedStrips = detrendStrips(strips, step);
-  let best: CombDepths = { positions: [], depths: [] };
+  let bestPhase = 0;
   let bestScore = 0;
 
   for (let phase = 0; phase < step; phase += 1) {
-    const comb = measureCombDepths(detrendedStrips, origin, step, phase);
-    const score = computeMedian(comb.depths);
+    const score = computeMedian(
+      measureCombDepths(detrendedStrips, origin, step, phase).depths
+    );
 
     if (score > bestScore) {
-      best = comb;
+      bestPhase = phase;
       bestScore = score;
     }
   }
 
-  const { positions, depths } = best;
-  const region = findSignalRegion(Float64Array.from(depths), RULED_SPAN_LEVEL);
-
-  if (bestScore <= 0 || bestScore < rowDepth * GRID_COLUMN_LEVEL || !region) {
+  if (bestScore <= 0 || bestScore < rowDepth * GRID_COLUMN_LEVEL) {
     return null;
   }
 
-  const threshold = computeQuantile(depths, 0.9) * RULED_SPAN_LEVEL;
+  const { positions, depths, stripPositions, measurable } = traceCombDepths(
+    detrendedStrips,
+    origin,
+    step,
+    bestPhase
+  );
+  const region = findSignalRegion(Float64Array.from(depths), RULED_SPAN_LEVEL);
+
+  if (!region) {
+    return null;
+  }
+
   const firstLine = positions[region.start] || 0;
   const lastLine = positions[region.end] || 0;
-  const hasLeft = region.start > 0;
-  const hasRight = region.end < depths.length - 1;
-  const innermostLeft =
-    hasLeft &&
-    pickInnermost(
-      traceVerticalLine(selectTraceStrips(firstLine), firstLine, step, threshold),
-      true
+  const hasLeft = region.start > Math.max(0, measurable.indexOf(true));
+  const hasRight = region.end < measurable.lastIndexOf(true);
+
+  const pickColumn = (
+    index: number,
+    lineX: number,
+    isLeftBorder: boolean
+  ): number | null => {
+    const [from, to] = selectSpanRange(lineX);
+    const found = (stripPositions[index] || []).reduce<number[]>(
+      (acc, position, strip) => {
+        if (position !== null && strip >= from && strip < to) {
+          acc.push(position);
+        }
+
+        return acc;
+      },
+      []
     );
-  const innermostRight =
-    hasRight &&
-    pickInnermost(
-      traceVerticalLine(selectTraceStrips(lastLine), lastLine, step, threshold),
-      false
-    );
+
+    return pickInnermost(found, isLeftBorder);
+  };
 
   /**
    * Наружу граница уходит от прямой гребёнки не дальше, чем линия ещё считается
@@ -1062,6 +1237,8 @@ const findGridColumns = (
    * четыре пикселя дальше гребёнки, и граница по самой гребёнке сузила бы блок.
    */
   const reach = toLineReach(step);
+  const innermostLeft = hasLeft && pickColumn(region.start, firstLine, true);
+  const innermostRight = hasRight && pickColumn(region.end, lastLine, false);
 
   return {
     left: hasLeft
@@ -1074,28 +1251,17 @@ const findGridColumns = (
 };
 
 /**
- * Границы области с линиями: профиль опрашивается в предсказанных положениях
- * линий, и берётся самая длинная непрерывная цепочка тех, что действительно
- * темнее фона. Опрос по предсказанию, а не поиск провалов подряд: шаг и фаза
- * уже известны, и по ним видно не только где линии есть, но и где их не стало.
+ * Границы области с линиями — самая длинная непрерывная цепочка линий гребёнки,
+ * которые действительно темнее фона. Опрос по гребёнке, а не поиск провалов
+ * подряд: шаг и фаза уже известны, и по ним видно не только где линии есть, но
+ * и где их не стало.
  *
- * @param strips — профили средней яркости по полосам кадра с общими бинами
- * @param step — шаг разлиновки в пикселях
- * @param phase — смещение линий по модулю шага
+ * @param comb — линии гребёнки с глубинами
  * @returns координаты первой и последней линии, упёрлась ли цепочка в край
- * профиля, и типичная глубина линии; `null` — линий меньше трёх
+ *   профиля, и типичная глубина линии; `null` — линий меньше трёх
  */
-const findRuledSpan = (
-  strips: ShearedProfile[],
-  step: number,
-  phase: number
-): RuledSpan | null => {
-  const { positions, depths } = measureCombDepths(
-    detrendStrips(strips, step),
-    strips[0]?.origin || 0,
-    step,
-    phase
-  );
+const toRuledSpan = (comb: TracedComb): RuledSpan | null => {
+  const { positions, depths, stripPositions, measurable } = comb;
 
   if (depths.length < 3) {
     return null;
@@ -1139,10 +1305,63 @@ const findRuledSpan = (
   return {
     first: positions[bestStart] || 0,
     last: positions[bestEnd] || 0,
-    isAtProfileStart: bestStart === 0,
-    isAtProfileEnd: bestEnd === depths.length - 1,
+    isAtProfileStart: bestStart <= Math.max(0, measurable.indexOf(true)),
+    isAtProfileEnd: bestEnd >= measurable.lastIndexOf(true),
     depth: reference,
+    firstStrips: stripPositions[bestStart] || [],
+    lastStrips: stripPositions[bestEnd] || [],
   };
+};
+
+/**
+ * Границы области с линиями по трассе вдоль линий (`traceCombDepths`): у края
+ * листа линии уходят от прямой гребёнки на волне бумаги больше чем на окно
+ * опроса, и цепочка по прямой гребёнке обрывалась бы на линию-другую раньше.
+ *
+ * @param strips — профили средней яркости по полосам кадра с общими бинами
+ * @param step — шаг разлиновки в пикселях
+ * @param phase — смещение линий по модулю шага
+ * @returns область с линиями; `null` — линий меньше трёх
+ */
+const findRuledSpan = (
+  strips: ShearedProfile[],
+  step: number,
+  phase: number
+): RuledSpan | null => {
+  return toRuledSpan(
+    traceCombDepths(detrendStrips(strips, step), strips[0]?.origin || 0, step, phase)
+  );
+};
+
+/**
+ * Ядро области с линиями — цепочка линий, подтверждённых опросом в окне
+ * `LINE_SEARCH_SHARE` у прямой гребёнки. Край профиля у неё — первая и
+ * последняя линии, попавшие в профиль.
+ *
+ * @param strips — профили средней яркости по полосам кадра с общими бинами
+ * @param step — шаг разлиновки в пикселях
+ * @param phase — смещение линий по модулю шага
+ * @returns ядро области; `null` — линий меньше трёх
+ */
+const findRuledCore = (
+  strips: ShearedProfile[],
+  step: number,
+  phase: number
+): RuledSpan | null => {
+  const comb = measureCombDepths(
+    detrendStrips(strips, step),
+    strips[0]?.origin || 0,
+    step,
+    phase
+  );
+
+  return toRuledSpan({
+    ...comb,
+    stripPositions: [],
+    measurable: comb.depths.map(() => {
+      return true;
+    }),
+  });
 };
 
 const isSameStep = (first: number, second: number): boolean => {
@@ -1264,11 +1483,15 @@ export const detectRuling = (
   const isGrid =
     columnPeriod.confidence >= confidenceThreshold &&
     isSameStep(period.step, columnPeriod.step);
-  const ruledSpan = findRuledSpan(
-    buildStripProfiles(image, 'horizontal', skewAngle, guardAngle, RULED_SPAN_STRIPS),
-    period.step,
-    period.phase
+  const spanStrips = buildStripProfiles(
+    image,
+    'horizontal',
+    skewAngle,
+    guardAngle,
+    RULED_SPAN_STRIPS
   );
+  const ruledSpan = findRuledSpan(spanStrips, period.step, period.phase);
+  const ruledCore = findRuledCore(spanStrips, period.step, period.phase);
   const tangent = toTangent(skewAngle);
   /**
    * Полосы трассировки строятся лишь раз и лишь тогда, когда есть что
@@ -1290,7 +1513,15 @@ export const detectRuling = (
         )
       );
 
-    return selectSpanStrips(traceStrips, image.height, ruledSpan, tangent, lineX);
+    const [from, to] = toSpanStripRange(
+      traceStrips.length,
+      image.height,
+      ruledSpan,
+      tangent,
+      lineX
+    );
+
+    return traceStrips.slice(from, to);
   };
 
   const gridColumns =
@@ -1299,7 +1530,15 @@ export const detectRuling = (
       buildStripProfiles(image, 'vertical', skewAngle, guardAngle, RULED_SPAN_STRIPS),
       period.step,
       ruledSpan.depth,
-      selectTraceStrips
+      (lineX) => {
+        return toSpanStripRange(
+          RULED_SPAN_STRIPS,
+          image.height,
+          ruledSpan,
+          tangent,
+          lineX
+        );
+      }
     );
   const columnRegion = findSignalRegion(
     closeProfileGaps(columnResponse.values, Math.round(period.step)),
@@ -1344,6 +1583,16 @@ export const detectRuling = (
     left: leftBorder > 0 ? leftBorder + edgeGap : 0,
     right: rightBorder < image.width ? image.width - rightBorder + edgeGap : 0,
   };
+  const ruledEdges: RuledEdges = {
+    top:
+      ruledSpan && ruledSpan.isAtProfileStart
+        ? { position: ruledSpan.first, strips: ruledSpan.firstStrips }
+        : null,
+    bottom:
+      ruledSpan && ruledSpan.isAtProfileEnd
+        ? { position: ruledSpan.last, strips: ruledSpan.lastStrips }
+        : null,
+  };
   const bendDetection = detectRulingBend(
     image,
     { step: period.step, firstLinePhase: period.phase, skewAngle, margins },
@@ -1363,5 +1612,11 @@ export const detectRuling = (
     perspective: null,
     bendFoundNodeShare: bendDetection.foundNodeShare,
     confidence: period.confidence,
+    coreMargins: {
+      ...margins,
+      top: ruledCore && !ruledCore.isAtProfileStart ? ruledCore.first : 0,
+      bottom: ruledCore && !ruledCore.isAtProfileEnd ? image.height - ruledCore.last : 0,
+    },
+    ruledEdges,
   };
 };

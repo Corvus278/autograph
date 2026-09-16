@@ -603,6 +603,55 @@ const BENT_LINED_DRIFT_SHEET: SyntheticSheetParams = {
   bend: toSag(0.2 * LINED_STEP),
 };
 
+/**
+ * Амплитуда прогиба у верхней границы области в долях шага. Больше полушага:
+ * такую волну опрос у прямой гребёнки теряет целиком, и верхние линии остаются
+ * только за трассой вдоль линий.
+ */
+const TOP_SAG_SHARE = 0.8;
+
+/**
+ * Затухание прогиба в шагах: ниже трёх шагов от верхней границы волна сходит на
+ * нет, и область делится на волну у края и ровную часть.
+ */
+const TOP_SAG_DECAY_STEPS = 3;
+
+/**
+ * Прогиб у верхней границы области, одинаковый по всей ширине: у S-образной
+ * волны прямая гребёнка удержала бы линию серединой, а здесь линия уходит с
+ * гребёнки целиком — как у листа, чей верх отходит от стола.
+ *
+ * @param x — столбец кадра
+ * @param y — строка кадра
+ * @returns сдвиг линии вниз
+ */
+const TOP_SAG: SyntheticField = (_x, y) => {
+  return (
+    TOP_SAG_SHARE *
+    LINED_STEP *
+    Math.exp(-Math.max(0, y - LINED_TOP) / (TOP_SAG_DECAY_STEPS * LINED_STEP))
+  );
+};
+
+const TOP_SAG_LINED_SHEET: SyntheticSheetParams = {
+  ...LINED_DRIFT_SHEET,
+  bend: TOP_SAG,
+};
+
+/**
+ * Линии ровной части листа: те, где прогиб у верхней границы затух ниже сотой
+ * шага. Перспектива описывает их и без волны, и по ним видно, подогнана ли она
+ * по ядру.
+ *
+ * @param params — описание листа
+ * @returns номера линий
+ */
+const toCalmLines = (params: SyntheticSheetParams): number[] => {
+  return toDrawnLines(params).filter((line) => {
+    return TOP_SAG(0, computeSyntheticLineY(params, line, 0)) < LINED_STEP / 100;
+  });
+};
+
 const SHIFTED_TOP = 360;
 
 const SHIFTED_BOTTOM = 40;
@@ -698,6 +747,22 @@ describe('measureSheetPhoto: перспектива', () => {
         toDrawnLines(SHIFTED_BENT_LINED_SHEET),
         toColumns(left, right),
         toNearestLineInColumn((left + right) / 2)
+      )
+    ).toBeLessThanOrEqual(LINED_STEP / 20);
+  });
+
+  it('прогиб у верха области: перспектива подогнана по ядру, на ровной части линии не дальше двадцатой шага', () => {
+    const result = measure(TOP_SAG_LINED_SHEET);
+    const ruling = buildSheetRuling(result.source, FRAME);
+    const bounds = resolveSheetBounds(TABLE_OUTLINE, WIDTH, HEIGHT);
+
+    expect(ruling.perspective).not.toBeNull();
+    expect(
+      measureRestoreError(
+        ruling,
+        TOP_SAG_LINED_SHEET,
+        toCalmLines(TOP_SAG_LINED_SHEET),
+        toColumns(bounds.left + 2, WIDTH - bounds.right - 2)
       )
     ).toBeLessThanOrEqual(LINED_STEP / 20);
   });

@@ -5,12 +5,8 @@ import type {
 } from './detectRulingPerspective.types';
 import type { RulingPerspective, RulingProjection, SheetImageData } from './paper.types';
 import { lineCoordinateAt, lineHeightAt, lineHeightScaleAt } from './rulingPerspective';
-import {
-  buildStripProfiles,
-  detrendProfile,
-  refinePeakOffset,
-  toTangent,
-} from './sheetProfile';
+import { buildStripProfiles, detrendProfile, toTangent } from './sheetProfile';
+import { TRACE_SEARCH_SHARE, traceRulingLines } from './traceRulingLines';
 
 /**
  * Число вертикальных полос, по которым прослеживаются линии. Пяти хватает,
@@ -19,27 +15,6 @@ import {
  * почти прямая.
  */
 const STRIP_COUNT = 5;
-
-/**
- * Полуширина окна поиска линии в долях шага — и у стартовой линии, и у
- * предсказания трассы. Треть шага: предсказание идёт за дрейфом, а до соседней
- * линии окно не дотягивается.
- */
-const SEARCH_SHARE = 1 / 3;
-
-/**
- * Квантиль глубин, которым меряется типичная глубина линии: линии видны не на
- * всём листе, и медиана на наполовину закрытом пятном листе упала бы до шума.
- */
-const LINE_DEPTH_QUANTILE = 0.9;
-
-/**
- * Доля типичной глубины, ниже которой линия в полосе считается ненайденной.
- * Та же десятая, что у измерения изгиба: линия под пятном мельче типичной в
- * несколько раз, но узел ищется только в окне у предсказания трассы, и чужой
- * провал в него не попадает.
- */
-const LINE_DEPTH_LEVEL = 0.1;
 
 /**
  * Наименьшее число линий, по которым имеет смысл подгонять пять параметров
@@ -97,15 +72,6 @@ const MIN_LINE_WEIGHT = 0.5;
  * пересчёта контуров.
  */
 const MIN_DEVIATION_SHARE = 1 / 20;
-
-/**
- * Границы местного шага трассы в долях шага ровного прохода. Дрейф внутри
- * гарантированных спекой восьми процентов в них помещается с запасом, а трасса,
- * перескочившая на соседнюю линию, за них выходит и дальше ведёт по своему шагу.
- */
-const MIN_LOCAL_STEP_SHARE = 0.5;
-
-const MAX_LOCAL_STEP_SHARE = 1.5;
 
 /**
  * Число параметров гребёнки: наклон, фаза, шаг и два коэффициента схождения.
@@ -183,21 +149,6 @@ type CombFit = {
   convergenceY: number;
 };
 
-/**
- * Провал линии в профиле полосы.
- */
-type LineDip = {
-  /**
-   * Координата линии вдоль профиля полосы в бинах.
-   */
-  position: number;
-
-  /**
-   * Глубина провала.
-   */
-  depth: number;
-};
-
 const toEmptyDetection = (ruling: PerspectiveBaseRuling): RulingPerspectiveDetection => {
   return {
     perspective: null,
@@ -209,58 +160,6 @@ const toEmptyDetection = (ruling: PerspectiveBaseRuling): RulingPerspectiveDetec
     bottomStep: 0,
     deviation: 0,
   };
-};
-
-const computeQuantile = (values: number[], quantile: number): number => {
-  const sorted = [...values].sort((first, second) => {
-    return first - second;
-  });
-
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] || 0;
-};
-
-/**
- * Самый глубокий провал в окне вокруг предсказанного положения линии, уточнённый
- * параболой по трём отсчётам. Центроида, как у измерения изгиба, здесь нет:
- * внутри полосы линия перспективы прямая, и её провал симметричен.
- *
- * @param detrended — профиль полосы без фона, отрицательный на линиях
- * @param center — предсказанная координата линии в бинах
- * @param reach — полуширина окна в бинах
- * @returns провал; `null` — в окне нет вершины темнее фона, а край окна лежит на
- *   склоне провала за окном
- */
-const findLineDip = (
-  detrended: Float64Array,
-  center: number,
-  reach: number
-): LineDip | null => {
-  const from = Math.max(1, Math.round(center - reach));
-  const to = Math.min(detrended.length - 2, Math.round(center + reach));
-  let peak = -1;
-  let depth = 0;
-
-  for (let bin = from; bin <= to; bin += 1) {
-    const binDepth = -(detrended[bin] || 0);
-
-    if (binDepth > depth) {
-      peak = bin;
-      depth = binDepth;
-    }
-  }
-
-  if (peak < 0) {
-    return null;
-  }
-
-  const previous = -(detrended[peak - 1] || 0);
-  const next = -(detrended[peak + 1] || 0);
-
-  if (previous > depth || next > depth) {
-    return null;
-  }
-
-  return { position: peak + refinePeakOffset(previous, depth, next), depth };
 };
 
 /**
@@ -694,172 +593,6 @@ const fitNodesWithoutOutliers = (
 };
 
 /**
- * Старт опорной линии в полосе.
- */
-type StripStart = {
-  /**
-   * Координата линии в бинах профиля полосы.
-   */
-  position: number;
-
-  /**
-   * Нашлась ли линия в полосе или координата взята предсказанием от соседней.
-   */
-  isFound: boolean;
-};
-
-/**
- * Всё, что трассе нужно знать о гребёнке и профиле, кроме самой полосы.
- */
-type TraceBounds = {
-  /**
-   * Наименьший номер линии, которую стоит искать.
-   */
-  firstLine: number;
-
-  /**
-   * Наибольший номер линии, которую стоит искать.
-   */
-  lastLine: number;
-
-  /**
-   * Шаг ровного прохода.
-   */
-  step: number;
-
-  /**
-   * Полуширина окна поиска в бинах.
-   */
-  reach: number;
-
-  /**
-   * Наименьшая глубина провала, с которой линия считается найденной.
-   */
-  threshold: number;
-
-  /**
-   * Строка линии в кадре вырезки по её координате в бинах и столбцу полосы.
-   */
-  toLineY: (position: number, column: number) => number;
-};
-
-/**
- * Прослеживает линии по высоте в одной полосе от стартовой линии вверх и вниз.
- * Предсказание — предыдущая линия плюс местный шаг по двум последним: шаг
- * следует за дрейфом, и номер линии не проскальзывает. Поиск у ровной гребёнки
- * в каждой полосе на дрейфе в восемь процентов уходил бы к краям листа на
- * соседнюю линию.
- *
- * @param detrended — профиль полосы без фона
- * @param strip — номер полосы
- * @param x — столбец центра полосы
- * @param startLine — номер стартовой линии
- * @param start — её положение в полосе
- * @param bounds — границы номеров линий и перевод бина в строку кадра
- * @param nodes — список узлов, куда дописывается трасса
- */
-const traceStrip = (
-  detrended: Float64Array,
-  strip: number,
-  x: number,
-  startLine: number,
-  start: StripStart,
-  bounds: TraceBounds,
-  nodes: TracedNode[]
-): void => {
-  const { firstLine, lastLine, step, reach, threshold, toLineY } = bounds;
-  const startPosition = start.position;
-
-  /**
-   * Предсказанный старт ведёт трассу, но узлом не становится: измерения за ним
-   * нет, а подгонка обязана идти по найденным линиям.
-   */
-  if (start.isFound) {
-    nodes.push({ x, y: toLineY(startPosition, x), line: startLine, strip });
-  }
-
-  for (const direction of [-1, 1]) {
-    let previous = startPosition;
-    let localStep = step;
-
-    for (
-      let line = startLine + direction;
-      line >= firstLine && line <= lastLine;
-      line += direction
-    ) {
-      const predicted = previous + direction * localStep;
-      const dip = findLineDip(detrended, predicted, reach);
-
-      if (dip !== null && dip.depth >= threshold) {
-        nodes.push({ x, y: toLineY(dip.position, x), line, strip });
-        localStep = Math.min(
-          Math.max(Math.abs(dip.position - previous), step * MIN_LOCAL_STEP_SHARE),
-          step * MAX_LOCAL_STEP_SHARE
-        );
-        previous = dip.position;
-      } else {
-        previous = predicted;
-      }
-    }
-  }
-};
-
-/**
- * Разносит старт опорной линии по всем полосам: от опорной полосы к краям,
- * предсказывая положение в следующей полосе по двум последним и уточняя его
- * провалом, если он там есть.
- *
- * Старт у всех полос — на одной и той же линии гребёнки, поэтому номера линий
- * общие. Искать старт в каждой полосе у прямой гребёнки нельзя: прогиб бумаги в
- * полшага уводит линию из окна поиска целиком, и полосы в середине прогиба
- * остались бы без узлов, а лист с изгибом — без перспективы. Между соседними
- * полосами тот же прогиб меняется на малую долю шага, и предсказание от соседа
- * в окно укладывается.
- *
- * @param detrended — профили полос без фона
- * @param anchorStrip — полоса, где линия нашлась у прямой гребёнки
- * @param anchorPosition — её координата в бинах
- * @param reach — полуширина окна поиска в бинах
- * @param threshold — наименьшая глубина провала
- * @returns старт опорной линии в каждой полосе
- */
-const spreadStart = (
-  detrended: Float64Array[],
-  anchorStrip: number,
-  anchorPosition: number,
-  reach: number,
-  threshold: number
-): StripStart[] => {
-  const starts: StripStart[] = detrended.map(() => {
-    return { position: anchorPosition, isFound: false };
-  });
-
-  starts[anchorStrip] = { position: anchorPosition, isFound: true };
-
-  for (const direction of [-1, 1]) {
-    let previous = anchorPosition;
-    let slope = 0;
-
-    for (
-      let strip = anchorStrip + direction;
-      strip >= 0 && strip < detrended.length;
-      strip += direction
-    ) {
-      const predicted = previous + slope;
-      const dip = findLineDip(detrended[strip] || new Float64Array(0), predicted, reach);
-      const isFound = dip !== null && dip.depth >= threshold;
-      const position = isFound && dip !== null ? dip.position : predicted;
-
-      starts[strip] = { position, isFound };
-      slope = position - previous;
-      previous = position;
-    }
-  }
-
-  return starts;
-};
-
-/**
  * Знаменатель модели `1 − a·q` в точке кадра. Ноль — точка лежит за горизонтом
  * перспективы, где координата вдоль линий не определена.
  *
@@ -958,7 +691,7 @@ export const detectRulingPerspective = (
     return detrendProfile(strip.values, 2 * Math.round(step) + 1);
   });
   const size = detrended[0]?.length || 0;
-  const reach = step * SEARCH_SHARE;
+  const reach = step * TRACE_SEARCH_SHARE;
   /**
    * Координата линии `line` ровной гребёнки в бинах профиля: бины отсчитаны от
    * `origin`, а координата вдоль линий — от верха вырезки.
@@ -991,82 +724,37 @@ export const detectRulingPerspective = (
     return position + origin + column * tangent;
   };
 
-  const startDips = Array.from({ length: lineCount }, (_item, index) => {
-    const straight = lineOffset + (firstLine + index) * step;
-
-    return detrended.map((profile) => {
-      return findLineDip(profile, straight, reach);
-    });
+  const traced = traceRulingLines(detrended, {
+    lineOffset,
+    step,
+    firstLine,
+    lastLine,
+    middleLine: Math.round((height / 2 - firstLinePhase) / step),
   });
-  const threshold =
-    LINE_DEPTH_LEVEL *
-    computeQuantile(
-      startDips.flat().map((dip) => {
-        return dip === null ? 0 : dip.depth;
-      }),
-      LINE_DEPTH_QUANTILE
-    );
 
-  if (threshold <= 0) {
+  if (traced === null) {
     return toEmptyDetection(ruling);
   }
 
   /**
-   * Стартовая линия ищется от середины высоты: там отход от ровной гребёнки
-   * наименьший. Ближайшая к середине линия может быть закрыта пятном, поэтому
-   * в каждой полосе берётся ближайшая к середине найденная.
+   * Предсказанная линия ведёт трассу, но узлом не становится: измерения за ней
+   * нет, а подгонка обязана идти по найденным линиям.
    */
-  const middleIndex = Math.min(
-    lineCount - 1,
-    Math.max(0, Math.round((height / 2 - firstLinePhase) / step) - firstLine)
-  );
-  const startOrder = Array.from({ length: lineCount }, (_item, index) => {
-    return index;
-  }).sort((first, second) => {
-    return (
-      Math.abs(first - middleIndex) - Math.abs(second - middleIndex) || first - second
-    );
-  });
-  const anchorIndex = startOrder.find((index) => {
-    return (startDips[index] || []).some((dip) => {
-      return (dip?.depth || 0) >= threshold;
-    });
-  });
+  const nodes = columns.flatMap((x, strip) => {
+    return traced.reduce<TracedNode[]>((stripNodes, line, index) => {
+      const dip = line[strip]?.dip;
 
-  if (anchorIndex === undefined) {
-    return toEmptyDetection(ruling);
-  }
+      if (dip) {
+        stripNodes.push({
+          x,
+          y: toLineY(dip.position, x),
+          line: firstLine + index,
+          strip,
+        });
+      }
 
-  const anchorDips = startDips[anchorIndex] || [];
-  const anchorStrip = anchorDips.reduce((best, dip, strip) => {
-    const depth = dip?.depth || 0;
-    const bestDepth = best < 0 ? 0 : anchorDips[best]?.depth || 0;
-
-    return depth >= threshold && depth > bestDepth ? strip : best;
-  }, -1);
-  const starts = spreadStart(
-    detrended,
-    anchorStrip,
-    anchorDips[anchorStrip]?.position || 0,
-    reach,
-    threshold
-  );
-  const nodes: TracedNode[] = [];
-
-  detrended.forEach((profile, strip) => {
-    const start = starts[strip];
-
-    if (start) {
-      traceStrip(
-        profile,
-        strip,
-        columns[strip] || 0,
-        firstLine + anchorIndex,
-        start,
-        { firstLine, lastLine, step, reach, threshold, toLineY },
-        nodes
-      );
-    }
+      return stripNodes;
+    }, []);
   });
 
   const foundNodeShare = nodes.length / (lineCount * STRIP_COUNT);

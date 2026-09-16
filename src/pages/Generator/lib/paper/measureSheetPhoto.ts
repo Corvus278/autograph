@@ -1,4 +1,9 @@
-import { type DetectedRuling, detectRuling } from './detectRuling';
+import {
+  type DetectedRuling,
+  detectRuling,
+  RULED_SPAN_LEVEL,
+  type RuledEdges,
+} from './detectRuling';
 import { detectRulingPerspective } from './detectRulingPerspective';
 import type { RulingPerspectiveDetection } from './detectRulingPerspective.types';
 import { detectSheetOutline } from './detectSheetOutline';
@@ -16,10 +21,13 @@ import type {
   RulingProjection,
   SheetImageData,
   SheetOutline,
+  SheetPoint,
   SheetRulingSource,
 } from './paper.types';
 import { resolveSheetBounds } from './resolveSheetBounds';
-import { lineHeightAt, lineHeightScaleAt } from './rulingPerspective';
+import { lineCoordinateAt, lineHeightAt, lineHeightScaleAt } from './rulingPerspective';
+import { toTangent } from './sheetProfile';
+import { TRACE_SEARCH_SHARE } from './traceRulingLines';
 
 const DEGREES_IN_RADIAN = 180 / Math.PI;
 
@@ -123,6 +131,11 @@ type RulingMeasurement = {
    */
   report: SheetPhotoPerspectiveReport | null;
 };
+
+/**
+ * Край области с линиями, по высоте упирающийся в сторону листа.
+ */
+type RuledEdgeSide = keyof RuledEdges;
 
 const MISSING_REPORT: SheetPhotoPerspectiveReport | null = null;
 
@@ -325,35 +338,325 @@ const toRectifiedTransfer = (
 };
 
 /**
+ * Найдена ли сторона контура на снимке. Ненайденная сторона лежит точно на
+ * краю кадра, поэтому сравнение строгое.
+ *
+ * @param outline — контур листа
+ * @param side — верхняя или нижняя сторона
+ * @param frame — кадр фотографии
+ * @returns `true` — сторона листа видна на снимке
+ */
+const isOutlineSideFound = (
+  outline: SheetOutline,
+  side: RuledEdgeSide,
+  frame: SheetImageData
+): boolean => {
+  const { topLeft, topRight, bottomRight, bottomLeft } = outline;
+
+  switch (side) {
+    case 'top': {
+      return topLeft.y !== 0 || topRight.y !== 0;
+    }
+
+    case 'bottom': {
+      return bottomLeft.y !== frame.height || bottomRight.y !== frame.height;
+    }
+
+    default: {
+      throw new Error(`Неизвестная сторона контура: ${String(side)}`);
+    }
+  }
+};
+
+/**
+ * Высота прямой через два угла контура в столбце кадра.
+ *
+ * @param from — левый угол стороны
+ * @param to — правый угол стороны
+ * @param x — столбец кадра
+ * @returns высота стороны в столбце, px
+ */
+const toSideY = (from: SheetPoint, to: SheetPoint, x: number): number => {
+  if (to.x === from.x) {
+    return from.y;
+  }
+
+  return from.y + ((to.y - from.y) * (x - from.x)) / (to.x - from.x);
+};
+
+/**
+ * Глубина самого тёмного провала профиля в окне у строки: насколько строка
+ * темнее медианы окном в шаг вокруг неё.
+ *
+ * @param profile — средняя яркость по строкам
+ * @param center — строка, у которой ищется провал, в индексах профиля
+ * @param reach — полуширина окна поиска в строках
+ * @param half — полуширина окна медианы в строках
+ * @returns глубина провала; ноль — в окне нет ничего темнее фона
+ */
+const measureProfileDip = (
+  profile: Float64Array,
+  center: number,
+  reach: number,
+  half: number
+): number => {
+  let depth = 0;
+  const from = Math.max(1, Math.round(center - reach));
+  const to = Math.min(profile.length - 2, Math.round(center + reach));
+
+  for (let index = from; index <= to; index += 1) {
+    const window = Array.from(
+      profile.subarray(Math.max(0, index - half), index + half + 1)
+    ).sort((first, second) => {
+      return first - second;
+    });
+    const median = window[Math.floor(window.length / 2)] || 0;
+
+    depth = Math.max(depth, median - (profile[index] || 0));
+  }
+
+  return depth;
+};
+
+/**
+ * Средняя яркость строк кадра вдоль наклонных линий в полосе столбцов.
+ *
+ * @param image — полутоновая выжимка кадра
+ * @param left — левый столбец полосы
+ * @param right — правый столбец полосы, не включая
+ * @param rows — первая и последняя строка профиля в середине полосы
+ * @param tangent — тангенс наклона разлиновки
+ * @returns яркость по строкам от первой
+ */
+const buildRowProfile = (
+  image: SheetImageData,
+  left: number,
+  right: number,
+  rows: [number, number],
+  tangent: number
+): Float64Array => {
+  const { width, height, luminance } = image;
+  const [first, last] = rows;
+  const column = (left + right) / 2;
+  const profile = new Float64Array(Math.max(0, last - first + 1));
+
+  profile.forEach((_value, index) => {
+    let sum = 0;
+    let count = 0;
+
+    for (let x = Math.max(0, Math.ceil(left)); x < Math.min(width, right); x += 1) {
+      const y = Math.round(first + index + (x - column) * tangent);
+
+      if (y >= 0 && y < height) {
+        sum += luminance[y * width + x] || 0;
+        count += 1;
+      }
+    }
+
+    profile[index] = count > 0 ? sum / count : 0;
+  });
+
+  return profile;
+};
+
+/**
+ * Служит ли край вырезки полем: область с линиями упёрлась в край вырезки, а
+ * вырезка — прямоугольник, вписанный в контур, и у наклонной стороны листа
+ * между краем вырезки и стороной остаётся бумага. Там на шаг дальше крайней
+ * линии и ищется следующая — по тем же вертикальным полосам, где крайняя
+ * прослежена, в том же окне поиска и с тем же уровнем «линия есть», что у
+ * границ области. В большинстве полос, где окно помещается на бумаге, провала
+ * нет — крайняя линия и есть граница разлиновки, иначе линии идут до края
+ * листа, и сторона уходит фолбэку.
+ *
+ * @param image — полутоновая выжимка кадра
+ * @param crop — вырезка, по которой шёл ровный проход
+ * @param outline — контур листа
+ * @param detection — ровный проход
+ * @param side — край области
+ * @returns `true` — за крайней линией линий нет, её положение — поле
+ */
+const isRuledEdgeMargin = (
+  image: SheetImageData,
+  crop: SheetCrop,
+  outline: SheetOutline | null,
+  detection: DetectedRuling,
+  side: RuledEdgeSide
+): boolean => {
+  const edge = detection.ruledEdges[side];
+
+  if (!outline || !edge || !isOutlineSideFound(outline, side, image)) {
+    return false;
+  }
+
+  const { step, skewAngle } = detection;
+  const isTop = side === 'top';
+  const direction = isTop ? -1 : 1;
+  const [from, to] = isTop
+    ? [outline.topLeft, outline.topRight]
+    : [outline.bottomLeft, outline.bottomRight];
+  const tangent = toTangent(skewAngle);
+  const reach = step * TRACE_SEARCH_SHARE;
+  const half = Math.max(1, Math.floor(step / 2));
+  const stripWidth = crop.image.width / Math.max(1, edge.strips.length);
+  let room = 0;
+  let present = 0;
+
+  edge.strips.forEach((position, strip) => {
+    if (position === null) {
+      return;
+    }
+
+    const left = crop.left + strip * stripWidth;
+    const right = left + stripWidth;
+    const lineY = crop.top + position + (left + right - 2 * crop.left) * tangent * 0.5;
+    const beyondY = lineY + direction * step;
+    const sheetY = isTop
+      ? Math.max(toSideY(from, to, left), toSideY(from, to, right))
+      : Math.min(toSideY(from, to, left), toSideY(from, to, right));
+
+    if ((sheetY - beyondY) * direction < reach) {
+      return;
+    }
+
+    const first = Math.max(0, Math.ceil(Math.min(sheetY, lineY - step)));
+    const last = Math.min(image.height - 1, Math.floor(Math.max(sheetY, lineY + step)));
+    const profile = buildRowProfile(image, left, right, [first, last], tangent);
+    const lineDepth = measureProfileDip(profile, lineY - first, reach, half);
+    const beyondDepth = measureProfileDip(profile, beyondY - first, reach, half);
+
+    room += 1;
+    present += beyondDepth >= lineDepth * RULED_SPAN_LEVEL ? 1 : 0;
+  });
+
+  return room > 0 && present * 2 < room;
+};
+
+/**
+ * Ровный проход с полями у краёв вырезки, которые проверка по снимку признала
+ * границей разлиновки (`isRuledEdgeMargin`).
+ *
+ * @param image — полутоновая выжимка кадра
+ * @param crop — вырезка
+ * @param outline — контур листа
+ * @param detection — ровный проход по вырезке
+ * @returns проход с уточнёнными верхним и нижним полями
+ */
+const withEdgeMargins = (
+  image: SheetImageData,
+  crop: SheetCrop,
+  outline: SheetOutline | null,
+  detection: DetectedRuling
+): DetectedRuling => {
+  const { margins, ruledEdges } = detection;
+  const isTopMargin = isRuledEdgeMargin(image, crop, outline, detection, 'top');
+  const isBottomMargin = isRuledEdgeMargin(image, crop, outline, detection, 'bottom');
+
+  if (!isTopMargin && !isBottomMargin) {
+    return detection;
+  }
+
+  return {
+    ...detection,
+    margins: {
+      ...margins,
+      top: isTopMargin && ruledEdges.top ? ruledEdges.top.position : margins.top,
+      bottom:
+        isBottomMargin && ruledEdges.bottom
+          ? crop.image.height - ruledEdges.bottom.position
+          : margins.bottom,
+    },
+  };
+};
+
+/**
+ * Верхнее и нижнее поле второго прохода, упёршегося в край выпрямленной копии,
+ * берутся у ровного прохода: копия режется по вырезке, и за её краем второй
+ * проход линий не видит, а ровный уже проверил край по снимку. Поле ставится
+ * на ближайшую линию перспективной гребёнки: у ровного прохода линия стоит по
+ * своей гребёнке, и строка встала бы мимо линий.
+ *
+ * @param source — разлиновка второго прохода в кадре
+ * @param flat — разлиновка ровного прохода в кадре
+ * @param projection — наклон и перспектива второго прохода в кадре
+ * @param frameHeight — высота кадра
+ * @returns разлиновка с унаследованными полями
+ */
+const inheritEdgeMargins = (
+  source: SheetRulingSource,
+  flat: SheetRulingSource,
+  projection: RulingProjection,
+  frameHeight: number
+): SheetRulingSource => {
+  const margins = source.margins || { top: 0, right: 0, bottom: 0, left: 0 };
+  const flatTop = flat.margins?.top || 0;
+  const flatBottom = flat.margins?.bottom || 0;
+  const { step, firstLinePhase } = source;
+
+  const snapToLine = (y: number): number => {
+    const line = Math.round((lineCoordinateAt(projection, 0, y) - firstLinePhase) / step);
+
+    return lineHeightAt(projection, 0, firstLinePhase + line * step);
+  };
+
+  return {
+    ...source,
+    margins: {
+      ...margins,
+      top: margins.top || (flatTop && snapToLine(flatTop)),
+      bottom:
+        margins.bottom ||
+        (flatBottom && frameHeight - snapToLine(frameHeight - flatBottom)),
+    },
+  };
+};
+
+/**
  * Разлиновка вырезки: ровный проход, перспектива и, если она есть, второй
  * проход по выпрямленной копии.
  *
+ * Перспектива подгоняется по ядру разлиновки (`coreMargins`), а не по всей
+ * области с линиями: крайние линии, удержанные трассой на волне листа, модель
+ * перспективы не описывает, и их невязка отбраковала бы перспективу всего
+ * листа.
+ *
  * @param image — полутоновая выжимка кадра
  * @param crop — вырезка внутри листа
+ * @param outline — контур листа
  * @returns разлиновка кадра, итоговый проход и отчёт перспективы
  */
-const measureRuling = (image: SheetImageData, crop: SheetCrop): RulingMeasurement => {
-  const flat = detectRuling(crop.image);
+const measureRuling = (
+  image: SheetImageData,
+  crop: SheetCrop,
+  outline: SheetOutline | null
+): RulingMeasurement => {
+  const detected = detectRuling(crop.image);
 
-  if (!flat.isDetected || flat.step <= 0) {
+  if (!detected.isDetected || detected.step <= 0) {
     return {
-      source: { step: 0, firstLinePhase: 0, skewAngle: flat.skewAngle },
-      detection: flat,
+      source: { step: 0, firstLinePhase: 0, skewAngle: detected.skewAngle },
+      detection: detected,
       report: MISSING_REPORT,
     };
   }
+
+  const flat = withEdgeMargins(image, crop, outline, detected);
 
   const flatSource = toFrameSource(
     flat,
     crop.image.width,
     toFlatTransfer(crop, image, flat.skewAngle)
   );
-  const perspective = detectRulingPerspective(crop.image, flat, {
-    left: crop.left,
-    top: crop.top,
-    width: image.width,
-    height: image.height,
-  });
+  const perspective = detectRulingPerspective(
+    crop.image,
+    { ...flat, margins: flat.coreMargins },
+    {
+      left: crop.left,
+      top: crop.top,
+      width: image.width,
+      height: image.height,
+    }
+  );
   const report: SheetPhotoPerspectiveReport = {
     foundNodeShare: perspective.foundNodeShare,
     topStep: perspective.topStep,
@@ -387,14 +690,17 @@ const measureRuling = (image: SheetImageData, crop: SheetCrop): RulingMeasuremen
     };
   }
 
+  const transfer = toRectifiedTransfer(crop, image, perspective, {
+    top: rectified.top,
+    height: rectified.image.height,
+  });
+
   return {
-    source: toFrameSource(
-      second,
-      rectified.image.width,
-      toRectifiedTransfer(crop, image, perspective, {
-        top: rectified.top,
-        height: rectified.image.height,
-      })
+    source: inheritEdgeMargins(
+      toFrameSource(second, rectified.image.width, transfer),
+      flatSource,
+      transfer.projection,
+      image.height
     ),
     detection: second,
     report,
@@ -442,7 +748,7 @@ export const measureSheetPhoto = (
     };
   }
 
-  const { source, detection, report } = measureRuling(image, crop);
+  const { source, detection, report } = measureRuling(image, crop, outline);
 
   return {
     source: { ...source, outline },
