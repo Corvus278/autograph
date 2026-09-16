@@ -24,8 +24,10 @@
   формах K1/K2, линии — своя запись формулы design без импорта `lib/paper`; после G3 не правится. Владелец G3; G4, G5, G7, G8.
 - **K6 Контур и свет** — `detectSheetOutline(image) → SheetOutline | null` (ненайденная сторона лежит точно на краю кадра,
   `null` — ни одной); `extractLighting`/`extractTexture` с `{ outline }`, без контура побитово прежние. Владелец G4; G7.
-- **K7 Детектор перспективы** — `detectRulingPerspective(вырезка, ровный проход)` → перспектива в px входа или `null` + данные
-  отчёта (шаг у крайних линий, расхождение гребёнок); `1 − a·q ≥ 0,5` — по кадру; перевод в кадр — G7. Владелец G5; G7.
+- **K7 Детектор перспективы** — `detectRulingPerspective(вырезка, ровный проход, frame)` → перспектива в px входа или `null` +
+  данные отчёта (шаг у крайних линий, расхождение гребёнок) и уточнённые `skewAngle`, `step`, `firstLinePhase` (выпрямлять
+  копию G7 обязан уточнённым наклоном, иначе линии встают мимо); третий аргумент `PerspectiveFrame { left, top, width, height }`
+  — отступы вырезки и размеры кадра, по ним меряется `1 − a·q ≥ 0,5`; перевод перспективы в кадр — G7. Владелец G5; G7.
 - **K8 Измерение фото** — `measureSheetPhoto(image, { kind, outline? })` → `{ source, outline, lighting, textureMap,
   diagnostics }`; `diagnostics` несёт всё для отчётов 7.3. Владелец G7; потребители G8, G9.
 - **K9 Раскладка** — `lib/calibrate`, `lib/paginate`, `measureLayout` не читают `bend` и `outline`; перспектива — только через
