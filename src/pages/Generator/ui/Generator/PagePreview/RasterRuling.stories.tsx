@@ -21,12 +21,17 @@ import type {
   PaperFamily,
   PaperSheet,
   RulingBend,
+  RulingPerspective,
   RulingProjection,
   SheetImageData,
 } from '../../../lib/paper';
 import {
   buildSheetRuling,
   detectRuling,
+  lineCoordinateAt,
+  lineHeightAt,
+  lineHeightScaleAt,
+  lineHeightSlopeAt,
   sampleRulingBend,
   sampleRulingBendSlope,
 } from '../../../lib/paper';
@@ -464,6 +469,33 @@ const BENT_LINE_SEGMENT = 4;
 const BENT_SHEET_ID = 'bent-synthetic';
 
 /**
+ * Кадр, шаг и фаза листа с перспективой — те же, что у изогнутого листа.
+ */
+const PERSPECTIVE_SHEET_WIDTH = 1600;
+const PERSPECTIVE_SHEET_HEIGHT = 2000;
+const PERSPECTIVE_SHEET_STEP = 40;
+const PERSPECTIVE_SHEET_PHASE = 11;
+
+/**
+ * Перспектива листа story. Начало — середина кадра: шаг у верхнего края кадра
+ * около 0,96 шага, у нижнего — около 1,04, а линии расходятся вправо на долю
+ * процента. Строки проверяемой страницы стоят у верха листа, где координата
+ * вдоль линий отстоит от высоты линии на фотографии почти на полшага: строки,
+ * нарисованные без перспективы, уходят с линий далеко за допуск.
+ */
+const SHEET_PERSPECTIVE: RulingPerspective = {
+  originX: PERSPECTIVE_SHEET_WIDTH / 2,
+  originY: PERSPECTIVE_SHEET_HEIGHT / 2,
+  convergenceX: 5e-6,
+  convergenceY: 2e-5,
+};
+
+/**
+ * Идентификатор листа с перспективой: не совпадает ни с одним экземпляром пака.
+ */
+const PERSPECTIVE_SHEET_ID = 'perspective-synthetic';
+
+/**
  * Наименьший отход найденного изгиба в центре крайней полосы в долях шага:
  * меньше — и строки без изгиба почти укладывались бы в допуск чернил, а
  * отрицательный контроль ничего бы не проверил.
@@ -507,6 +539,11 @@ let lastProbe: RasterProbe | null = null;
  * мегапикселя работает заметное время.
  */
 let bentSheet: PaperSheet | null = null;
+
+/**
+ * Лист с перспективой рисуется один раз на прогон.
+ */
+let perspectiveSheet: PaperSheet | null = null;
 
 /**
  * Подключение своего шрифта одно на прогон: семейство у него всегда одно.
@@ -613,6 +650,31 @@ const sampleBend = (
   y: number
 ): number => {
   return bend ? sampleRulingBend(bend, projection, x, y) : 0;
+};
+
+/**
+ * Высота, на которую рендерер ставит точку страницы: `Y(x, U) + d`. Раскладка
+ * поставила точку на прямую наклонную гребёнку блока, поэтому её координата
+ * вдоль линий — `U = y − x × tg θ`; перспектива геометрии переводит `U` в
+ * высоту линии на фотографии, изгиб геометрии опускает линию на свой отход.
+ *
+ * @param geometry — геометрия отрисовки: наклон блока, перспектива и изгиб
+ * @param x — столбец точки в пикселях страницы
+ * @param y — высота точки на прямой гребёнке в пикселях страницы
+ * @returns высота нарисованной точки в пикселях страницы
+ */
+const placeOnLine = (
+  geometry: PageRenderParams['geometry'],
+  x: number,
+  y: number
+): number => {
+  const { blockRotate, perspective, bend } = geometry;
+  const projection = { skewAngle: blockRotate, perspective };
+  const lineY = perspective
+    ? lineHeightAt(projection, x, y - x * Math.tan(toRadians(blockRotate)))
+    : y;
+
+  return lineY + sampleBend(bend, projection, x, lineY);
 };
 
 /**
@@ -916,7 +978,8 @@ const measureRasterRuling = (raster: PageRaster, band: RasterBand): RasterRuling
 };
 
 /**
- * Прямые базовые линии страницы в столбце растра, без изгиба.
+ * Базовые линии страницы на прямой наклонной гребёнке в столбце растра — до
+ * перспективы и изгиба.
  *
  * Считаются по той же модели строчного бокса, которой рисует рендерер:
  * текст стоит на базовой линии `topOffset + fontAscent × кегль + n × шаг
@@ -940,28 +1003,6 @@ const buildBaselines = (params: PageRenderParams, column: number): number[] => {
 
     return baseline * stretch + rise;
   });
-};
-
-/**
- * Наибольшее отклонение базовых линий от ближайшей линии растра в долях шага.
- *
- * @param baselines — высоты базовых линий в пикселях страницы
- * @param shift — общий сдвиг базовых линий: изгиб линий листа в полосе
- * @param firstLine — высота одной из линий растра
- * @param period — шаг линий растра
- * @returns отклонение в долях шага
- */
-const measureDrift = (
-  baselines: number[],
-  shift: number,
-  firstLine: number,
-  period: number
-): number => {
-  return baselines.reduce((drift, baseline) => {
-    const lines = (baseline + shift - firstLine) / period;
-
-    return Math.max(drift, Math.abs(lines - Math.round(lines)));
-  }, 0);
 };
 
 /**
@@ -1102,15 +1143,20 @@ const buildStrips = (probe: RasterProbe): StripSet => {
  * Сверяет строки страницы с линиями растра в одной полосе.
  *
  * Линии растра меряются в полосе без чернил под текстом: профиль снимается
- * вдоль линии листа — по наклону блока плюс местному наклону изгиба в центре
- * полосы, со сдвигом от её центра, — и фаза даёт высоту линии в центральном
- * столбце. Базовые линии геометрии вместе с изгибом листа в центре полосы
- * обязаны лечь на эти линии.
+ * вдоль линии листа — по её местному наклону с перспективой плюс местному
+ * наклону изгиба в центре полосы, со сдвигом от её центра, — и фаза даёт
+ * высоту линии в центральном столбце.
  *
- * Низ чернил каждой строки ищется у той базовой линии, по которой строку
- * рисовали, а сверяется с линией растра, перенесённой от полосы замера к
- * строке по найденному изгибу: у изгиба, меняющегося от строки к строке,
- * линия у строки стоит не там, где в полосе замера.
+ * Найденная линия переводится в координату вдоль линий разлиновки листа, а шаг
+ * растра — в шаг этой координаты делением на местный масштаб шага: так
+ * гребёнка растра переносится от полосы замера к любой строке, хотя на листе с
+ * перспективой шаг у строки другой. Линия строки — та, чья координата ближе к
+ * координате строки на прямой гребёнке блока, по которой строку разложили; её
+ * высота у строки — `Y(x, U) + d`.
+ *
+ * Базовая линия, нарисованная геометрией отрисовки, и низ чернил, найденный у
+ * неё, обязаны лечь на эту высоту; отклонение считается в долях местного шага
+ * растра у строки.
  *
  * @param probe — проба страницы: лист и его разлиновка
  * @param raster — растр страницы
@@ -1130,43 +1176,45 @@ const measureStripFit = (
 ): StripFit => {
   const { sheet, pageIndex } = probe;
   const ruling = getPageRuling(sheet, pageIndex);
-  const { fontSizePx, lineSpacing, fontMetrics, blockRotate, bend } = params.geometry;
+  const { geometry } = params;
+  const { fontSizePx, lineSpacing, fontMetrics, blockRotate } = geometry;
+  const { center } = strip;
   const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
   const bandMiddle = (band.top + band.bottom) / 2;
   const blockProjection = { skewAngle: blockRotate, perspective: null };
-  const bandBend = sampleBend(ruling.bend, ruling, strip.center, bandMiddle);
+  const bandBend = sampleBend(ruling.bend, ruling, center, bandMiddle);
   const bendSlope = ruling.bend
-    ? sampleRulingBendSlope(ruling.bend, ruling, strip.center, bandMiddle)
+    ? sampleRulingBendSlope(ruling.bend, ruling, center, bandMiddle)
     : 0;
-  const tangent = Math.tan(toRadians(blockRotate)) + bendSlope;
+  const bandLine = lineCoordinateAt(ruling, center, bandMiddle - bandBend);
+  const tangent = lineHeightSlopeAt(ruling, bandLine) + bendSlope;
   const lineBand: RasterBand = { ...band, left: strip.left, right: strip.right };
-  const profile = buildProfile(raster, lineBand, tangent, strip.center);
+  const profile = buildProfile(raster, lineBand, tangent, center);
   const phase = measurePhase(buildDarkness(profile.values), period);
   const firstLine = band.top + profile.origin + phase;
-  const baselines = buildBaselines(params, strip.center);
+  const firstLineU = lineCoordinateAt(ruling, center, firstLine - bandBend);
+  const periodU = period / lineHeightScaleAt(ruling, center, firstLineU);
+  const baselines = buildBaselines(params, center);
   const inkTop = Math.max(0, Math.floor((baselines[0] || 0) - 2 * lineStep));
   const inkBand: RasterBand = { ...lineBand, top: inkTop, bottom: band.top };
-  const ink = buildInkProfile(raster, inkBand, tangent, strip.center).values;
+  const ink = buildInkProfile(raster, inkBand, tangent, center).values;
+  let drift = 0;
 
   const inkOffsets = baselines.map((baseline) => {
-    const drawn = baseline + sampleBend(bend, blockProjection, strip.center, baseline);
+    const rowU = lineCoordinateAt(blockProjection, center, baseline);
+    const targetU = firstLineU + Math.round((rowU - firstLineU) / periodU) * periodU;
+    const lineY = lineHeightAt(ruling, center, targetU);
+    const target = lineY + sampleBend(ruling.bend, ruling, center, lineY);
+    const localPeriod = periodU * lineHeightScaleAt(ruling, center, targetU);
+    const drawn = placeOnLine(geometry, center, baseline);
     const bottom = measureInkBottom(ink, drawn - inkTop, lineStep);
 
-    if (bottom === null) {
-      return null;
-    }
+    drift = Math.max(drift, Math.abs(drawn - target) / localPeriod);
 
-    const line = Math.round((baseline + bandBend - firstLine) / period);
-    const rowBend = sampleBend(ruling.bend, ruling, strip.center, baseline);
-    const target = firstLine + line * period + rowBend - bandBend;
-
-    return Math.abs(inkTop + bottom - target) / period;
+    return bottom === null ? null : Math.abs(inkTop + bottom - target) / localPeriod;
   });
 
-  return {
-    drift: measureDrift(baselines, bandBend, firstLine, period),
-    inkOffsets,
-  };
+  return { drift, inkOffsets };
 };
 
 /**
@@ -1200,14 +1248,18 @@ const buildEmptyBand = (probe: RasterProbe): RasterBand | null => {
 
   /**
    * Полоса начинается под самой низкой точкой последней строки: блок повёрнут,
-   * и у края кадра, куда строки опускаются, строка ниже, чем у левого края, а
+   * и у края кадра, куда строки опускаются, строка ниже, чем у другого края, а
    * изгиб опускает её ещё на свой наибольший отход вниз, — иначе в крайней
-   * полосе замера под линиями оказались бы хвосты букв.
+   * полосе замера под линиями оказались бы хвосты букв. Линия с перспективой
+   * прямая, поэтому ниже всего строка у одного из краёв кадра.
    */
+  const projection = { skewAngle: blockRotate, perspective: geometry.perspective };
+  const lastLine = lastBaseline / Math.cos(radians);
   const lowest =
-    lastBaseline / Math.cos(radians) +
-    Math.max(0, sheet.width * Math.tan(radians)) +
-    bendDrop;
+    Math.max(
+      lineHeightAt(projection, 0, lastLine),
+      lineHeightAt(projection, sheet.width, lastLine)
+    ) + bendDrop;
   const top = Math.ceil(Math.max(0, lowest + lineStep));
   const limit = Math.floor(Math.min(sheet.height, background.height));
   const bottom = Math.min(limit, top + MAX_BAND_STEPS * sheet.ruling.step);
@@ -1325,28 +1377,41 @@ const expectRasterOnRuling = async (
   await expect(ruling.contrast).toBeGreaterThan(MIN_CONTRAST);
 
   /**
-   * Шаг разлиновки на растре — шаг разлиновки листа: страница равна кадру.
-   * Растяни отрисовка фотографию, шаг ушёл бы на проценты, а строки — с линий.
+   * Шаг разлиновки на растре — шаг разлиновки листа с местным масштабом
+   * перспективы в полосе замера: страница равна кадру. Растяни отрисовка
+   * фотографию, шаг ушёл бы на проценты, а строки — с линий.
    */
-  await expect(ruling.period).toBeGreaterThan(sheet.ruling.step * (1 - PERIOD_TOLERANCE));
-  await expect(ruling.period).toBeLessThan(sheet.ruling.step * (1 + PERIOD_TOLERANCE));
+  const { geometry } = probe.params;
+  const pageRuling = getPageRuling(sheet, probe.pageIndex);
+  const bandX = (band.left + band.right) / 2;
+  const bandLine = lineCoordinateAt(pageRuling, bandX, (band.top + band.bottom) / 2);
+  const scale = lineHeightScaleAt(pageRuling, bandX, bandLine);
+  const bandStep = sheet.ruling.step * scale;
+
+  await expect(ruling.period).toBeGreaterThan(bandStep * (1 - PERIOD_TOLERANCE));
+  await expect(ruling.period).toBeLessThan(bandStep * (1 + PERIOD_TOLERANCE));
 
   /**
-   * Наклон линий на растре — наклон блока текста. На отражённой странице
-   * разлиновка вместе с листом переворачивается, и блок обязан наклониться в
-   * ту же сторону.
+   * Наклон линий на растре — наклон, под которым рендерер ставит строки в
+   * полосе замера: наклон блока с перспективой геометрии. На отражённой
+   * странице разлиновка вместе с листом переворачивается, и строки обязаны
+   * наклониться в ту же сторону.
    */
-  const blockAngle = probe.params.geometry.blockRotate;
+  const blockProjection = {
+    skewAngle: geometry.blockRotate,
+    perspective: geometry.perspective,
+  };
+  const blockAngle =
+    (Math.atan(lineHeightSlopeAt(blockProjection, bandLine)) * 180) / Math.PI;
   const rasterAngle = (Math.atan(ruling.tangent) * 180) / Math.PI;
 
   await expect(Math.abs(rasterAngle - blockAngle)).toBeLessThan(ANGLE_TOLERANCE);
 
   const rowSteps = family.kind === 'grid' ? GRID_ROW_STEPS : 1;
   const lineStep =
-    probe.params.geometry.fontSizePx * probe.params.geometry.fontMetrics.lineHeight +
-    probe.params.geometry.lineSpacing;
+    geometry.fontSizePx * geometry.fontMetrics.lineHeight + geometry.lineSpacing;
 
-  await expect(lineStep / ruling.period).toBeCloseTo(rowSteps, 1);
+  await expect((lineStep * scale) / ruling.period).toBeCloseTo(rowSteps, 1);
 
   /**
    * Строки сверяются с линиями в трёх узких полосах: на изогнутом листе
@@ -1661,8 +1726,9 @@ const createMeasureContext = (
  * Габарит берётся у каждой строки свой — по её первой букве, её базовой линии
  * и перу на краю блока, — и считается по самому шрифту, а не по растру: иначе
  * проверка мерила бы допуск тем же, что проверяет. Встроенный шрифт меряется
- * контурами, свой — метриками начертания. На изогнутом листе буква опускается
- * вместе с линией, и габарит сдвигается на отход изгиба в месте пера.
+ * контурами, свой — метриками начертания. На изогнутом листе и листе с
+ * перспективой буква встаёт на линию фотографии, и габарит сдвигается на тот
+ * же сдвиг `Y + d − y`, что рендерер даёт точке пера.
  *
  * @param params — параметры отрисовки страницы
  * @returns габариты свешенных букв; строки без свеса в список не попадают
@@ -1670,7 +1736,7 @@ const createMeasureContext = (
 const buildOverhangBoxes = (params: PageRenderParams): OverhangBox[] => {
   const { glyphs, page, geometry, fontFamily } = params;
   const { fontSizePx, lineSpacing, topOffset, leftPadding, fontMetrics } = geometry;
-  const { blockRotate, bend } = geometry;
+  const { blockRotate } = geometry;
   const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
   const radians = toRadians(blockRotate);
   const context = glyphs ? null : createMeasureContext(fontSizePx, fontFamily);
@@ -1694,12 +1760,7 @@ const buildOverhangBoxes = (params: PageRenderParams): OverhangBox[] => {
     const baseline = topOffset + fontMetrics.fontAscent * fontSizePx + index * lineStep;
     const penX = leftPadding * Math.cos(radians) - baseline * Math.sin(radians);
     const penY = leftPadding * Math.sin(radians) + baseline * Math.cos(radians);
-    const shift = sampleBend(
-      bend,
-      { skewAngle: blockRotate, perspective: null },
-      penX,
-      penY
-    );
+    const shift = placeOnLine(geometry, penX, penY) - penY;
 
     acc.push({
       left: leftPadding + extent.left,
@@ -1714,7 +1775,7 @@ const buildOverhangBoxes = (params: PageRenderParams): OverhangBox[] => {
 /**
  * Верх строчного бокса первой строки и низ бокса последней в пикселях
  * страницы — по точкам строки от левого до правого края блока, с поворотом
- * блока и изгибом строк.
+ * блока, перспективой и изгибом строк.
  *
  * @param params — параметры отрисовки страницы
  * @returns крайние высоты боксов
@@ -1722,7 +1783,7 @@ const buildOverhangBoxes = (params: PageRenderParams): OverhangBox[] => {
 const measureLineBoxEdges = (params: PageRenderParams): LineBoxEdges => {
   const { geometry, page } = params;
   const { fontSizePx, lineSpacing, topOffset, fontMetrics } = geometry;
-  const { leftPadding, blockWidth, blockRotate, bend } = geometry;
+  const { leftPadding, blockWidth, blockRotate } = geometry;
   const lineStep = fontSizePx * fontMetrics.lineHeight + lineSpacing;
   const boxBottom =
     topOffset +
@@ -1731,7 +1792,6 @@ const measureLineBoxEdges = (params: PageRenderParams): LineBoxEdges => {
   const radians = toRadians(blockRotate);
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const blockProjection = { skewAngle: blockRotate, perspective: null };
   let top = Number.POSITIVE_INFINITY;
   let bottom = Number.NEGATIVE_INFINITY;
 
@@ -1742,11 +1802,8 @@ const measureLineBoxEdges = (params: PageRenderParams): LineBoxEdges => {
     const bottomX = along * cos - boxBottom * sin;
     const bottomY = along * sin + boxBottom * cos;
 
-    top = Math.min(top, topY + sampleBend(bend, blockProjection, topX, topY));
-    bottom = Math.max(
-      bottom,
-      bottomY + sampleBend(bend, blockProjection, bottomX, bottomY)
-    );
+    top = Math.min(top, placeOnLine(geometry, topX, topY));
+    bottom = Math.max(bottom, placeOnLine(geometry, bottomX, bottomY));
   }
 
   return { top, bottom };
@@ -2202,13 +2259,13 @@ const resolveBentSheet = (): PaperSheet => {
 };
 
 /**
- * Семьи стора с изогнутым листом в семье линейки.
+ * Семьи стора с синтетическим листом в семье линейки.
  *
  * @param families — предустановленные семьи
- * @param sheet — изогнутый лист
+ * @param sheet — синтетический лист
  * @returns семьи с добавленным листом
  */
-const withBentSheet = (families: PaperFamily[], sheet: PaperSheet): PaperFamily[] => {
+const withLinedSheet = (families: PaperFamily[], sheet: PaperSheet): PaperFamily[] => {
   return families.map((family) => {
     return family.id === LINED_FAMILY_ID
       ? { ...family, sheets: [...family.sheets, sheet] }
@@ -2217,24 +2274,26 @@ const withBentSheet = (families: PaperFamily[], sheet: PaperSheet): PaperFamily[
 };
 
 /**
- * Проверяет, что та же страница, нарисованная с другим изгибом строк, уводит
- * низ чернил в обеих крайних полосах от линий фотографии за допуск.
+ * Проверяет, что та же страница, нарисованная с другим изгибом или другой
+ * перспективой строк, уводит низ чернил в обеих крайних полосах от линий
+ * фотографии за допуск.
  *
  * @param probe — проба проверенной страницы
  * @param image — фотография листа страницы
  * @param band — полоса без чернил под текстом
- * @param bend — изгиб, которым гнутся строки; `null` — строки прямые
+ * @param lines — изгиб и перспектива, которыми строки встают на линии; `null`
+ *   в поле — строки без изгиба или без перспективы
  */
-const expectBendMismatch = async (
+const expectLineMismatch = async (
   probe: RasterProbe,
   image: RenderImage,
   band: RasterBand,
-  bend: RulingBend | null
+  lines: Pick<PageRenderParams['geometry'], 'bend' | 'perspective'>
 ): Promise<void> => {
   const strips = buildStrips(probe);
   const params: PageRenderParams = {
     ...probe.params,
-    geometry: { ...probe.params.geometry, bend },
+    geometry: { ...probe.params.geometry, ...lines },
   };
   const raster = renderProbeRaster(probe, image, params);
   const { period } = measureRasterRuling(raster, band);
@@ -2262,7 +2321,7 @@ const checkBentRaster = async (customFontFamily: string | null): Promise<void> =
   await prepareFont(customFontFamily);
 
   const sheet = resolveBentSheet();
-  const families = withBentSheet(await loadPaperFamilies(), sheet);
+  const families = withLinedSheet(await loadPaperFamilies(), sheet);
 
   for (const pageIndex of SPREAD_PAGES) {
     const { probe, image } = await checkSheetRaster(
@@ -2292,11 +2351,139 @@ const checkBentRaster = async (customFontFamily: string | null): Promise<void> =
       );
     }
 
-    await expectBendMismatch(probe, image, band, null);
+    await expectLineMismatch(probe, image, band, { bend: null, perspective: null });
 
     if (pageIndex % 2 === 1) {
-      await expectBendMismatch(probe, image, band, sheet.ruling.bend);
+      await expectLineMismatch(probe, image, band, {
+        bend: sheet.ruling.bend,
+        perspective: null,
+      });
     }
+  }
+};
+
+/**
+ * Высота линии листа с перспективой в столбце кадра — своя запись формулы
+ * перспективы для листа без наклона, а не вызов `lib/paper`: фотография обязана
+ * сойтись с разлиновкой, а не повторить её расчёт.
+ *
+ * @param line — номер линии, считая от линии фазы
+ * @param x — столбец кадра
+ * @returns высота линии в пикселях кадра
+ */
+const computePerspectiveLineY = (line: number, x: number): number => {
+  const { originX, originY, convergenceX, convergenceY } = SHEET_PERSPECTIVE;
+  const offset = PERSPECTIVE_SHEET_PHASE + line * PERSPECTIVE_SHEET_STEP - originY;
+
+  return (
+    originY + (offset * (1 + convergenceX * (x - originX))) / (1 - offset * convergenceY)
+  );
+};
+
+/**
+ * Рисует лист в линейку с перспективой: линии во весь кадр, шаг растёт сверху
+ * вниз, и линии расходятся по ширине.
+ *
+ * @returns канва с фотографией листа
+ */
+const drawPerspectiveSheet = (): HTMLCanvasElement => {
+  const canvas = document.createElement('canvas');
+
+  canvas.width = PERSPECTIVE_SHEET_WIDTH;
+  canvas.height = PERSPECTIVE_SHEET_HEIGHT;
+
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    throw new Error('Браузер не дал контекст canvas');
+  }
+
+  context.fillStyle = BENT_PAPER_COLOR;
+  context.fillRect(0, 0, PERSPECTIVE_SHEET_WIDTH, PERSPECTIVE_SHEET_HEIGHT);
+  context.strokeStyle = BENT_LINE_COLOR;
+  context.lineWidth = BENT_LINE_WIDTH;
+
+  for (
+    let line = -1;
+    computePerspectiveLineY(line, 0) < PERSPECTIVE_SHEET_HEIGHT;
+    line += 1
+  ) {
+    context.beginPath();
+    context.moveTo(0, computePerspectiveLineY(line, 0));
+    context.lineTo(
+      PERSPECTIVE_SHEET_WIDTH,
+      computePerspectiveLineY(line, PERSPECTIVE_SHEET_WIDTH)
+    );
+    context.stroke();
+  }
+
+  return canvas;
+};
+
+/**
+ * Лист с перспективой прогона. Разлиновка — литерал: у пресет-пака перспективы
+ * нет, а поиск перспективы на фотографии проверяют юнит-тесты, и здесь ему
+ * нечего добавить к проверке отрисовки. Поля — фолбэком от краёв кадра.
+ *
+ * @returns экземпляр листа
+ */
+const resolvePerspectiveSheet = (): PaperSheet => {
+  perspectiveSheet = perspectiveSheet || {
+    id: PERSPECTIVE_SHEET_ID,
+    label: 'Лист с перспективой',
+    src: drawPerspectiveSheet().toDataURL('image/png'),
+    width: PERSPECTIVE_SHEET_WIDTH,
+    height: PERSPECTIVE_SHEET_HEIGHT,
+    ruling: buildSheetRuling(
+      {
+        step: PERSPECTIVE_SHEET_STEP,
+        firstLinePhase: PERSPECTIVE_SHEET_PHASE,
+        skewAngle: 0,
+        perspective: SHEET_PERSPECTIVE,
+      },
+      { width: PERSPECTIVE_SHEET_WIDTH, height: PERSPECTIVE_SHEET_HEIGHT }
+    ),
+    lighting: null,
+    texture: null,
+  };
+
+  return perspectiveSheet;
+};
+
+/**
+ * Проверяет строки на листе с перспективой на нечётной и зеркальной страницах.
+ *
+ * Отрицательный контроль — та же страница, нарисованная без перспективы: низ
+ * чернил в крайних полосах уходит от линий фотографии за допуск, иначе
+ * проверка не отличала бы строки на перспективе от строк на прямой гребёнке.
+ *
+ * @param customFontFamily — свой шрифт; `null` — встроенный шрифт проверки
+ */
+const checkPerspectiveRaster = async (customFontFamily: string | null): Promise<void> => {
+  await prepareFont(customFontFamily);
+
+  const sheet = resolvePerspectiveSheet();
+  const families = withLinedSheet(await loadPaperFamilies(), sheet);
+
+  for (const pageIndex of SPREAD_PAGES) {
+    const { probe, image } = await checkSheetRaster(
+      families,
+      LINED_FAMILY_ID,
+      sheet,
+      pageIndex,
+      customFontFamily
+    );
+    const band = buildEmptyBand(probe);
+
+    if (!band) {
+      throw new Error(`Полосы без чернил не осталось: ${sheet.id}, ${pageIndex}`);
+    }
+
+    await expect(probe.params.geometry.perspective).not.toBeNull();
+    await expectLineMismatch(probe, image, band, {
+      bend: probe.params.geometry.bend,
+      perspective: null,
+    });
   }
 };
 
@@ -2415,7 +2602,7 @@ export const LinedCustomFontStaysOnPaper: Story = {
 export const BentTextStaysOnPaper: Story = {
   play: async () => {
     const sheet = resolveBentSheet();
-    const families = withBentSheet(await loadPaperFamilies(), sheet);
+    const families = withLinedSheet(await loadPaperFamilies(), sheet);
 
     for (const customFontFamily of FONT_VARIANTS) {
       await prepareFont(customFontFamily);
@@ -2429,6 +2616,54 @@ export const BentTextStaysOnPaper: Story = {
 
       for (const probe of probes) {
         await expect(probe.params.geometry.bend).not.toBeNull();
+      }
+    }
+  },
+};
+
+/**
+ * Строки следуют перспективе линий листа от левого до правого края блока — на
+ * нечётной и на зеркальной странице, — а те же строки без перспективы уходят с
+ * линий за допуск.
+ */
+export const PerspectiveRasterRuling: Story = {
+  play: async () => {
+    await checkPerspectiveRaster(null);
+  },
+};
+
+/**
+ * Свой шрифт следует перспективе: буквы без контуров садятся на линию так же,
+ * как контуры встроенного шрифта.
+ */
+export const CustomFontPerspectiveRasterRuling: Story = {
+  play: async () => {
+    await checkPerspectiveRaster(CUSTOM_FONT_FAMILY);
+  },
+};
+
+/**
+ * Текст остаётся на бумаге на листе с перспективой: строки встают на линии
+ * фотографии, а боксы и чернила не уходят за поля и края кадра — встроенным и
+ * своим шрифтом.
+ */
+export const PerspectiveTextStaysOnPaper: Story = {
+  play: async () => {
+    const sheet = resolvePerspectiveSheet();
+    const families = withLinedSheet(await loadPaperFamilies(), sheet);
+
+    for (const customFontFamily of FONT_VARIANTS) {
+      await prepareFont(customFontFamily);
+
+      const probes = await checkSheetTextOnPaper(
+        families,
+        LINED_FAMILY_ID,
+        sheet.id,
+        customFontFamily
+      );
+
+      for (const probe of probes) {
+        await expect(probe.params.geometry.perspective).not.toBeNull();
       }
     }
   },

@@ -5,8 +5,13 @@ import { expect, waitFor } from 'storybook/test';
 
 import { GRID_FAMILY_ID, HANDWRITING_FONTS, LINED_FAMILY_ID } from '../../../config';
 import { loadFontMetrics } from '../../../lib/measure/measureFontMetrics';
-import type { PaperFamily, PaperSheet, RulingBend } from '../../../lib/paper';
-import { sampleRulingBend } from '../../../lib/paper';
+import type {
+  PaperFamily,
+  PaperSheet,
+  RulingBend,
+  RulingPerspective,
+} from '../../../lib/paper';
+import { lineCoordinateAt, lineHeightAt, sampleRulingBend } from '../../../lib/paper';
 import { clearLayoutCache } from '../../../model/measureLayout';
 import { loadPaperFamilies } from '../../../model/paperProfiles';
 import {
@@ -81,6 +86,11 @@ type BaselineProbe = {
   bend: RulingBend | null;
 
   /**
+   * Перспектива, по которой рендерер ставит строки на линии страницы.
+   */
+  perspective: RulingPerspective | null;
+
+  /**
    * Подъём строчного бокса над базовой линией в долях кегля.
    */
   fontAscent: number;
@@ -109,6 +119,11 @@ type BaselineProbe = {
    * Изгиб линий разлиновки страницы; на чётной странице — отражённый.
    */
   rulingBend: RulingBend | null;
+
+  /**
+   * Перспектива разлиновки страницы; на чётной странице — отражённая.
+   */
+  rulingPerspective: RulingPerspective | null;
 
   /**
    * Число строк на показанной странице.
@@ -193,6 +208,15 @@ const AMPLIFIED_BEND_SHARE = 0.4;
 const OFFSET_PRECISION = 100;
 
 /**
+ * Перспектива листа story: шаг у нижних линий на четыре процента больше, чем у
+ * верхних, — как в сценарии требования, — а расстояние между линиями от левого
+ * края кадра до правого меняется на процент. У пресет-пака перспективы нет,
+ * поэтому она задаётся литералом.
+ */
+const PERSPECTIVE_STEP_GROWTH = 0.04;
+const PERSPECTIVE_CONVERGENCE_SHARE = 0.01;
+
+/**
  * Шрифты, на которых проверяется попадание. Первые из пресета: расхождение
  * метрик ловится уже на нескольких начертаниях, а прогонять все шестнадцать —
  * минуты в браузере на пустом месте.
@@ -236,12 +260,14 @@ const BaselineFitProbe: FC = () => {
           blockWidth: params.geometry.blockWidth,
           blockRotate: params.geometry.blockRotate,
           bend: params.geometry.bend,
+          perspective: params.geometry.perspective,
           fontAscent: params.geometry.fontMetrics.fontAscent,
           lineHeight: params.geometry.fontMetrics.lineHeight,
           step: ruling.step,
           firstLinePhase: ruling.firstLinePhase,
           skewAngle: ruling.skewAngle,
           rulingBend: ruling.bend,
+          rulingPerspective: ruling.perspective,
           lineCount: params.page.lines.length,
           pageWidth: source.pageWidth,
           pageHeight: source.pageHeight,
@@ -292,11 +318,12 @@ const toRadians = (degrees: number): number => {
  * Расстояние от точки страницы до ближайшей линии разлиновки листа в долях
  * шага, по вертикали.
  *
- * Линия k проходит через столбец x на высоте `фаза + k × шаг + x × tg θ` плюс
- * изгиб линии в этом столбце. Изгиб читается в точке самой линии, а не в
- * сверяемой точке: у изогнутой разлиновки соседние линии изогнуты по-разному.
- * Кандидаты — ближайшая прямая линия и две соседние: изгиб до половины шага
- * может сделать ближайшей соседнюю.
+ * Линия k проходит через столбец x на высоте `Y(x, фаза + k × шаг)` плюс изгиб
+ * линии в этом столбце: `Y` переводит координату вдоль линий в высоту на
+ * фотографии с наклоном и перспективой листа. Изгиб читается в точке самой
+ * линии, а не в сверяемой точке: у изогнутой разлиновки соседние линии изогнуты
+ * по-разному. Кандидаты — ближайшая линия без изгиба и две соседние: изгиб до
+ * половины шага может сделать ближайшей соседнюю.
  *
  * @param probe — снимок разлиновки страницы
  * @param x — столбец точки в пикселях страницы
@@ -304,18 +331,18 @@ const toRadians = (degrees: number): number => {
  * @returns расстояние в долях шага
  */
 const measurePointDrift = (probe: BaselineProbe, x: number, y: number): number => {
-  const { step, firstLinePhase, skewAngle, rulingBend } = probe;
-  const tangent = Math.tan(toRadians(skewAngle));
-  const nearest = Math.round((y - x * tangent - firstLinePhase) / step);
+  const { step, firstLinePhase, skewAngle, rulingBend, rulingPerspective } = probe;
+  const projection = { skewAngle, perspective: rulingPerspective };
+  const nearest = Math.round(
+    (lineCoordinateAt(projection, x, y) - firstLinePhase) / step
+  );
   let drift = Number.POSITIVE_INFINITY;
 
   for (let line = nearest - 1; line <= nearest + 1; line += 1) {
-    const straightY = firstLinePhase + line * step + x * tangent;
+    const straightY = lineHeightAt(projection, x, firstLinePhase + line * step);
     const lineY =
       straightY +
-      (rulingBend
-        ? sampleRulingBend(rulingBend, { skewAngle, perspective: null }, x, straightY)
-        : 0);
+      (rulingBend ? sampleRulingBend(rulingBend, projection, x, straightY) : 0);
 
     drift = Math.min(drift, Math.abs(y - lineY) / step);
   }
@@ -329,19 +356,24 @@ const measurePointDrift = (probe: BaselineProbe, x: number, y: number): number =
  *
  * Базовые линии считаются по модели рендерера: до поворота строка n стоит на
  * высоте `topOffset + fontAscent × кегль + n × шаг строк`, блок поворачивается
- * вокруг левого верхнего угла страницы, а изгиб сдвигает точку по вертикали
- * на отход, прочитанный в её месте на странице под углом блока. На листе в
- * клетку строка занимает две клетки, и базовая линия садится на каждую вторую
- * линию, поэтому сверка идёт с ближайшей.
+ * вокруг левого верхнего угла страницы, и точка P встаёт на высоту
+ * `Y(P.x, U) + d` своей линии: `U = P.y − P.x × tg θ` — координата вдоль линий
+ * прямой наклонной гребёнки, по которой строку разложили, `Y` переводит её в
+ * высоту на фотографии по перспективе рендерера, а изгиб `d` читается в точке
+ * линии. На листе в клетку строка занимает две клетки, и базовая линия садится
+ * на каждую вторую линию, поэтому сверка идёт с ближайшей.
  *
  * @param probe — снимок параметров отрисовки и разлиновки
  * @param bend — изгиб, которым гнутся строки; не задан — изгиб рендерера,
- *   `null` — тот же расчёт для прямых строк
+ *   `null` — тот же расчёт для строк без изгиба
+ * @param perspective — перспектива, по которой строки встают на линии; не
+ *   задана — перспектива рендерера, `null` — тот же расчёт без перспективы
  * @returns отклонение в долях шага разлиновки
  */
 const measureBaselineDrift = (
   probe: BaselineProbe,
-  bend: RulingBend | null = probe.bend
+  bend: RulingBend | null = probe.bend,
+  perspective: RulingPerspective | null = probe.perspective
 ): number => {
   const { topOffset, fontSizePx, fontAscent, blockRotate } = probe;
   const { leftPadding, blockWidth, lineCount } = probe;
@@ -349,6 +381,8 @@ const measureBaselineDrift = (
   const radians = toRadians(blockRotate);
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
+  const tangent = Math.tan(radians);
+  const projection = { skewAngle: blockRotate, perspective };
   let drift = 0;
 
   for (let index = 0; index < lineCount; index += 1) {
@@ -358,11 +392,10 @@ const measureBaselineDrift = (
       const along = leftPadding + (blockWidth * point) / (DRIFT_POINT_COUNT - 1);
       const x = along * cos - baseline * sin;
       const y = along * sin + baseline * cos;
-      const shift = bend
-        ? sampleRulingBend(bend, { skewAngle: blockRotate, perspective: null }, x, y)
-        : 0;
+      const lineY = perspective ? lineHeightAt(projection, x, y - x * tangent) : y;
+      const drawnY = lineY + (bend ? sampleRulingBend(bend, projection, x, lineY) : 0);
 
-      drift = Math.max(drift, measurePointDrift(probe, x, y + shift));
+      drift = Math.max(drift, measurePointDrift(probe, x, drawnY));
     }
   }
 
@@ -602,6 +635,31 @@ const replaceSheet = (families: PaperFamily[], sheet: PaperSheet): PaperFamily[]
   });
 };
 
+/**
+ * Тот же экземпляр с перспективой. Начало перспективы — середина кадра, и шаг
+ * `Y'(U)` растёт от верха к низу как `1 / (1 − a·q)²`: на полувысоте кадра в
+ * обе стороны это даёт `1 + 2·q·высота` между крайними линиями.
+ *
+ * @param sheet — экземпляр пресет-пака
+ * @returns экземпляр с перспективой
+ */
+const addSheetPerspective = (sheet: PaperSheet): PaperSheet => {
+  const { width, height } = sheet;
+
+  return {
+    ...sheet,
+    ruling: {
+      ...sheet.ruling,
+      perspective: {
+        originX: width / 2,
+        originY: height / 2,
+        convergenceX: PERSPECTIVE_CONVERGENCE_SHARE / width,
+        convergenceY: PERSPECTIVE_STEP_GROWTH / (2 * height),
+      },
+    },
+  };
+};
+
 const meta = {
   component: BaselineFitProbe,
   beforeEach: () => {
@@ -719,6 +777,42 @@ export const BentRulingOnSheet: Story = {
       await expect(probe.bend).not.toBeNull();
       await expectBaselinesOnRuling(probe);
       await expect(measureBaselineDrift(probe, null)).toBeGreaterThan(DRIFT_TOLERANCE);
+    }
+  },
+};
+
+/**
+ * Строки следуют перспективе разлиновки по всей длине и высоте — на нечётной и
+ * на зеркальной странице, — а тот же расчёт без перспективы уходит с линий за
+ * допуск.
+ *
+ * Лист — экземпляр линейки с перспективой, заданной литералом: у пресет-пака
+ * её нет, и расчёт без перспективы на нём совпал бы с расчётом с ней.
+ */
+export const PerspectiveRulingOnSheet: Story = {
+  play: async () => {
+    const families = await loadPaperFamilies();
+    const family = families.find((item) => {
+      return item.id === LINED_FAMILY_ID;
+    });
+    const sheet = family?.sheets[0];
+
+    if (!family || !sheet) {
+      throw new Error('В пресет-паке нет экземпляров линейки');
+    }
+
+    const perspectiveFamilies = replaceSheet(families, addSheetPerspective(sheet));
+
+    for (const pageIndex of [0, 1]) {
+      applySheet(perspectiveFamilies, family.id, sheet.id, pageIndex);
+
+      const probe = await waitForProbe(DEFAULT_FONT, pageIndex, sheet.id);
+
+      await expect(probe.perspective).not.toBeNull();
+      await expectBaselinesOnRuling(probe);
+      await expect(measureBaselineDrift(probe, probe.bend, null)).toBeGreaterThan(
+        DRIFT_TOLERANCE
+      );
     }
   },
 };
