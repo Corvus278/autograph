@@ -68,6 +68,11 @@ const buildArtifact = (version: number = PAPER_PROFILES_VERSION) => {
  */
 const MIN_PAGE_CAPACITY = 1;
 
+/**
+ * Листов в пресет-паке: по четыре в клетку и в линейку.
+ */
+const PRESET_SHEET_COUNT = 8;
+
 describe('разбор артефакта профилей', () => {
   it('берёт разлиновку экземпляра как есть', () => {
     const profiles = parsePaperProfiles(buildArtifact());
@@ -123,6 +128,50 @@ describe('закоммиченный артефакт пресет-пака', ()
 
     expect(rawBendCount).toBeGreaterThan(0);
     expect(bentCount).toBe(rawBendCount);
+  });
+
+  /**
+   * Требование `paper-profile`: перспектива и контур пресета посчитаны заранее.
+   * Отсутствующее поле приложение читает так же, как `null`, поэтому
+   * разобранный объект не отличит недособранный артефакт от измеренного — ключ
+   * проверяется в сыром тексте.
+   */
+  it('несёт у каждого листа измеренные перспективу и контур', () => {
+    const text = readFileSync(
+      join(process.cwd(), 'public', 'paper', 'profiles.json'),
+      'utf8'
+    );
+    const rulingCount = text.match(/"ruling":\{/g)?.length || 0;
+
+    expect(rulingCount).toBeGreaterThan(0);
+    expect(text.match(/"perspective":(null|\{)/g)?.length || 0).toBe(rulingCount);
+    expect(text.match(/"outline":(null|\{)/g)?.length || 0).toBe(rulingCount);
+  });
+
+  /**
+   * Фотографии пресетов обрезаны по листу, и плавного дрейфа шага на них нет:
+   * укороченный промежуток у края кадра перспективой не считается. Проверяется
+   * и сырой текст, и разобранный лист: испорченная перспектива разобралась бы
+   * в `null` и прошла бы мимо проверки по разобранному объекту.
+   */
+  it('держит у каждого пресета лист без перспективы во весь кадр', () => {
+    const text = readFileSync(
+      join(process.cwd(), 'public', 'paper', 'profiles.json'),
+      'utf8'
+    );
+    const sheets = Object.values(parsePaperProfiles(JSON.parse(text))).flat();
+    const projectedSheetIds = sheets.reduce<string[]>((acc, sheet) => {
+      if (sheet.ruling.perspective !== null || sheet.ruling.outline !== null) {
+        acc.push(sheet.id);
+      }
+
+      return acc;
+    }, []);
+
+    expect(sheets).toHaveLength(PRESET_SHEET_COUNT);
+    expect(text).not.toMatch(/"perspective":(?!null)/);
+    expect(text).not.toMatch(/"outline":(?!null)/);
+    expect(projectedSheetIds).toEqual([]);
   });
 });
 
