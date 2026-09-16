@@ -227,6 +227,25 @@ const STEEP_SHEETS: [string, SyntheticSheetParams][] = [8, -8, 10, -10].map((deg
 });
 
 /**
+ * Листы за гарантией, но в запасе оценки наклона у части сторон: запас
+ * короткой стороны кадра шире, чем длинной, и сторона вдоль ширины проходит,
+ * а соседняя вдоль высоты отказана. Контур из таких сторон уводил бы углы на
+ * сотни пикселей, поэтому отказывается целиком.
+ */
+const MIXED_STEEP_SHEETS: [string, SyntheticSheetParams][] = [
+  [1500, 2000, 5.8],
+  [1500, 2000, -5.8],
+  [2200, 3200, 5.8],
+  [2200, 3200, -5.8],
+  [1500, 2000, 6],
+].map(([sheetWidth = 0, sheetHeight = 0, degrees = 0]) => {
+  return [
+    `${sheetWidth}×${sheetHeight} под ${degrees}°`,
+    createRotatedSheet(sheetWidth, sheetHeight, degrees),
+  ];
+});
+
+/**
  * Лист во весь кадр, у которого справа сверху виден клин стола под семь
  * градусов: верхняя сторона от левого верхнего угла кадра уходит вниз круче
  * гарантии.
@@ -289,6 +308,25 @@ const VIGNETTE_SHEET: SyntheticSheetParams = {
     },
     vignette: 0.25,
   },
+};
+
+/**
+ * Лист шире кадра, повёрнутый за гарантию, но в запасе верхней и нижней
+ * сторон: боковых сторон в кадре нет вовсе. Отсутствие стороны за кадром — не
+ * отказ по наклону, и верх с низом остаются найденными.
+ */
+const WIDE_STEEP_SHEET: SyntheticSheetParams = createRotatedSheet(3600, 3000, 5.5);
+
+/**
+ * Глубина прямой через две точки в заданном столбце кадра.
+ *
+ * @param from — первая точка прямой
+ * @param to — вторая точка прямой
+ * @param x — столбец кадра
+ * @returns строка прямой в этом столбце
+ */
+const lineYAt = (from: SheetPoint, to: SheetPoint, x: number): number => {
+  return from.y + ((to.y - from.y) * (x - from.x)) / (to.x - from.x);
 };
 
 /**
@@ -360,6 +398,27 @@ describe('detectSheetOutline: лист на поверхности', () => {
     }
   );
 
+  it('оставляет верх и низ круче пяти градусов, когда боковые стороны за кадром', () => {
+    const outline = detectSheetOutline(createSyntheticSheet(WIDE_STEEP_SHEET));
+    const expected = computeSyntheticOutline(WIDE_STEEP_SHEET);
+
+    expect(outline).not.toBeNull();
+    [
+      [outline?.topLeft, expected.topLeft, expected.topRight],
+      [outline?.topRight, expected.topLeft, expected.topRight],
+      [outline?.bottomLeft, expected.bottomLeft, expected.bottomRight],
+      [outline?.bottomRight, expected.bottomLeft, expected.bottomRight],
+    ].forEach(([corner, from = expected.topLeft, to = expected.topRight]) => {
+      const x = corner?.x || 0;
+
+      expect(Math.abs((corner?.y || 0) - lineYAt(from, to, x))).toBeLessThanOrEqual(
+        Y_TOLERANCE
+      );
+    });
+    expect(outline?.topLeft.x).toBe(0);
+    expect(outline?.bottomRight.x).toBe(WIDTH);
+  });
+
   it('находит одну верхнюю сторону, когда стол виден только полосой сверху', () => {
     const outline = detectSheetOutline(createSyntheticSheet(TOP_BAND_SHEET));
     const expected = computeSyntheticOutline(TOP_BAND_SHEET);
@@ -390,6 +449,7 @@ describe('detectSheetOutline: лист на поверхности', () => {
     ['поверхность светлее бумаги', PALE_SURFACE_SHEET],
     ['лист во весь кадр с виньеткой', VIGNETTE_SHEET],
     ...STEEP_SHEETS,
+    ...MIXED_STEEP_SHEETS,
     ['клин стола под 7° у листа во весь кадр', STEEP_WEDGE_SHEET],
   ])('не находит ни одной стороны: %s', (_name, params) => {
     expect(detectSheetOutline(createSyntheticSheet(params))).toBeNull();

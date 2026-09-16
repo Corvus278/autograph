@@ -25,6 +25,31 @@ type SheetLine = {
 };
 
 /**
+ * Итог поиска стороны. `steep` — прямая по голосам легла, но круче запаса
+ * наклона; `missing` — стороны на фотографии нет. Их различает правило
+ * соседних сторон в `detectSheetOutline`: отказ по наклону говорит, что лист
+ * повёрнут за гарантию, а отсутствие — только то, что край ушёл за кадр.
+ */
+type SideDetection =
+  | {
+      /**
+       * Сторона найдена.
+       */
+      status: 'found';
+
+      /**
+       * Прямая стороны в координатах полос.
+       */
+      line: SheetLine;
+    }
+  | {
+      /**
+       * Сторона круче запаса или не найдена.
+       */
+      status: 'steep' | 'missing';
+    };
+
+/**
  * Голос полосы: глубина края листа, найденная в ней.
  */
 type SheetSideVote = {
@@ -398,15 +423,28 @@ const measureMaxSideSlope = (alongSpan: number): number => {
   );
 };
 
+const MISSING_SIDE: SideDetection = { status: 'missing' };
+
 /**
- * Прямая стороны листа в координатах полос или `null`, если стороны на
- * фотографии нет и лист уходит за край кадра.
+ * Соседи каждой стороны кадра — стороны, с которыми она сходится в углах.
+ */
+const NEIGHBOUR_SIDES: [SheetSide, [SheetSide, SheetSide]][] = [
+  ['top', ['left', 'right']],
+  ['right', ['top', 'bottom']],
+  ['bottom', ['right', 'left']],
+  ['left', ['bottom', 'top']],
+];
+
+/**
+ * Прямая стороны листа в координатах полос. Сторона, прямая которой легла на
+ * голоса, но круче запаса, отказывается как `steep`; стороны нет на
+ * фотографии — `missing`.
  *
  * @param image — уменьшенная копия фотографии
  * @param side — сторона кадра
- * @returns прямая стороны в координатах полос
+ * @returns итог поиска стороны
  */
-const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null => {
+const detectSide = (image: SheetImageData, side: SheetSide): SideDetection => {
   const alongSpan = isHorizontalSide(side) ? image.width : image.height;
   const depthSpan = isHorizontalSide(side) ? image.height : image.width;
   const depthCount = Math.floor(depthSpan / 2);
@@ -416,7 +454,7 @@ const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null =>
   );
 
   if (depthCount < MIN_DEPTH_COUNT || alongSpan < STRIP_COUNT) {
-    return null;
+    return MISSING_SIDE;
   }
 
   const runLength = Math.max(1, Math.round(depthSpan * MIN_DARK_RUN_SHARE));
@@ -441,8 +479,8 @@ const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null =>
 
   const line = fitSideLine(votes);
 
-  if (line === null || Math.abs(line.slope) > measureMaxSideSlope(alongSpan)) {
-    return null;
+  if (line === null) {
+    return MISSING_SIDE;
   }
 
   const tolerance = Math.max(MIN_FIT_TOLERANCE, depthSpan * FIT_TOLERANCE_SHARE);
@@ -455,10 +493,51 @@ const detectSide = (image: SheetImageData, side: SheetSide): SheetLine | null =>
     inliers.length < MIN_INLIER_COUNT ||
     farthestEnd <= depthSpan * MIN_EDGE_DEPTH_SHARE
   ) {
-    return null;
+    return MISSING_SIDE;
   }
 
-  return line;
+  if (Math.abs(line.slope) > measureMaxSideSlope(alongSpan)) {
+    return { status: 'steep' };
+  }
+
+  return { status: 'found', line };
+};
+
+/**
+ * Прямая найденной стороны или `null`.
+ *
+ * @param detection — итог поиска стороны
+ * @returns прямая в координатах полос
+ */
+const toSideLine = (detection: SideDetection): SheetLine | null => {
+  if (detection.status === 'found') {
+    return detection.line;
+  }
+
+  return null;
+};
+
+/**
+ * Лист повёрнут за гарантию, но часть сторон ещё в запасе: найденная сторона
+ * круче гарантии, а соседняя отказана по наклону. Запас зависит от длины
+ * стороны кадра, и такой контур сложился бы из прямых сторон и краёв кадра с
+ * углами за сотни пикселей от листа.
+ *
+ * @param detections — итоги поиска сторон
+ * @returns `true`, если контур надо отказать целиком
+ */
+const hasMixedSteepSides = (detections: Record<SheetSide, SideDetection>): boolean => {
+  return NEIGHBOUR_SIDES.some(([side, neighbours]) => {
+    const detection = detections[side];
+
+    return (
+      detection.status === 'found' &&
+      Math.abs(detection.line.slope) > MAX_SIDE_SLOPE &&
+      neighbours.some((neighbour) => {
+        return detections[neighbour].status === 'steep';
+      })
+    );
+  });
 };
 
 /**
@@ -535,7 +614,7 @@ export const detectSheetOutline = (image: SheetImageData): SheetOutline | null =
 
   const scaleX = image.width / analysis.width;
   const scaleY = image.height / analysis.height;
-  const sides = {
+  const detections: Record<SheetSide, SideDetection> = {
     top: detectSide(analysis, 'top'),
     right: detectSide(analysis, 'right'),
     bottom: detectSide(analysis, 'bottom'),
@@ -543,17 +622,42 @@ export const detectSheetOutline = (image: SheetImageData): SheetOutline | null =
   };
 
   if (
-    Object.values(sides).every((side) => {
-      return side === null;
+    hasMixedSteepSides(detections) ||
+    Object.values(detections).every((detection) => {
+      return detection.status !== 'found';
     })
   ) {
     return null;
   }
 
-  const top = toFrameLine(sides.top, 'top', scaleX, scaleY, image.height);
-  const bottom = toFrameLine(sides.bottom, 'bottom', scaleX, scaleY, image.height);
-  const left = toFrameLine(sides.left, 'left', scaleY, scaleX, image.width);
-  const right = toFrameLine(sides.right, 'right', scaleY, scaleX, image.width);
+  const top = toFrameLine(
+    toSideLine(detections.top),
+    'top',
+    scaleX,
+    scaleY,
+    image.height
+  );
+  const bottom = toFrameLine(
+    toSideLine(detections.bottom),
+    'bottom',
+    scaleX,
+    scaleY,
+    image.height
+  );
+  const left = toFrameLine(
+    toSideLine(detections.left),
+    'left',
+    scaleY,
+    scaleX,
+    image.width
+  );
+  const right = toFrameLine(
+    toSideLine(detections.right),
+    'right',
+    scaleY,
+    scaleX,
+    image.width
+  );
 
   return {
     topLeft: intersectSides(top, left),
