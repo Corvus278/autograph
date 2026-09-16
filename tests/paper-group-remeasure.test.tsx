@@ -4,6 +4,7 @@
 import type * as PaperModule from '@pages/Generator/lib/paper';
 import {
   buildSheetRuling,
+  MARGIN_FALLBACK_STEPS,
   measureSheetPhoto,
   type PaperMargins,
   type PaperSheet,
@@ -105,13 +106,15 @@ const MANUAL_BOUNDS: PaperMargins = { top: 135, right: 115, bottom: 95, left: 15
 
 /**
  * Поля, заданные руками до перемера. Шаг ненулевой, иначе форма разлиновки не
- * показала бы поля, и перетирание нечем было бы проверить.
+ * показала бы поля, и перетирание нечем было бы проверить. Каждое поле лежит
+ * внутри листа с границами `MANUAL_BOUNDS` — дальше полутора шагов от них:
+ * такое поле перемер не трогает.
  */
 const MANUAL_RULING = {
   step: 41,
   firstLinePhase: 3,
   skewAngle: 0,
-  margins: { top: 333, right: 222, bottom: 111, left: 444 },
+  margins: { top: 333, right: 222, bottom: 199.5, left: 444 },
 };
 
 /**
@@ -130,6 +133,23 @@ const SEEDED_SHEET: PaperSheet = {
   ),
   lighting: null,
   texture: null,
+};
+
+/**
+ * Тот же лист, но с полями, которые поставил фолбэк по ошибочному контуру:
+ * полтора шага от его сторон. По записи фолбэк от ручного ввода не отличить,
+ * поэтому перемер судит по новому контуру, а не по происхождению числа.
+ */
+const FALLBACK_SHEET: PaperSheet = {
+  ...SEEDED_SHEET,
+  ruling: buildSheetRuling(
+    {
+      ...MANUAL_RULING,
+      margins: { top: 0, right: 0, bottom: 0, left: 0 },
+      outline: WRONG_OUTLINE,
+    },
+    { width: WIDTH, height: HEIGHT }
+  ),
 };
 
 /**
@@ -428,6 +448,37 @@ describe('перемер чистого листа', () => {
       margins,
     });
     expect(readUserSheets()[0]).toStrictEqual(record);
+  }, 60_000);
+
+  it('поля, оставшиеся от прежнего контура, уходят внутрь нового', async () => {
+    const user = userEvent.setup();
+
+    useGeneratorStore.getState().addUserSheet({
+      familyId: 'grid',
+      isAnalyzed: true,
+      isBlank: true,
+      sheet: FALLBACK_SHEET,
+    });
+    render(<PaperGroup />);
+
+    await fillBounds(user, MANUAL_BOUNDS);
+    await remeasure(user);
+
+    await waitFor(() => {
+      expect(readUserSheet()?.ruling.outline).toStrictEqual(toRectOutline(MANUAL_BOUNDS));
+    });
+
+    const ruling = readUserSheet()?.ruling;
+    const fallback = MANUAL_RULING.step * MARGIN_FALLBACK_STEPS;
+
+    expect(ruling?.step).toBe(FALLBACK_SHEET.ruling.step);
+    expect(ruling?.firstLinePhase).toBe(FALLBACK_SHEET.ruling.firstLinePhase);
+    expect(ruling?.skewAngle).toBe(FALLBACK_SHEET.ruling.skewAngle);
+    SIDES.forEach((side) => {
+      expect(ruling?.margins[side]).toBeGreaterThanOrEqual(
+        MANUAL_BOUNDS[side] + fallback
+      );
+    });
   }, 60_000);
 
   it('запись прежней формы без вида листа читается видом семьи: перемер ищет разлиновку', async () => {
