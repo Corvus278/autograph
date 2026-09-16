@@ -26,9 +26,9 @@ type SheetLine = {
 
 /**
  * Итог поиска стороны. `steep` — прямая по голосам легла, но круче запаса
- * наклона; `missing` — стороны на фотографии нет. Их различает правило
- * соседних сторон в `detectSheetOutline`: отказ по наклону говорит, что лист
- * повёрнут за гарантию, а отсутствие — только то, что край ушёл за кадр.
+ * наклона; `missing` — стороны на фотографии нет. Их различает
+ * `detectSheetOutline`: отказ по наклону говорит, что лист повёрнут или сужен
+ * за гарантию, а отсутствие — только то, что край ушёл за кадр.
  */
 type SideDetection =
   | {
@@ -426,16 +426,6 @@ const measureMaxSideSlope = (alongSpan: number): number => {
 const MISSING_SIDE: SideDetection = { status: 'missing' };
 
 /**
- * Соседи каждой стороны кадра — стороны, с которыми она сходится в углах.
- */
-const NEIGHBOUR_SIDES: [SheetSide, [SheetSide, SheetSide]][] = [
-  ['top', ['left', 'right']],
-  ['right', ['top', 'bottom']],
-  ['bottom', ['right', 'left']],
-  ['left', ['bottom', 'top']],
-];
-
-/**
  * Прямая стороны листа в координатах полос. Сторона, прямая которой легла на
  * голоса, но круче запаса, отказывается как `steep`; стороны нет на
  * фотографии — `missing`.
@@ -515,29 +505,6 @@ const toSideLine = (detection: SideDetection): SheetLine | null => {
   }
 
   return null;
-};
-
-/**
- * Лист повёрнут за гарантию, но часть сторон ещё в запасе: найденная сторона
- * круче гарантии, а соседняя отказана по наклону. Запас зависит от длины
- * стороны кадра, и такой контур сложился бы из прямых сторон и краёв кадра с
- * углами за сотни пикселей от листа.
- *
- * @param detections — итоги поиска сторон
- * @returns `true`, если контур надо отказать целиком
- */
-const hasMixedSteepSides = (detections: Record<SheetSide, SideDetection>): boolean => {
-  return NEIGHBOUR_SIDES.some(([side, neighbours]) => {
-    const detection = detections[side];
-
-    return (
-      detection.status === 'found' &&
-      Math.abs(detection.line.slope) > MAX_SIDE_SLOPE &&
-      neighbours.some((neighbour) => {
-        return detections[neighbour].status === 'steep';
-      })
-    );
-  });
 };
 
 /**
@@ -621,12 +588,17 @@ export const detectSheetOutline = (image: SheetImageData): SheetOutline | null =
     left: detectSide(analysis, 'left'),
   };
 
-  if (
-    hasMixedSteepSides(detections) ||
-    Object.values(detections).every((detection) => {
-      return detection.status !== 'found';
-    })
-  ) {
+  const statuses = Object.values(detections).map((detection) => {
+    return detection.status;
+  });
+
+  /**
+   * Сторона, отказанная по наклону, обнуляет весь контур: лист повёрнут или
+   * сужен за гарантию, и контур из остальных сторон и края кадра на её месте
+   * увёл бы углы на сотни пикселей от листа. Сторона за кадром контур не
+   * обнуляет — это обрезанный кадром лист.
+   */
+  if (statuses.includes('steep') || !statuses.includes('found')) {
     return null;
   }
 

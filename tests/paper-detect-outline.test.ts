@@ -246,6 +246,51 @@ const MIXED_STEEP_SHEETS: [string, SyntheticSheetParams][] = [
 });
 
 /**
+ * Сужение верхней стороны листа с каждого бока: боковая сторона уходит от
+ * вертикали почти на пять градусов, `atan(290 / 3400) ≈ 4,9°`.
+ */
+const NARROWING = 290;
+
+/**
+ * Сдвиг левого нижнего угла: левая сторона уходит от вертикали на пять
+ * градусов.
+ */
+const BOTTOM_LEFT_SHIFT = 3400 * Math.tan((5 * Math.PI) / 180);
+
+/**
+ * Сужённый перспективой или перекошенный лист, повёрнутый вокруг середины
+ * кадра: одна сторона круче запаса, остальные не круче гарантии. Контур из
+ * найденных сторон и края кадра на месте отказанной уводил бы углы на сотни
+ * пикселей, поэтому отказывается целиком.
+ */
+const SKEWED_STEEP_CASES: [string, number, number, number][] = [
+  ['сужённый лист под 3°', NARROWING, 0, 3],
+  ['сужённый лист под −3°', NARROWING, 0, -3],
+  ['лист со сдвинутым левым низом под 2°', 0, BOTTOM_LEFT_SHIFT, 2],
+];
+
+const SKEWED_STEEP_SHEETS = SKEWED_STEEP_CASES.map<[string, SyntheticSheetParams]>(
+  ([name, narrowing, shift, degrees]) => {
+    return [
+      name,
+      {
+        ...SHEET_BASE,
+        surface: {
+          outline: {
+            topLeft: rotateAroundCenter({ x: 400 + narrowing, y: 300 }, degrees),
+            topRight: rotateAroundCenter({ x: 2600 - narrowing, y: 300 }, degrees),
+            bottomRight: rotateAroundCenter({ x: 2600, y: 3700 }, degrees),
+            bottomLeft: rotateAroundCenter({ x: 400 - shift, y: 3700 }, degrees),
+          },
+          cornerRadius: 70,
+          brightness: 0.3,
+        },
+      },
+    ];
+  }
+);
+
+/**
  * Лист во весь кадр, у которого справа сверху виден клин стола под семь
  * градусов: верхняя сторона от левого верхнего угла кадра уходит вниз круче
  * гарантии.
@@ -450,6 +495,7 @@ describe('detectSheetOutline: лист на поверхности', () => {
     ['лист во весь кадр с виньеткой', VIGNETTE_SHEET],
     ...STEEP_SHEETS,
     ...MIXED_STEEP_SHEETS,
+    ...SKEWED_STEEP_SHEETS,
     ['клин стола под 7° у листа во весь кадр', STEEP_WEDGE_SHEET],
   ])('не находит ни одной стороны: %s', (_name, params) => {
     expect(detectSheetOutline(createSyntheticSheet(params))).toBeNull();
