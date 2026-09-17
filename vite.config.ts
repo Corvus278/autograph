@@ -1,3 +1,4 @@
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import tailwindcss from '@tailwindcss/vite';
@@ -6,7 +7,9 @@ import browserslistToEsbuild from 'browserslist-to-esbuild';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/',
+  // Базовый путь задаёт деплой: GitHub Pages раздаёт проект из `/<репозиторий>/`,
+  // а dev-сервер, тесты и Storybook работают от корня.
+  base: process.env.BASE_PATH || '/',
   publicDir: 'public',
   plugins: [
     react({

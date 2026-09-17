@@ -1,3 +1,5 @@
+import { withBasePath } from '@shared/lib/url';
+
 import type { PaperSheetProfiles } from '../config/config.types';
 import { buildPaperFamilies } from '../config/paperFamilies';
 import type { PaperFamily, PaperSheet } from '../lib/paper/paper.types';
@@ -8,7 +10,7 @@ import { isJsonRecord, parsePaperSheet, toFiniteNumber } from './paperSheetJson'
  * Адрес артефакта характеристик пресет-пака. Считается скриптом сборки и
  * лежит рядом с фотографиями, поэтому при запуске ничего не измеряется.
  */
-export const PAPER_PROFILES_URL = '/paper/profiles.json';
+export const PAPER_PROFILES_URL = withBasePath('/paper/profiles.json');
 
 /**
  * Версия формата артефакта, которую понимает этот код. Артефакт другой версии
@@ -50,7 +52,13 @@ export const parsePaperProfiles = (value: unknown): PaperSheetProfiles => {
         const sheet = parsePaperSheet(item);
 
         if (sheet) {
-          sheetAcc.push(sheet);
+          const { src, texture } = sheet;
+
+          sheetAcc.push({
+            ...sheet,
+            src: withBasePath(src),
+            texture: texture && { ...texture, src: withBasePath(texture.src) },
+          });
         }
 
         return sheetAcc;

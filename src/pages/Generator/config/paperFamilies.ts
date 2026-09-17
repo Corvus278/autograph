@@ -1,3 +1,5 @@
+import { withBasePath } from '@shared/lib/url';
+
 import type { PaperFamily, PaperSheet } from '../lib/paper/paper.types';
 import { buildSheetRuling } from '../lib/paper/sheetRuling';
 
@@ -82,7 +84,7 @@ const buildPlainSheets = (
     sheets.push({
       id: `${familyId}-${number}`,
       label: `${labelPrefix} ${number}`,
-      src: `/paper/${familyId}/${number}.jpg`,
+      src: withBasePath(`/paper/${familyId}/${number}.jpg`),
       width: size.width,
       height: size.height,
       ruling,

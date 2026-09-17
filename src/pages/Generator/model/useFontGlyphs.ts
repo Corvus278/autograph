@@ -1,3 +1,4 @@
+import { withBasePath } from '@shared/lib/url';
 import { useEffect, useState } from 'react';
 
 import { HANDWRITING_FONTS } from '../config';
@@ -17,7 +18,7 @@ export const findFontUrl = (family: string): string | null => {
     return font.family === family;
   });
 
-  return isBuiltIn ? `/fonts/${family}.ttf` : null;
+  return isBuiltIn ? withBasePath(`/fonts/${family}.ttf`) : null;
 };
 
 /**
