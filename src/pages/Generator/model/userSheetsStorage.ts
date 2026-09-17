@@ -5,7 +5,7 @@ import type { UserSheetIndexEntry, UserSheetRecord } from './userSheetsStorage.t
  * Ключ списка пользовательских листов: лёгкие характеристики всех листов
  * сразу.
  */
-const INDEX_KEY = 'handwriting.paper.user-sheets';
+const INDEX_KEY = 'autograph.paper.user-sheets';
 
 /**
  * Префикс ключа исходного файла. Исходник лежит отдельной записью на лист и
@@ -13,13 +13,25 @@ const INDEX_KEY = 'handwriting.paper.user-sheets';
  * пересчитывается заново. Хранилище кончится — выбрасываются производные, а
  * не фотографии.
  */
-const SOURCE_KEY_PREFIX = 'handwriting.paper.source.';
+const SOURCE_KEY_PREFIX = 'autograph.paper.source.';
 
 /**
  * Префикс ключа производных карт: поля освещения и текстуры. Самая тяжёлая и
  * при этом единственная пересчитываемая часть.
  */
-const DERIVED_KEY_PREFIX = 'handwriting.paper.derived.';
+const DERIVED_KEY_PREFIX = 'autograph.paper.derived.';
+
+/**
+ * Общее начало ключей листов под прежним именем приложения. Такие записи
+ * переносятся под текущие ключи при чтении: иначе листы, сохранённые до
+ * переименования, пропали бы у пользователя без следа.
+ */
+const LEGACY_KEY_PREFIX = 'handwriting.paper.';
+
+/**
+ * Общее начало текущих ключей листов.
+ */
+const KEY_PREFIX = 'autograph.paper.';
 
 /**
  * Локальное хранилище или `null`, если его нет: в тестовом окружении без jsdom
@@ -71,6 +83,30 @@ const writeItem = (storage: Storage, key: string, value: string): boolean => {
     return true;
   } catch {
     return false;
+  }
+};
+
+/**
+ * Переносит записи листов из ключей прежнего имени в текущие. Запись под
+ * текущим ключом не перезаписывается: она новее. Старый ключ удаляется, только
+ * если перенос удался, — переполненное хранилище не должно терять фотографию.
+ *
+ * @param storage — локальное хранилище
+ */
+const migrateLegacyKeys = (storage: Storage): void => {
+  const legacyKeys = Object.keys(storage).filter((key) => {
+    return key.startsWith(LEGACY_KEY_PREFIX);
+  });
+
+  for (const legacyKey of legacyKeys) {
+    const key = `${KEY_PREFIX}${legacyKey.slice(LEGACY_KEY_PREFIX.length)}`;
+    const value = storage.getItem(legacyKey);
+    const isMoved =
+      storage.getItem(key) !== null || (value !== null && writeItem(storage, key, value));
+
+    if (isMoved) {
+      storage.removeItem(legacyKey);
+    }
   }
 };
 
@@ -169,6 +205,8 @@ export const readUserSheets = (): UserSheetRecord[] => {
   if (!storage) {
     return [];
   }
+
+  migrateLegacyKeys(storage);
 
   return readIndex(storage).reduce<UserSheetRecord[]>((acc, entry) => {
     const record = readRecord(storage, entry);

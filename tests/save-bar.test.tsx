@@ -146,7 +146,7 @@ describe('сохранение страницы', () => {
     await waitFor(() => {
       expect(download).toHaveBeenCalledWith(
         'data:image/jpeg;base64,page',
-        'handwriting_page.jpg'
+        'autograph_page.jpg'
       );
     });
 
@@ -178,7 +178,7 @@ describe('сохранение страницы', () => {
     await waitFor(() => {
       expect(download).toHaveBeenCalledWith(
         'data:image/jpeg;base64,scene',
-        'handwriting_with_bg.jpg'
+        'autograph_with_bg.jpg'
       );
     });
   });

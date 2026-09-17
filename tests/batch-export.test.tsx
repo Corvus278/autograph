@@ -172,7 +172,7 @@ describe('прогресс выгрузки пачки', () => {
       expect(downloadBlob).toHaveBeenCalledTimes(1);
     });
 
-    expect(vi.mocked(downloadBlob).mock.calls[0]?.[1]).toBe('handwriting_pages.zip');
+    expect(vi.mocked(downloadBlob).mock.calls[0]?.[1]).toBe('autograph_pages.zip');
     expect(screen.queryByRole('status')).toBeNull();
   });
 

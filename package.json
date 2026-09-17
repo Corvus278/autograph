@@ -1,5 +1,5 @@
 {
-  "name": "handwriting-generator",
+  "name": "autograph",
   "version": "1.0.0",
   "type": "module",
   "description": "генератор рукописного текста",

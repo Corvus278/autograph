@@ -104,9 +104,9 @@ export const useExportPage = (
           hasShadow: hasSceneShadow,
         });
 
-        download(composed, `handwriting_with_bg.${PAGE_IMAGE_EXTENSION}`);
+        download(composed, `autograph_with_bg.${PAGE_IMAGE_EXTENSION}`);
       } else {
-        download(pageDataUrl, `handwriting_page.${PAGE_IMAGE_EXTENSION}`);
+        download(pageDataUrl, `autograph_page.${PAGE_IMAGE_EXTENSION}`);
       }
 
       setError(null);

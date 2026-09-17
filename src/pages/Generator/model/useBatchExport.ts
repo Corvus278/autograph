@@ -11,7 +11,7 @@ import type { BatchExportControl, BatchExportDeps } from './useBatchExport.types
 /**
  * Имя архива пачки.
  */
-const ARCHIVE_FILE_NAME = 'handwriting_pages.zip';
+const ARCHIVE_FILE_NAME = 'autograph_pages.zip';
 
 const DEFAULT_DEPS: BatchExportDeps = {
   renderPage: renderPageInWorker,

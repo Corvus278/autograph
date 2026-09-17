@@ -199,7 +199,7 @@ const seedSheet = (isBlank = false) => {
 /**
  * Ключ списка своих листов в локальном хранилище.
  */
-const INDEX_KEY = 'handwriting.paper.user-sheets';
+const INDEX_KEY = 'autograph.paper.user-sheets';
 
 /**
  * Превращает записи хранилища в записи прежней формы — без вида листа — и

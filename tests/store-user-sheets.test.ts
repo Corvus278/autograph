@@ -109,9 +109,9 @@ describe('пользовательские листы в сторе', () => {
   it('хранит исходный файл отдельно от списка характеристик', () => {
     store().addUserSheet(buildRecord('user-1'));
 
-    const index = globalThis.localStorage.getItem('handwriting.paper.user-sheets') || '';
+    const index = globalThis.localStorage.getItem('autograph.paper.user-sheets') || '';
 
-    expect(globalThis.localStorage.getItem('handwriting.paper.source.user-1')).toBe(
+    expect(globalThis.localStorage.getItem('autograph.paper.source.user-1')).toBe(
       PHOTO_SRC
     );
     expect(index).not.toContain(PHOTO_SRC);
@@ -174,7 +174,7 @@ describe('переживание перезагрузки', () => {
 /**
  * Ключ списка лёгких характеристик в локальном хранилище.
  */
-const INDEX_KEY = 'handwriting.paper.user-sheets';
+const INDEX_KEY = 'autograph.paper.user-sheets';
 
 /**
  * Кладёт в хранилище запись списка и исходный файл так, как их оставила
@@ -184,7 +184,7 @@ const INDEX_KEY = 'handwriting.paper.user-sheets';
 const seedStorage = (entry: Record<string, unknown>) => {
   globalThis.localStorage.setItem(INDEX_KEY, JSON.stringify([entry]));
   globalThis.localStorage.setItem(
-    `handwriting.paper.source.${String(entry.id)}`,
+    `autograph.paper.source.${String(entry.id)}`,
     PHOTO_SRC
   );
 };
@@ -278,6 +278,29 @@ describe('форма записи в хранилище', () => {
   });
 });
 
+describe('записи под прежним именем приложения', () => {
+  it('переносит лист из старых ключей и удаляет их', () => {
+    store().addUserSheet(buildRecord('user-1'));
+
+    const storage = globalThis.localStorage;
+
+    for (const key of Object.keys(storage)) {
+      storage.setItem(
+        key.replace('autograph.', 'handwriting.'),
+        storage.getItem(key) || ''
+      );
+      storage.removeItem(key);
+    }
+
+    reload();
+    store().restoreUserSheets();
+
+    expect(store().userSheets[0]?.sheet.id).toBe('user-1');
+    expect(storage.getItem('autograph.paper.source.user-1')).toBe(PHOTO_SRC);
+    expect(storage.getItem('handwriting.paper.user-sheets')).toBeNull();
+  });
+});
+
 describe('удаление пользовательского листа', () => {
   it('убирает лист из списка и переводит выбор на оставшийся экземпляр', () => {
     store().addUserSheet(buildRecord('user-1'));
@@ -294,10 +317,8 @@ describe('удаление пользовательского листа', () =>
     store().restoreUserSheets();
 
     expect(store().userSheets).toHaveLength(0);
-    expect(globalThis.localStorage.getItem('handwriting.paper.source.user-1')).toBeNull();
-    expect(
-      globalThis.localStorage.getItem('handwriting.paper.derived.user-1')
-    ).toBeNull();
+    expect(globalThis.localStorage.getItem('autograph.paper.source.user-1')).toBeNull();
+    expect(globalThis.localStorage.getItem('autograph.paper.derived.user-1')).toBeNull();
   });
 
   it('не трогает соседний лист', () => {
