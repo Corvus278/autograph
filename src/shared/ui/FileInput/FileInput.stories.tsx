@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { fn, userEvent } from 'storybook/test';
+import { expect, fn, userEvent, within } from 'storybook/test';
 
 import { FileInput } from './FileInput';
 
@@ -19,8 +19,29 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {};
 
 export const Focused: Story = {
-  play: async () => {
+  play: async ({ canvasElement }) => {
     await userEvent.tab();
+
+    await expect(
+      within(canvasElement).getByRole('button', { name: 'Свой шрифт (.ttf)' })
+    ).toHaveFocus();
+  },
+};
+
+/**
+ * Выбранный файл: имя стоит рядом с кнопкой и служит ей описанием.
+ */
+export const Selected: Story = {
+  play: async ({ args, canvasElement }) => {
+    const field = canvasElement.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File(['x'], 'мой-почерк.ttf', { type: 'font/ttf' });
+
+    if (field) {
+      await userEvent.upload(field, file);
+    }
+
+    await expect(within(canvasElement).getByText('мой-почерк.ttf')).toBeVisible();
+    await expect(args.onSelect).toHaveBeenCalledWith(file);
   },
 };
 

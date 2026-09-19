@@ -1,4 +1,3 @@
-import type { ParameterRange } from '../../../../../config';
 import type { GeneratorGeometryCorrection } from '../../../../../model/generator.types';
 
 /**
@@ -14,9 +13,4 @@ export type GeometrySliderOption = {
    * Подпись слайдера.
    */
   label: string;
-
-  /**
-   * Границы и шаг поправки в долях шага разлиновки.
-   */
-  range: ParameterRange;
 };

@@ -60,7 +60,8 @@ src/
     AppHeader/    шапка всех экранов со слотом действий страницы (у генератора — undo/redo)
   pages/
     Generator/    экран генератора: ui, model, lib, config
-      ui/Generator/   экран: TextPane (текст), SheetViewport (лист: зум, разворот, панель просмотра),
+      ui/Generator/   экран: GeneratorLayout (каркас: шапка, три колонки, полоса действий), TextPane (текст),
+                      SheetViewport (лист: зум, разворот, панель просмотра),
                       SettingsPane (оформление: PaperPicker, HandwritingPicker, InkPicker, RealismPicker,
                       ExpertSettings, SheetDialog, хуки useSheetImport/useSheetRemeasure), ActionBar
                       (перегенерация, сохранение, пачка), HistoryControls и useHistoryHotkeys (undo/redo)
@@ -81,8 +82,9 @@ src/
     NotFound/     экран «не найдено»
   shared/
     ui/           примитивы на Radix: ValueSlider, SegmentedControl, TileRadio, Swatch, Dialog, Disclosure,
-                  Toolbar, IconButton, Checkbox, RadioGroup, Select, Accordion, Label, Tooltip, Button,
-                  FileInput, ColorInput, TextArea
+                  Toolbar, Checkbox, RadioGroup, Select, Accordion, Label, Tooltip; без Radix — Button
+                  (вид — `buttonVariants`), IconButton, FileInput (скрытое поле + кнопка с именем файла),
+                  ColorInput, TextArea
     lib/styles/   cx, twMerge
     lib/random/   mulberry32, randomInt, pickRandomItems
     lib/files/    чтение файла как data URL, скачивание data URL и blob

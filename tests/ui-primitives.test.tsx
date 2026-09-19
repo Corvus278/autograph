@@ -6,6 +6,7 @@ import { Checkbox } from '@shared/ui/Checkbox';
 import { ColorInput } from '@shared/ui/ColorInput';
 import { Dialog } from '@shared/ui/Dialog';
 import { Disclosure } from '@shared/ui/Disclosure';
+import { FileInput } from '@shared/ui/FileInput';
 import { IconButton } from '@shared/ui/IconButton';
 import { SegmentedControl } from '@shared/ui/SegmentedControl';
 import { Select } from '@shared/ui/Select';
@@ -391,5 +392,104 @@ describe('IconButton', () => {
     await user.click(screen.getByRole('button', { name: 'Отменить' }));
 
     expect(handleClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('FileInput', () => {
+  /**
+   * Скрытое поле выбора файла: в дереве доступности его нет, файл в него
+   * кладёт тест, как положил бы системный диалог.
+   *
+   * @param container — корень отрисованного контрола
+   * @returns поле выбора файла
+   */
+  const getFileField = (container: HTMLElement): HTMLInputElement => {
+    const field = container.querySelector<HTMLInputElement>('input[type="file"]');
+
+    if (!field) {
+      throw new Error('Нет поля выбора файла');
+    }
+
+    return field;
+  };
+
+  it('показывает кнопку с русским текстом вместо родного вида поля', () => {
+    render(<FileInput label="Свой шрифт (.ttf)" accept=".ttf" onSelect={vi.fn()} />);
+
+    const button = screen.getByRole('button', { name: 'Свой шрифт (.ttf)' });
+
+    expect(button.textContent).toBe('Выбрать файл');
+    expect(screen.getByText('Файл не выбран')).toBeDefined();
+    expect(screen.queryByText(/choose file|no file chosen/i)).toBeNull();
+  });
+
+  it('отдаёт выбранный файл и показывает его имя', async () => {
+    const user = userEvent.setup();
+    const handleSelect = vi.fn();
+    const file = new File(['x'], 'почерк.ttf', { type: 'font/ttf' });
+    const { container } = render(
+      <FileInput label="Свой шрифт (.ttf)" accept=".ttf" onSelect={handleSelect} />
+    );
+
+    await user.upload(getFileField(container), file);
+
+    expect(handleSelect).toHaveBeenCalledWith(file);
+    expect(screen.getByText('почерк.ttf')).toBeDefined();
+  });
+
+  it.each([['{Enter}'], [' ']])(
+    'клавиша %s на кнопке открывает выбор файла',
+    async (key) => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <FileInput label="Своя сцена" accept="image/*" onSelect={vi.fn()} />
+      );
+      const handleFieldClick = vi.fn();
+
+      getFileField(container).addEventListener('click', handleFieldClick);
+
+      await user.tab();
+
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: 'Своя сцена' })
+      );
+
+      await user.keyboard(key);
+
+      expect(handleFieldClick).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('связывает ошибку и имя файла с кнопкой как описание', () => {
+    render(
+      <FileInput
+        label="Свой шрифт (.ttf)"
+        accept=".ttf"
+        error="Не удалось прочитать шрифт"
+        onSelect={vi.fn()}
+      />
+    );
+
+    const button = screen.getByRole('button', { name: 'Свой шрифт (.ttf)' });
+    const describedBy = button.getAttribute('aria-describedby') || '';
+    const description = describedBy
+      .split(' ')
+      .map((id) => {
+        return document.getElementById(id)?.textContent;
+      })
+      .join(' ');
+
+    expect(description).toBe('Файл не выбран Не удалось прочитать шрифт');
+  });
+
+  it('недоступный контрол не открывает выбор', () => {
+    render(
+      <FileInput label="Своя сцена" accept="image/*" isDisabled onSelect={vi.fn()} />
+    );
+
+    expect(screen.getByRole('button', { name: 'Своя сцена' })).toHaveProperty(
+      'disabled',
+      true
+    );
   });
 });

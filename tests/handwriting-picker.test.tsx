@@ -40,6 +40,22 @@ const renderPicker = () => {
   );
 };
 
+/**
+ * Скрытое поле выбора шрифта: видимая кнопка лишь открывает системный
+ * диалог, а файл тест кладёт прямо в поле.
+ *
+ * @returns поле выбора файла
+ */
+const getFontField = (): HTMLInputElement => {
+  const field = document.querySelector<HTMLInputElement>('input[type="file"]');
+
+  if (!field) {
+    throw new Error('Нет поля выбора шрифта');
+  }
+
+  return field;
+};
+
 beforeEach(() => {
   useGeneratorStore.setState(DEFAULT_GENERATOR_STATE);
 });
@@ -79,7 +95,7 @@ describe('HandwritingPicker', () => {
 
     renderPicker();
 
-    await user.upload(screen.getByLabelText('Свой шрифт (.ttf)'), buildFontFile());
+    await user.upload(getFontField(), buildFontFile());
 
     await waitFor(() => {
       expect(store().customFontFamily).toBe('UserFont');
@@ -98,7 +114,7 @@ describe('HandwritingPicker', () => {
 
     renderPicker();
 
-    await user.upload(screen.getByLabelText('Свой шрифт (.ttf)'), buildBrokenFontFile());
+    await user.upload(getFontField(), buildBrokenFontFile());
 
     await waitFor(() => {
       expect(

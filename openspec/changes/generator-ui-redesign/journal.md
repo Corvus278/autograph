@@ -98,3 +98,17 @@ ExpertSettings: Disclosure → Accordion из 5 групп (свёрнуты), �
 Решение координатора (блокер нестабильности): SheetDialog/Open без клика «Отмена», проверка «Отмена» — в CancelClosesDialog без эталона; GeneratorLayout/Narrow-Window исключена из скриншотов через новый SKIPPED_STORIES (страница шире окна, снимок выходит за iframe).
 Аудит: ok с первого круга.
 Долг: в CLAUDE.md нет GeneratorLayout в списке ui/Generator; «примитивы на Radix» неточно; эталоны SheetViewport/Fit и Zoom-And-Fit побайтно равны. Нативное «Choose File / No file chosen» в FileInput (HandwritingPicker, SceneSection) — на итоговый аудит.
+
+### Ответы пользователя
+
+1. @radix-ui/react-toolbar — оставить (дописать в proposal через /opsx:update).
+2. Диапазон поправки геометрии в сессии — проверять: диапазоны слайдеров поправки в config, значение вне диапазона при чтении → дефолт. → F1.
+3. «Перемерить» — считается подтверждением, оставить как есть (уточнить формулировку спеки через /opsx:update).
+4. FileInput — доработать сейчас: скрытый input + кнопка с русским текстом и именем выбранного файла («Свой шрифт», «Своя сцена»). → F1.
+Критерий F1: тест sessionSchema на выход поправки из диапазона; тест FileInput (русский текст, имя файла, клавиатура, a11y); test:visual:update + test:visual зелёный.
+
+### F1
+
+По ответам пользователя: GEOMETRY_CORRECTION_RANGES в config — общий источник для слайдеров и sessionSchema, выход за диапазон → дефолт; FileInput — скрытый input + кнопка «Выбрать файл» со статусом/именем файла (describedby), Enter/Space; buttonVariants вынесен в Button.styles.ts. CLAUDE.md: GeneratorLayout, разделение примитивов Radix/без Radix.
+Аудит: ok с первого круга.
+Долг: FileInput — видимый текст «Выбрать файл» не входит в доступное имя (WCAG 2.5.3 Label in Name); %d в имени it.each для дробных значений.

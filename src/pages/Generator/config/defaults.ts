@@ -25,6 +25,28 @@ export const DEFAULT_SCENE_DARKEN = 0.06;
  */
 export const BOTTOM_MARGIN_RANGE: ParameterRange = { min: 0, max: 20, step: 1 };
 
+/**
+ * Границы поправок геометрии в долях шага разлиновки — общие у слайдеров и у
+ * чтения сессии: значение, которое слайдер выставить не мог, сессия не
+ * восстанавливает. Поправка — дельта поверх вычисленного из разлиновки,
+ * поэтому диапазоны симметричны нулю и узкие: широкий означал бы, что
+ * автокалибровка промахнулась, и чинить надо её, а не двигать блок руками.
+ *
+ * Кегль и интервал — до четверти шага: кегль и так около шага, и больше
+ * четверти уже меняет почерк, а не подгоняет его. Сдвиги — до двух шагов:
+ * текст можно пересадить на соседние линии, но не увести с листа.
+ */
+export const GEOMETRY_CORRECTION_RANGES: Record<
+  keyof GeometryCorrection,
+  ParameterRange
+> = {
+  fontSizePx: { min: -0.25, max: 0.25, step: 0.01 },
+  lineSpacing: { min: -0.25, max: 0.25, step: 0.01 },
+  topOffset: { min: -2, max: 2, step: 0.05 },
+  leftPadding: { min: -2, max: 2, step: 0.05 },
+  blockWidth: { min: -4, max: 4, step: 0.1 },
+};
+
 export const FREQUENCY_RANGE: ParameterRange = { min: 1, max: 5, step: 1 };
 export const SCENE_ROTATE_RANGE: ParameterRange = { min: -10, max: 10, step: 1 };
 export const SCENE_SHIFT_RANGE: ParameterRange = { min: 0, max: 50, step: 1 };

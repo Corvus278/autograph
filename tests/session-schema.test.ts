@@ -1,4 +1,8 @@
-import { HANDWRITING_FONTS, REALISM_LEVELS } from '@pages/Generator/config';
+import {
+  GEOMETRY_CORRECTION_RANGES,
+  HANDWRITING_FONTS,
+  REALISM_LEVELS,
+} from '@pages/Generator/config';
 import {
   parseSession,
   parseSessionEnvelope,
@@ -233,6 +237,39 @@ describe('parseSession', () => {
       ...VALID.geometryCorrection,
       topOffset: DEFAULTS.geometryCorrection.topOffset,
     });
+  });
+
+  it.each([
+    ['fontSizePx', 0.3],
+    ['fontSizePx', -0.26],
+    ['lineSpacing', 0.5],
+    ['topOffset', 2.5],
+    ['leftPadding', -3],
+    ['blockWidth', 4.5],
+  ] as const)(
+    'составляющая поправки %s = %d вне диапазона слайдера — ноль только у неё',
+    (field, value) => {
+      const geometryCorrection = { ...VALID.geometryCorrection, [field]: value };
+      const session = parseSession(withField({ geometryCorrection }), DEFAULTS);
+
+      expect(session.geometryCorrection).toEqual({
+        ...VALID.geometryCorrection,
+        [field]: DEFAULTS.geometryCorrection[field],
+      });
+    }
+  );
+
+  it('составляющая поправки на краю диапазона слайдера сохраняется', () => {
+    const geometryCorrection = {
+      fontSizePx: GEOMETRY_CORRECTION_RANGES.fontSizePx.max,
+      lineSpacing: GEOMETRY_CORRECTION_RANGES.lineSpacing.min,
+      topOffset: GEOMETRY_CORRECTION_RANGES.topOffset.max,
+      leftPadding: GEOMETRY_CORRECTION_RANGES.leftPadding.min,
+      blockWidth: GEOMETRY_CORRECTION_RANGES.blockWidth.max,
+    };
+    const session = parseSession(withField({ geometryCorrection }), DEFAULTS);
+
+    expect(session.geometryCorrection).toEqual(geometryCorrection);
   });
 
   it.each([[null], [undefined], ['текст'], [42], [[VALID]]])(

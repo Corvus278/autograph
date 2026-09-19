@@ -1,6 +1,7 @@
 import {
   BOTTOM_MARGIN_RANGE,
   FREQUENCY_RANGE,
+  GEOMETRY_CORRECTION_RANGES,
   HANDWRITING_FONTS,
   type ParameterRange,
   REALISM_LEVELS,
@@ -287,10 +288,9 @@ const readRealism = (value: unknown, fallback: GeneratorRealism): GeneratorReali
 };
 
 /**
- * Поправка геометрии по составляющим. Диапазоны её слайдеров живут в
- * интерфейсе, поэтому здесь проверяется только, что составляющая — конечное
- * число: разметка всё равно выводится из разлиновки, а поправка лишь
- * сдвигает её.
+ * Поправка геометрии по составляющим: негодная составляющая — вне диапазона
+ * своего слайдера или не число — берёт значение по умолчанию, остальные
+ * восстанавливаются.
  *
  * @param value — сохранённое значение
  * @param fallback — поправка по умолчанию
@@ -303,11 +303,31 @@ const readGeometryCorrection = (
   const record = isJsonRecord(value) ? value : {};
 
   return {
-    fontSizePx: readNumber(record.fontSizePx, fallback.fontSizePx),
-    lineSpacing: readNumber(record.lineSpacing, fallback.lineSpacing),
-    topOffset: readNumber(record.topOffset, fallback.topOffset),
-    leftPadding: readNumber(record.leftPadding, fallback.leftPadding),
-    blockWidth: readNumber(record.blockWidth, fallback.blockWidth),
+    fontSizePx: readInRange(
+      record.fontSizePx,
+      GEOMETRY_CORRECTION_RANGES.fontSizePx,
+      fallback.fontSizePx
+    ),
+    lineSpacing: readInRange(
+      record.lineSpacing,
+      GEOMETRY_CORRECTION_RANGES.lineSpacing,
+      fallback.lineSpacing
+    ),
+    topOffset: readInRange(
+      record.topOffset,
+      GEOMETRY_CORRECTION_RANGES.topOffset,
+      fallback.topOffset
+    ),
+    leftPadding: readInRange(
+      record.leftPadding,
+      GEOMETRY_CORRECTION_RANGES.leftPadding,
+      fallback.leftPadding
+    ),
+    blockWidth: readInRange(
+      record.blockWidth,
+      GEOMETRY_CORRECTION_RANGES.blockWidth,
+      fallback.blockWidth
+    ),
   };
 };
 
