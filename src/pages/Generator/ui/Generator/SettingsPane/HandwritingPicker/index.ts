@@ -1,0 +1,1 @@
+export { HandwritingPicker } from './HandwritingPicker';

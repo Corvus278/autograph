@@ -32,6 +32,21 @@ describe('ступени реализма', () => {
     expect(counts[0]).toBe(0);
   });
 
+  it('к небрежной ступени искажают чаще: слово реже пропускается, букв больше', () => {
+    /**
+     * Ровная ступень частоты не использует — искажения на ней выключены, и её
+     * числа в сравнение не входят.
+     */
+    const distorted = REALISM_LEVELS.slice(1);
+
+    distorted.slice(1).forEach((level, index) => {
+      const previous = distorted[index];
+
+      expect(level.wordFrequency).toBeLessThan(previous?.wordFrequency || 0);
+      expect(level.letterFrequency).toBeGreaterThan(previous?.letterFrequency || 0);
+    });
+  });
+
   it('по умолчанию берут ступень «Обычно» с включёнными искажениями', () => {
     const level = REALISM_LEVELS.find(({ id }) => {
       return id === DEFAULT_REALISM_LEVEL_ID;
