@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 import {
   DEFAULT_BOTTOM_MARGIN,
@@ -18,9 +19,26 @@ import {
 } from '../config';
 import type { PaperFamily } from '../lib/paper/paper.types';
 
-import type { GeneratorRealism, GeneratorState, GeneratorStore } from './generator.types';
+import type { GeneratorRealism, GeneratorState } from './generator.types';
 import { selectPaperFamilies } from './paperSelectors';
-import type { PaperSelection } from './useGeneratorStore.types';
+import { SESSION_VERSION, toSession } from './sessionSchema';
+import { createSessionStorage } from './sessionStorage';
+import {
+  EMPTY_HISTORY,
+  type HistoryStep,
+  recordCommit,
+  recordPreview,
+  recordRedo,
+  recordUndo,
+} from './useGeneratorStore.history';
+import type {
+  CommitOptions,
+  DocumentUpdate,
+  GeneratorSession,
+  GeneratorStateWithHistory,
+  GeneratorStoreWithHistory,
+  PaperSelection,
+} from './useGeneratorStore.types';
 import { deleteUserSheet, readUserSheets, writeUserSheet } from './userSheetsStorage';
 
 /**
@@ -70,7 +88,7 @@ const toLevelRealism = (levelId: RealismLevelId): GeneratorRealism => {
   return realism;
 };
 
-const DEFAULT_STATE: GeneratorState = {
+const DEFAULT_STATE: GeneratorStateWithHistory = {
   text: DEFAULT_TEXT,
   fontFamily: HANDWRITING_FONTS[0]?.family ?? '',
   ink: { kind: 'auto' },
@@ -97,6 +115,7 @@ const DEFAULT_STATE: GeneratorState = {
   customFontFamily: null,
   customSceneSrc: null,
   isBackgroundHidden: false,
+  history: EMPTY_HISTORY,
 };
 
 /**
@@ -132,6 +151,65 @@ const resolveSelection = (
 };
 
 /**
+ * Проверка ссылок на лист после восстановления: сессия и снимки истории
+ * ссылаются на листы, которых к этому моменту может не быть. Пропавший
+ * закреплённый лист снимает закрепление и возвращает семью по умолчанию —
+ * держать выбор в его семье пользователь не просил. Неизвестная семья
+ * заменяется первой, пропавший незакреплённый экземпляр — первым в семье.
+ *
+ * @param families — доступные семьи листов
+ * @param refs — семья, экземпляр и закрепление из сессии или снимка
+ * @returns существующие семья и экземпляр с закреплением
+ */
+const resolveSheetRefs = (
+  families: PaperFamily[],
+  refs: Pick<GeneratorState, 'familyId' | 'sheetId' | 'isSheetPinned'>
+): Pick<GeneratorState, 'familyId' | 'sheetId' | 'isSheetPinned'> => {
+  const { familyId, sheetId, isSheetPinned } = refs;
+  const family = families.find((item) => {
+    return item.id === familyId;
+  });
+  const hasSheet = Boolean(
+    family?.sheets.some((item) => {
+      return item.id === sheetId;
+    })
+  );
+
+  if (family && hasSheet) {
+    return { familyId, sheetId, isSheetPinned };
+  }
+
+  const fallbackFamilyId = isSheetPinned ? '' : familyId;
+
+  return { ...resolveSelection(families, fallbackFamilyId, ''), isSheetPinned: false };
+};
+
+/**
+ * Переход по истории с проверкой ссылок на лист: снимок мог сохранить свой
+ * лист, удалённый после него.
+ *
+ * @param state — текущее состояние
+ * @param step — переход; `null` — переходить некуда
+ * @returns изменения состояния
+ */
+const applyHistoryStep = (
+  state: GeneratorStateWithHistory,
+  step: HistoryStep | null
+): Partial<GeneratorStateWithHistory> => {
+  if (!step) {
+    return {};
+  }
+
+  const { document, history } = step;
+
+  return {
+    ...document,
+    ...resolveSheetRefs(selectPaperFamilies(state), document),
+    history,
+  };
+};
+
+/**
  * Следующий seed — соседнее целое, а не случайное число: соседние seed дают
  * заметно разный рецепт, зато переход предсказуем и проверяется тестом.
  */
@@ -154,187 +232,285 @@ const toCustomRealism = (
   return { ...state.realism, ...patch, level: 'custom' };
 };
 
-export const useGeneratorStore = create<GeneratorStore>((set) => {
-  return {
-    ...DEFAULT_STATE,
-    setText: (text) => {
-      return set({ text });
-    },
-    setFontFamily: (fontFamily) => {
-      return set({ fontFamily });
-    },
-    setCustomFontFamily: (customFontFamily) => {
-      return set({ customFontFamily });
-    },
-    setInk: (ink) => {
-      return set({ ink });
-    },
-    setGeometry: (patch) => {
-      return set(patch);
-    },
-    setBackgroundHidden: (isBackgroundHidden) => {
-      return set({ isBackgroundHidden });
-    },
-    toggleDistortion: (flag) => {
-      return set((state) => {
-        const { flags } = state.realism;
+/**
+ * Ключ сессии в локальном хранилище.
+ */
+const SESSION_KEY = 'autograph.session';
 
-        return {
-          realism: toCustomRealism(state, { flags: { ...flags, [flag]: !flags[flag] } }),
-        };
-      });
-    },
-    setContourVariance: (hasContourVariance) => {
-      return set((state) => {
-        return { realism: toCustomRealism(state, { hasContourVariance }) };
-      });
-    },
-    setWordFrequency: (wordFrequency) => {
-      return set((state) => {
-        return { realism: toCustomRealism(state, { wordFrequency }) };
-      });
-    },
-    setLetterFrequency: (letterFrequency) => {
-      return set((state) => {
-        return { realism: toCustomRealism(state, { letterFrequency }) };
-      });
-    },
-    selectRealismLevel: (levelId) => {
-      const realism = findLevelRealism(levelId);
+/**
+ * Сессия из состояния стора для записи. Подключённый свой шрифт в неё не
+ * попадает, и почерк тогда пишется первым встроенным: после перезагрузки
+ * файла шрифта уже нет, а сохранённый из-под него встроенный пользователь
+ * не видел.
+ *
+ * @param state — состояние генератора
+ * @returns поля сессии
+ */
+const partializeSession = (state: GeneratorStoreWithHistory): GeneratorSession => {
+  const session = toSession(state);
 
-      if (!realism) {
-        return;
-      }
+  return state.customFontFamily
+    ? { ...session, fontFamily: DEFAULT_STATE.fontFamily }
+    : session;
+};
 
-      set({ realism });
-    },
-    setSceneEnabled: (isSceneEnabled) => {
-      return set({ isSceneEnabled });
-    },
-    selectScene: (sceneId) => {
-      return set({ sceneId, customSceneSrc: null });
-    },
-    setCustomScene: (customSceneSrc) => {
-      return set({ customSceneSrc });
-    },
-    setSceneParams: (patch) => {
-      return set(patch);
-    },
-    setIsSpread: (isSpread) => {
-      return set({ isSpread });
-    },
-    setZoom: (zoom) => {
-      return set({ zoom });
-    },
-    goToPage: (pageIndex) => {
-      return set({ pageIndex: Math.max(pageIndex, 0) });
-    },
-    clampPageIndex: (pageCount) => {
-      return set((state) => {
-        const lastIndex = Math.max(pageCount - 1, 0);
-
-        return { pageIndex: Math.min(state.pageIndex, lastIndex) };
-      });
-    },
-    setPresetFamilies: (presetFamilies) => {
-      return set((state) => {
-        const families = selectPaperFamilies({ ...state, presetFamilies });
-
-        return {
-          presetFamilies,
-          ...resolveSelection(families, state.familyId, state.sheetId),
-        };
-      });
-    },
-    selectFamily: (familyId) => {
-      return set((state) => {
-        /**
-         * Экземпляр берётся первый в семье: прежний принадлежал другой семье.
-         * Вместе с ним снимается и ручной выбор — раздачу листов по страницам
-         * снова делает рецепт. Поправка геометрии при этом остаётся: она
-         * задана дельтами.
-         */
-        return {
-          ...resolveSelection(selectPaperFamilies(state), familyId, ''),
-          isSheetPinned: false,
-        };
-      });
-    },
-    selectSheet: (sheetId) => {
-      return set({ sheetId, isSheetPinned: true });
-    },
-    addUserSheet: (record) => {
-      writeUserSheet(record);
-
-      return set((state) => {
-        const rest = state.userSheets.filter((item) => {
-          return item.sheet.id !== record.sheet.id;
+export const useGeneratorStore = create<GeneratorStoreWithHistory>()(
+  persist(
+    (set) => {
+      /**
+       * Правка документа шагом истории. Время берётся здесь, а не в
+       * `recordCommit`, чтобы склейку можно было проверить без часов.
+       */
+      const commit = (update: DocumentUpdate, options: CommitOptions = {}): void => {
+        set((state) => {
+          return recordCommit(state, update, options, Date.now());
         });
+      };
 
-        /**
-         * Добавленный лист встаёт выбранным вручную: пользователь загрузил
-         * свою фотографию, чтобы её увидеть, а не чтобы она встала в очередь
-         * рецепта.
-         */
-        return {
-          userSheets: [...rest, record],
-          familyId: record.familyId,
-          sheetId: record.sheet.id,
-          isSheetPinned: true,
-        };
-      });
-    },
-    removeUserSheet: (sheetId) => {
-      deleteUserSheet(sheetId);
+      return {
+        ...DEFAULT_STATE,
+        commit,
+        preview: (update) => {
+          return set((state) => {
+            return recordPreview(state, update);
+          });
+        },
+        undo: () => {
+          return set((state) => {
+            return applyHistoryStep(state, recordUndo(state));
+          });
+        },
+        redo: () => {
+          return set((state) => {
+            return applyHistoryStep(state, recordRedo(state));
+          });
+        },
+        setText: (text) => {
+          return commit({ text }, { coalesceKey: 'text' });
+        },
+        setFontFamily: (fontFamily) => {
+          return commit({ fontFamily });
+        },
+        setCustomFontFamily: (customFontFamily) => {
+          return set({ customFontFamily });
+        },
+        setInk: (ink) => {
+          return commit({ ink });
+        },
+        setGeometry: (patch) => {
+          return commit(patch, { coalesceKey: 'geometry' });
+        },
+        setBackgroundHidden: (isBackgroundHidden) => {
+          return set({ isBackgroundHidden });
+        },
+        toggleDistortion: (flag) => {
+          return commit((state) => {
+            const { flags } = state.realism;
 
-      return set((state) => {
-        const userSheets = state.userSheets.filter((item) => {
-          return item.sheet.id !== sheetId;
-        });
-        const families = selectPaperFamilies({ ...state, userSheets });
-        const selection = resolveSelection(families, state.familyId, state.sheetId);
+            return {
+              realism: toCustomRealism(state, {
+                flags: { ...flags, [flag]: !flags[flag] },
+              }),
+            };
+          });
+        },
+        setContourVariance: (hasContourVariance) => {
+          return commit((state) => {
+            return { realism: toCustomRealism(state, { hasContourVariance }) };
+          });
+        },
+        setWordFrequency: (wordFrequency) => {
+          return commit(
+            (state) => {
+              return { realism: toCustomRealism(state, { wordFrequency }) };
+            },
+            { coalesceKey: 'wordFrequency' }
+          );
+        },
+        setLetterFrequency: (letterFrequency) => {
+          return commit(
+            (state) => {
+              return { realism: toCustomRealism(state, { letterFrequency }) };
+            },
+            { coalesceKey: 'letterFrequency' }
+          );
+        },
+        selectRealismLevel: (levelId) => {
+          const realism = findLevelRealism(levelId);
 
-        /**
-         * Удалили выбранный вручную лист — ручной выбор снимается: держать
-         * его на подставленном взамен экземпляре пользователь не просил.
-         */
-        return {
-          userSheets,
-          ...selection,
-          isSheetPinned: state.isSheetPinned && selection.sheetId === state.sheetId,
-        };
-      });
-    },
-    restoreUserSheets: () => {
-      const userSheets = readUserSheets();
+          if (!realism) {
+            return;
+          }
 
-      return set((state) => {
-        const families = selectPaperFamilies({ ...state, userSheets });
+          commit({ realism });
+        },
+        setSceneEnabled: (isSceneEnabled) => {
+          return commit({ isSceneEnabled });
+        },
+        selectScene: (sceneId) => {
+          return set((state) => {
+            /**
+             * Своё изображение сцены — ресурс, а не документ: оно
+             * сбрасывается без шага истории, шагом становится только выбор
+             * сцены.
+             */
+            return {
+              ...recordCommit(state, { sceneId }, {}, Date.now()),
+              customSceneSrc: null,
+            };
+          });
+        },
+        setCustomScene: (customSceneSrc) => {
+          return set({ customSceneSrc });
+        },
+        setSceneParams: (patch) => {
+          return commit(patch, { coalesceKey: `scene:${Object.keys(patch).join()}` });
+        },
+        setIsSpread: (isSpread) => {
+          return set({ isSpread });
+        },
+        setZoom: (zoom) => {
+          return set({ zoom });
+        },
+        goToPage: (pageIndex) => {
+          return set({ pageIndex: Math.max(pageIndex, 0) });
+        },
+        clampPageIndex: (pageCount) => {
+          return set((state) => {
+            const lastIndex = Math.max(pageCount - 1, 0);
 
-        return {
-          userSheets,
-          ...resolveSelection(families, state.familyId, state.sheetId),
-        };
-      });
+            return { pageIndex: Math.min(state.pageIndex, lastIndex) };
+          });
+        },
+        setPresetFamilies: (presetFamilies) => {
+          return set((state) => {
+            const families = selectPaperFamilies({ ...state, presetFamilies });
+
+            /**
+             * Профили грузятся после восстановления своих листов (чтение
+             * листов синхронно, профили — по сети), поэтому закреплённый свой
+             * лист здесь уже на месте и пропавшим не считается.
+             */
+            return { presetFamilies, ...resolveSheetRefs(families, state) };
+          });
+        },
+        selectFamily: (familyId) => {
+          return commit((state) => {
+            /**
+             * Экземпляр берётся первый в семье: прежний принадлежал другой семье.
+             * Вместе с ним снимается и ручной выбор — раздачу листов по страницам
+             * снова делает рецепт. Поправка геометрии при этом остаётся: она
+             * задана дельтами.
+             */
+            return {
+              ...resolveSelection(selectPaperFamilies(state), familyId, ''),
+              isSheetPinned: false,
+            };
+          });
+        },
+        selectSheet: (sheetId) => {
+          return commit({ sheetId, isSheetPinned: true });
+        },
+        addUserSheet: (record) => {
+          writeUserSheet(record);
+
+          return set((state) => {
+            const rest = state.userSheets.filter((item) => {
+              return item.sheet.id !== record.sheet.id;
+            });
+
+            /**
+             * Добавленный лист встаёт выбранным вручную: пользователь загрузил
+             * свою фотографию, чтобы её увидеть, а не чтобы она встала в очередь
+             * рецепта.
+             */
+            return {
+              userSheets: [...rest, record],
+              familyId: record.familyId,
+              sheetId: record.sheet.id,
+              isSheetPinned: true,
+            };
+          });
+        },
+        removeUserSheet: (sheetId) => {
+          deleteUserSheet(sheetId);
+
+          return set((state) => {
+            const userSheets = state.userSheets.filter((item) => {
+              return item.sheet.id !== sheetId;
+            });
+            const families = selectPaperFamilies({ ...state, userSheets });
+            const selection = resolveSelection(families, state.familyId, state.sheetId);
+
+            /**
+             * Удалили выбранный вручную лист — ручной выбор снимается: держать
+             * его на подставленном взамен экземпляре пользователь не просил.
+             */
+            return {
+              userSheets,
+              ...selection,
+              isSheetPinned: state.isSheetPinned && selection.sheetId === state.sheetId,
+            };
+          });
+        },
+        restoreUserSheets: () => {
+          const userSheets = readUserSheets();
+
+          return set((state) => {
+            const families = selectPaperFamilies({ ...state, userSheets });
+
+            return { userSheets, ...resolveSheetRefs(families, state) };
+          });
+        },
+        setGeometryCorrection: (patch) => {
+          return commit(
+            (state) => {
+              return { geometryCorrection: { ...state.geometryCorrection, ...patch } };
+            },
+            { coalesceKey: `geometryCorrection:${Object.keys(patch).join()}` }
+          );
+        },
+        resetGeometryCorrection: () => {
+          return commit({ geometryCorrection: DEFAULT_GEOMETRY_CORRECTION });
+        },
+        startNewRun: () => {
+          return commit((state) => {
+            return { runSeed: nextSeed(state.runSeed) };
+          });
+        },
+      };
     },
-    setGeometryCorrection: (patch) => {
-      return set((state) => {
-        return { geometryCorrection: { ...state.geometryCorrection, ...patch } };
-      });
-    },
-    resetGeometryCorrection: () => {
-      return set({ geometryCorrection: DEFAULT_GEOMETRY_CORRECTION });
-    },
-    startNewRun: () => {
-      return set((state) => {
-        return { runSeed: nextSeed(state.runSeed) };
-      });
-    },
-  };
-});
+    {
+      name: SESSION_KEY,
+      version: SESSION_VERSION,
+      storage: createSessionStorage(toSession(DEFAULT_STATE)),
+      partialize: partializeSession,
+    }
+  )
+);
 
 /**
  * Значения по умолчанию: нужны тестам и stories, чтобы вернуть стор в
  * исходное состояние.
  */
 export const DEFAULT_GENERATOR_STATE = DEFAULT_STATE;
+
+/**
+ * Есть ли шаг для отмены: кнопка и сочетание клавиш отмены доступны.
+ *
+ * @param state — состояние генератора
+ * @returns доступна ли отмена
+ */
+export const selectIsUndoAvailable = (state: GeneratorStateWithHistory): boolean => {
+  return state.history.past.length > 0;
+};
+
+/**
+ * Есть ли шаг для повтора.
+ *
+ * @param state — состояние генератора
+ * @returns доступен ли повтор
+ */
+export const selectIsRedoAvailable = (state: GeneratorStateWithHistory): boolean => {
+  return state.history.future.length > 0;
+};

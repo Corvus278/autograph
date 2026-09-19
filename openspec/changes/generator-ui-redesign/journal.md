@@ -36,3 +36,11 @@
 Отступления: добавлен @radix-ui/react-toolbar вне proposal — вопрос пользователю в финале; алиас @widgets в tsconfig/vite/vitest вне файлов группы (вынужденно); <header> в CreateFont → <div> (второй banner).
 Аудит: ok с первого круга.
 Долг: в routes.test добавить «/» и «генератор → Свой шрифт» после монтирования шапки (G5/G9); Swatch — знак всегда text-accent-fg, на светлой заливке проверить контраст в G7; SegmentedControl внутри Toolbar — вложенный роуминг, решить в G6; фраза «widgets пустой» в CLAUDE.md — в G10.
+
+### G4 · Сессия и история правок
+
+Сессия: persist под ключом autograph.session, проверка по полям в getItem хранилища (parseSession), чужая версия/мусор → дефолты целиком; дросселирование 500 мс + сброс на pagehide; свой шрифт не сохраняется.
+История (K6): commit/preview/undo/redo, склейка по ключу поля в окне 800 мс, глубина 100; resolveSheetRefs в restoreUserSheets/setPresetFamilies/undo/redo.
+Отступления от D7: проверка полей в getItem, а не в merge; проверка ссылок в экшенах стора, а не в хуках (поведение то же).
+Аудит: ok с первого круга; question — диапазон поправки геометрии в сессии не проверяется (диапазоны лежат в GeometryGroup.tsx, не в config) → пользователю в финале.
+Долг: undo во время драга (есть previewBase) теряет previewBase — учесть в G5/G7; слушатель pagehide копится после vi.resetModules в тестах.
