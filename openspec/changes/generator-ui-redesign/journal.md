@@ -112,3 +112,12 @@ ExpertSettings: Disclosure → Accordion из 5 групп (свёрнуты), �
 По ответам пользователя: GEOMETRY_CORRECTION_RANGES в config — общий источник для слайдеров и sessionSchema, выход за диапазон → дефолт; FileInput — скрытый input + кнопка «Выбрать файл» со статусом/именем файла (describedby), Enter/Space; buttonVariants вынесен в Button.styles.ts. CLAUDE.md: GeneratorLayout, разделение примитивов Radix/без Radix.
 Аудит: ok с первого круга.
 Долг: FileInput — видимый текст «Выбрать файл» не входит в доступное имя (WCAG 2.5.3 Label in Name); %d в имени it.each для дробных значений.
+
+### Итог
+
+Гейт npm run lint && npm test && npm run test:stories — ok; test:visual — ok (G10, F1); openspec validate --strict — ok.
+Покрытие (итоговый аудит): 20 требований, 49 сценариев, без проверки 0.
+Закрыто 32/33. Открыта 7.3 — ручная приёмка в браузере (пользователь), туда же приёмка чисел ступеней реализма на глаз (5.4).
+Вопросы пользователю решены: toolbar оставить; диапазон поправки — проверять (F1); «Перемерить» = подтверждение; FileInput — доработан (F1).
+Правки артефактов для /opsx:update: proposal — @radix-ui/react-toolbar в зависимостях; спека диалога листа — «Перемерить» применяется сразу как отдельное подтверждённое действие.
+Остаточный долг: FileInput Label in Name (WCAG 2.5.3); story Screen — toBeVisible вместо expectInWindow; эталоны SheetViewport/Fit и Zoom-And-Fit равны; нет теста «сворачивает группу, не трогая параметры».
