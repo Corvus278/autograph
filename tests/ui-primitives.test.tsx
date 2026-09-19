@@ -4,71 +4,71 @@
 import { Button } from '@shared/ui/Button';
 import { Checkbox } from '@shared/ui/Checkbox';
 import { ColorInput } from '@shared/ui/ColorInput';
+import { Dialog } from '@shared/ui/Dialog';
+import { Disclosure } from '@shared/ui/Disclosure';
+import { FileInput } from '@shared/ui/FileInput';
+import { IconButton } from '@shared/ui/IconButton';
+import { SegmentedControl } from '@shared/ui/SegmentedControl';
 import { Select } from '@shared/ui/Select';
-import { Slider } from '@shared/ui/Slider';
+import { Swatch, SwatchGroup } from '@shared/ui/Swatch';
 import { TextArea } from '@shared/ui/TextArea';
+import { TileRadio } from '@shared/ui/TileRadio';
+import { Toolbar, ToolbarItem } from '@shared/ui/Toolbar';
+import { ValueSlider } from '@shared/ui/ValueSlider';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(() => {
   cleanup();
 });
 
-describe('Slider', () => {
-  it('меняет значение стрелками с клавиатуры', async () => {
-    const user = userEvent.setup();
-    const handleChange = vi.fn();
+describe('ValueSlider', () => {
+  const formatDegrees = (value: number) => {
+    return `${value}°`;
+  };
 
+  it('показывает значение через форматтер и в тексте, и в aria-valuetext', () => {
     render(
-      <Slider
-        label="Размер шрифта"
-        value={5}
-        min={0}
+      <ValueSlider
+        label="Поворот"
+        value={-3}
+        min={-10}
         max={10}
         step={1}
-        onChange={handleChange}
+        formatValue={formatDegrees}
+        onChange={vi.fn()}
       />
     );
 
-    await user.tab();
+    const slider = screen.getByRole('slider', { name: 'Поворот' });
+
+    expect(screen.getByText('-3°')).toBeDefined();
+    expect(slider.getAttribute('aria-valuetext')).toBe('-3°');
+  });
+
+  it('отдаёт окончательное значение в onValueCommit', async () => {
+    const user = userEvent.setup();
+    const handleCommit = vi.fn();
+
+    render(
+      <ValueSlider
+        label="Поворот"
+        value={0}
+        min={-10}
+        max={10}
+        step={1}
+        formatValue={formatDegrees}
+        onChange={vi.fn()}
+        onValueCommit={handleCommit}
+      />
+    );
+
+    screen.getByRole('slider').focus();
     await user.keyboard('{ArrowRight}');
 
-    expect(handleChange).toHaveBeenCalledWith(6);
-
-    await user.keyboard('{ArrowLeft}');
-
-    expect(handleChange).toHaveBeenLastCalledWith(4);
-  });
-
-  it('показывает текущее значение рядом с подписью', () => {
-    render(
-      <Slider
-        label="Ширина блока"
-        value={446}
-        min={100}
-        max={1000}
-        step={1}
-        onChange={vi.fn()}
-      />
-    );
-
-    expect(screen.getByText('446')).toBeDefined();
-  });
-
-  it('связывает подпись со слайдером', () => {
-    render(
-      <Slider
-        label="Ширина блока"
-        value={446}
-        min={100}
-        max={1000}
-        step={1}
-        onChange={vi.fn()}
-      />
-    );
-
-    expect(screen.getByRole('slider', { name: 'Ширина блока' })).toBeDefined();
+    expect(handleCommit).toHaveBeenLastCalledWith(1);
   });
 });
 
@@ -158,5 +158,338 @@ describe('внешний className', () => {
     expect(button.className).toContain('px-8');
     expect(button.className).not.toContain('rounded-md');
     expect(button.className).not.toContain('px-4');
+  });
+});
+
+describe('SegmentedControl', () => {
+  const LEVELS = [
+    { value: 'even', label: 'Ровно' },
+    { value: 'neat', label: 'Аккуратно' },
+    { value: 'normal', label: 'Обычно' },
+  ];
+
+  it('ходит стрелками по сегментам и выбирает пробелом', async () => {
+    const user = userEvent.setup();
+    const handleChange = vi.fn();
+
+    render(
+      <SegmentedControl
+        label="Реализм"
+        value="neat"
+        options={LEVELS}
+        onChange={handleChange}
+      />
+    );
+
+    await user.tab();
+
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Аккуратно' }));
+
+    await user.keyboard('{ArrowRight}');
+
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Обычно' }));
+
+    await user.keyboard(' ');
+
+    expect(handleChange).toHaveBeenLastCalledWith('normal');
+  });
+
+  it('не снимает выбор повторным нажатием на выбранный сегмент', async () => {
+    const user = userEvent.setup();
+    const handleChange = vi.fn();
+
+    render(
+      <SegmentedControl
+        label="Реализм"
+        value="neat"
+        options={LEVELS}
+        onChange={handleChange}
+      />
+    );
+
+    await user.click(screen.getByRole('radio', { name: 'Аккуратно' }));
+
+    expect(handleChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Радио Radix выбирает пункт, когда фокус пришёл на него при зажатой
+ * стрелке, а роуминг переводит фокус таймером. Поэтому стрелку держим
+ * (`{ArrowRight>}`): отпущенная до таймера, она сняла бы признак нажатия
+ * раньше, чем фокус доедет, — в браузере keyup приходит позже.
+ */
+describe('TileRadio', () => {
+  it('ходит стрелками по плиткам и выбирает', async () => {
+    const user = userEvent.setup();
+    const handleChange = vi.fn();
+
+    render(
+      <TileRadio
+        label="Бумага"
+        value="grid"
+        options={[
+          { value: 'grid', label: 'Клетка' },
+          { value: 'lined', label: 'Линейка' },
+        ]}
+        onChange={handleChange}
+      />
+    );
+
+    expect(screen.getByRole('radiogroup', { name: 'Бумага' })).toBeDefined();
+
+    await user.tab();
+    await user.keyboard('{ArrowRight>}');
+
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Линейка' }));
+    expect(handleChange).toHaveBeenLastCalledWith('lined');
+  });
+});
+
+describe('SwatchGroup', () => {
+  it('ходит стрелками по образцам и выбирает', async () => {
+    const user = userEvent.setup();
+    const handleChange = vi.fn();
+
+    render(
+      <SwatchGroup label="Чернила" value="blue" onChange={handleChange}>
+        <Swatch value="blue" label="Синие" color="#1c3f94" />
+
+        <Swatch value="black" label="Чёрные" color="#1a1a1a" />
+      </SwatchGroup>
+    );
+
+    expect(screen.getByRole('radiogroup', { name: 'Чернила' })).toBeDefined();
+
+    await user.tab();
+    await user.keyboard('{ArrowRight>}');
+
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Чёрные' }));
+    expect(handleChange).toHaveBeenLastCalledWith('black');
+  });
+});
+
+describe('Dialog', () => {
+  const ControlledDialog = () => {
+    const [isOpen, setIsOpen] = useState(false);
+
+    return (
+      <Dialog
+        isOpen={isOpen}
+        title="Свой лист"
+        trigger={<button type="button">Настроить лист</button>}
+        onOpenChange={setIsOpen}
+      >
+        <input aria-label="Шаг" />
+      </Dialog>
+    );
+  };
+
+  it('закрывается по Esc и возвращает фокус на кнопку-триггер', async () => {
+    const user = userEvent.setup();
+
+    render(<ControlledDialog />);
+
+    const trigger = screen.getByRole('button', { name: 'Настроить лист' });
+
+    await user.click(trigger);
+
+    expect(screen.getByRole('dialog', { name: 'Свой лист' })).toBeDefined();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('закрывается кнопкой «Закрыть»', async () => {
+    const user = userEvent.setup();
+
+    render(<ControlledDialog />);
+
+    await user.click(screen.getByRole('button', { name: 'Настроить лист' }));
+    await user.click(screen.getByRole('button', { name: 'Закрыть' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('Disclosure', () => {
+  it('раскрывается с клавиатуры', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <Disclosure title="Экспертный режим">
+        <p>Поправка геометрии</p>
+      </Disclosure>
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Экспертный режим' });
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Поправка геометрии')).toBeNull();
+
+    await user.tab();
+    await user.keyboard('{Enter}');
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Поправка геометрии')).toBeDefined();
+  });
+});
+
+describe('Toolbar', () => {
+  it('ходит стрелками между кнопками', async () => {
+    const user = userEvent.setup();
+    const handleUndoClick = vi.fn();
+    const handleRedoClick = vi.fn();
+
+    render(
+      <Toolbar label="История">
+        <ToolbarItem>
+          <IconButton label="Отменить" onClick={handleUndoClick}>
+            ↶
+          </IconButton>
+        </ToolbarItem>
+
+        <ToolbarItem>
+          <IconButton label="Повторить" onClick={handleRedoClick}>
+            ↷
+          </IconButton>
+        </ToolbarItem>
+      </Toolbar>
+    );
+
+    expect(screen.getByRole('toolbar', { name: 'История' })).toBeDefined();
+
+    await user.tab();
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Отменить' }));
+
+    await user.keyboard('{ArrowRight}');
+
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Повторить' })
+    );
+
+    await user.keyboard('{Enter}');
+
+    expect(handleRedoClick).toHaveBeenCalledOnce();
+    expect(handleUndoClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('IconButton', () => {
+  it('называется подписью и не нажимается, когда недоступна', async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+
+    render(
+      <IconButton label="Отменить" isDisabled onClick={handleClick}>
+        ↶
+      </IconButton>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Отменить' }));
+
+    expect(handleClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('FileInput', () => {
+  /**
+   * Скрытое поле выбора файла: в дереве доступности его нет, файл в него
+   * кладёт тест, как положил бы системный диалог.
+   *
+   * @param container — корень отрисованного контрола
+   * @returns поле выбора файла
+   */
+  const getFileField = (container: HTMLElement): HTMLInputElement => {
+    const field = container.querySelector<HTMLInputElement>('input[type="file"]');
+
+    if (!field) {
+      throw new Error('Нет поля выбора файла');
+    }
+
+    return field;
+  };
+
+  it('показывает кнопку с русским текстом вместо родного вида поля', () => {
+    render(<FileInput label="Свой шрифт (.ttf)" accept=".ttf" onSelect={vi.fn()} />);
+
+    const button = screen.getByRole('button', { name: 'Свой шрифт (.ttf)' });
+
+    expect(button.textContent).toBe('Выбрать файл');
+    expect(screen.getByText('Файл не выбран')).toBeDefined();
+    expect(screen.queryByText(/choose file|no file chosen/i)).toBeNull();
+  });
+
+  it('отдаёт выбранный файл и показывает его имя', async () => {
+    const user = userEvent.setup();
+    const handleSelect = vi.fn();
+    const file = new File(['x'], 'почерк.ttf', { type: 'font/ttf' });
+    const { container } = render(
+      <FileInput label="Свой шрифт (.ttf)" accept=".ttf" onSelect={handleSelect} />
+    );
+
+    await user.upload(getFileField(container), file);
+
+    expect(handleSelect).toHaveBeenCalledWith(file);
+    expect(screen.getByText('почерк.ttf')).toBeDefined();
+  });
+
+  it.each([['{Enter}'], [' ']])(
+    'клавиша %s на кнопке открывает выбор файла',
+    async (key) => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <FileInput label="Своя сцена" accept="image/*" onSelect={vi.fn()} />
+      );
+      const handleFieldClick = vi.fn();
+
+      getFileField(container).addEventListener('click', handleFieldClick);
+
+      await user.tab();
+
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: 'Своя сцена' })
+      );
+
+      await user.keyboard(key);
+
+      expect(handleFieldClick).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('связывает ошибку и имя файла с кнопкой как описание', () => {
+    render(
+      <FileInput
+        label="Свой шрифт (.ttf)"
+        accept=".ttf"
+        error="Не удалось прочитать шрифт"
+        onSelect={vi.fn()}
+      />
+    );
+
+    const button = screen.getByRole('button', { name: 'Свой шрифт (.ttf)' });
+    const describedBy = button.getAttribute('aria-describedby') || '';
+    const description = describedBy
+      .split(' ')
+      .map((id) => {
+        return document.getElementById(id)?.textContent;
+      })
+      .join(' ');
+
+    expect(description).toBe('Файл не выбран Не удалось прочитать шрифт');
+  });
+
+  it('недоступный контрол не открывает выбор', () => {
+    render(
+      <FileInput label="Своя сцена" accept="image/*" isDisabled onSelect={vi.fn()} />
+    );
+
+    expect(screen.getByRole('button', { name: 'Своя сцена' })).toHaveProperty(
+      'disabled',
+      true
+    );
   });
 });

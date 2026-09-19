@@ -7,6 +7,12 @@ import { Label } from '../Label';
 
 import type { SelectProps } from './Select.types';
 
+/**
+ * Выпадающий список. Раскрывается под полем (`popper`), а не поверх него:
+ * выровненный по пункту список ставится один раз и при прокрутке страницы
+ * отрывается от поля. Ширина — ширина поля, высота — не больше места до края
+ * окна, лишнее прокручивается внутри списка.
+ */
 export const Select: FC<SelectProps> = (props) => {
   const { label, value, options, onChange, isDisabled = false, className } = props;
   const controlId = useId();
@@ -26,22 +32,26 @@ export const Select: FC<SelectProps> = (props) => {
       >
         <RadixSelect.Trigger
           id={controlId}
-          className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-50"
         >
           <RadixSelect.Value />
 
-          <RadixSelect.Icon className="text-zinc-400">▾</RadixSelect.Icon>
+          <RadixSelect.Icon className="text-fg-muted">▾</RadixSelect.Icon>
         </RadixSelect.Trigger>
 
         <RadixSelect.Portal>
-          <RadixSelect.Content className="z-50 overflow-hidden rounded-md border border-zinc-700 bg-zinc-900 text-zinc-100 shadow-lg">
+          <RadixSelect.Content
+            position="popper"
+            sideOffset={4}
+            className="z-50 max-h-(--radix-select-content-available-height) w-(--radix-select-trigger-width) overflow-hidden rounded-md border border-border-strong bg-surface-raised text-fg shadow-popover"
+          >
             <RadixSelect.Viewport className="max-h-72 p-1">
               {options.map(({ value: optionValue, label: optionLabel }) => {
                 return (
                   <RadixSelect.Item
                     key={optionValue}
                     value={optionValue}
-                    className="cursor-pointer rounded-sm px-3 py-1.5 text-sm outline-hidden data-highlighted:bg-zinc-800 data-[state=checked]:text-violet-300"
+                    className="cursor-pointer rounded-sm px-3 py-1.5 text-sm text-fg-muted outline-hidden data-highlighted:bg-border data-[state=checked]:font-medium data-[state=checked]:text-fg"
                   >
                     <RadixSelect.ItemText>{optionLabel}</RadixSelect.ItemText>
                   </RadixSelect.Item>

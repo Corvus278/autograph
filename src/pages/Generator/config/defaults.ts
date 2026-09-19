@@ -9,19 +9,9 @@ import type { ParameterRange } from './config.types';
 export const PAGE_WIDTH = 700;
 
 /**
- * Значения по умолчанию подобраны так, чтобы текст ложился по линейкам
- * встроенных фонов.
+ * Значения по умолчанию.
  */
-export const DEFAULT_FONT_SIZE = 1.6;
-export const DEFAULT_BLOCK_WIDTH = 446;
-export const DEFAULT_LINE_SPACING = -2;
-export const DEFAULT_TOP_OFFSET = 5;
-export const DEFAULT_LEFT_PADDING = 5;
-export const DEFAULT_BLOCK_ROTATE = 0;
 export const DEFAULT_BOTTOM_MARGIN = 0;
-export const DEFAULT_INK_COLOR = '#1f3a93';
-export const DEFAULT_WORD_FREQUENCY = 1;
-export const DEFAULT_LETTER_FREQUENCY = 1;
 export const DEFAULT_SCENE_ROTATE = 0;
 export const DEFAULT_SCENE_SHIFT_X = 0;
 export const DEFAULT_SCENE_SHIFT_Y = 0;
@@ -29,21 +19,33 @@ export const DEFAULT_SCENE_SCALE = 0;
 export const DEFAULT_SCENE_DARKEN = 0.06;
 
 /**
- * Границы слайдеров: за этими пределами текст уезжает с листа.
- */
-export const FONT_SIZE_RANGE: ParameterRange = { min: 0.1, max: 10, step: 0.1 };
-export const BLOCK_WIDTH_RANGE: ParameterRange = { min: 100, max: 1000, step: 1 };
-export const LINE_SPACING_RANGE: ParameterRange = { min: -100, max: 100, step: 1 };
-export const TOP_OFFSET_RANGE: ParameterRange = { min: -50, max: 300, step: 1 };
-export const LEFT_PADDING_RANGE: ParameterRange = { min: 0, max: 600, step: 1 };
-export const BLOCK_ROTATE_RANGE: ParameterRange = { min: -60, max: 60, step: 1 };
-
-/**
  * Запас снизу в шагах разлиновки. Шаг слайдера — целый шаг разлиновки: на
  * линейке это ровно строка, и запас отнимает одинаковое число строк на листах
  * с любым шагом.
  */
 export const BOTTOM_MARGIN_RANGE: ParameterRange = { min: 0, max: 20, step: 1 };
+
+/**
+ * Границы поправок геометрии в долях шага разлиновки — общие у слайдеров и у
+ * чтения сессии: значение, которое слайдер выставить не мог, сессия не
+ * восстанавливает. Поправка — дельта поверх вычисленного из разлиновки,
+ * поэтому диапазоны симметричны нулю и узкие: широкий означал бы, что
+ * автокалибровка промахнулась, и чинить надо её, а не двигать блок руками.
+ *
+ * Кегль и интервал — до четверти шага: кегль и так около шага, и больше
+ * четверти уже меняет почерк, а не подгоняет его. Сдвиги — до двух шагов:
+ * текст можно пересадить на соседние линии, но не увести с листа.
+ */
+export const GEOMETRY_CORRECTION_RANGES: Record<
+  keyof GeometryCorrection,
+  ParameterRange
+> = {
+  fontSizePx: { min: -0.25, max: 0.25, step: 0.01 },
+  lineSpacing: { min: -0.25, max: 0.25, step: 0.01 },
+  topOffset: { min: -2, max: 2, step: 0.05 },
+  leftPadding: { min: -2, max: 2, step: 0.05 },
+  blockWidth: { min: -4, max: 4, step: 0.1 },
+};
 
 export const FREQUENCY_RANGE: ParameterRange = { min: 1, max: 5, step: 1 };
 export const SCENE_ROTATE_RANGE: ParameterRange = { min: -10, max: 10, step: 1 };

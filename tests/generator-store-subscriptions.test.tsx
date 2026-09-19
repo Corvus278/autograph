@@ -14,18 +14,18 @@ import { useShallow } from 'zustand/react/shallow';
 const renders = { geometry: 0, scene: 0 };
 
 /**
- * Подписан на одно поле — размер шрифта.
+ * Подписан на одно поле — запас снизу.
  */
 const GeometryView: FC = () => {
-  const fontSize = useGeneratorStore((state) => {
-    return state.fontSize;
+  const bottomMargin = useGeneratorStore((state) => {
+    return state.bottomMargin;
   });
 
   useEffect(() => {
     renders.geometry += 1;
   });
 
-  return <span>{fontSize}</span>;
+  return <span>{bottomMargin}</span>;
 };
 
 /**
@@ -67,7 +67,7 @@ beforeEach(() => {
 });
 
 describe('гранулярность подписок', () => {
-  it('изменение размера шрифта не перерисовывает контролы сцены', () => {
+  it('изменение запаса снизу не перерисовывает контролы сцены', () => {
     render(
       <>
         <GeometryView />
@@ -79,7 +79,7 @@ describe('гранулярность подписок', () => {
     const geometryRendersBefore = renders.geometry;
 
     act(() => {
-      useGeneratorStore.getState().setGeometry({ fontSize: 4 });
+      useGeneratorStore.getState().setGeometry({ bottomMargin: 4 });
     });
 
     expect(renders.geometry).toBe(geometryRendersBefore + 1);

@@ -1,5 +1,6 @@
 import type { PaperFamily } from '../lib/paper/paper.types';
 import { buildRunRecipe, JPEG_QUALITY } from '../lib/recipe/buildRunRecipe';
+import { INK_PALETTE } from '../lib/recipe/inkPalette';
 import { createSheetSequence } from '../lib/recipe/pickSheetSequence';
 import type { PageOpticsRecipe, RunRecipe } from '../lib/recipe/recipe.types';
 
@@ -12,16 +13,17 @@ const DEFAULT_OPTICS: PageOpticsRecipe = {
   jpegQuality: JPEG_QUALITY,
 };
 
-import type { GeneratorState } from './generator.types';
+import type { GeneratorInk, GeneratorState } from './generator.types';
 import { selectActiveFamily } from './paperSelectors';
+import type { PageRecipeValues } from './recipeSelectors.types';
 
 /**
  * Рецепт прогона по текущему состоянию. Выведен из `runSeed`, поэтому правка
  * текста его не меняет: чтобы рецепт стал другим, нужен новый прогон.
  *
- * Частоты побуквенной обработки рецепт умеет выводить из seed, но в
- * генераторе это слайдеры, и пользовательский ввод главнее: значения стора
- * передаются в сборку и заменяют выведенные.
+ * Флаги и частоты побуквенной обработки рецепт копирует из реализма
+ * документа, из seed выводится только seed почерка. Цвет чернил рецепт
+ * выбирает сам, только если выбранного тона нет в палитре.
  *
  * @param state — состояние генератора
  * @param pageCount — число страниц прогона
@@ -37,15 +39,82 @@ export const selectRunRecipe = (
     return null;
   }
 
+  const { flags, wordFrequency, letterFrequency } = state.realism;
+
   return buildRunRecipe({
     seed: state.runSeed,
     family,
     pageCount: Math.max(1, pageCount),
-    flags: state.flags,
-    inkColor: state.isInkColorAuto ? null : state.inkColor,
-    wordFrequency: state.wordFrequency,
-    letterFrequency: state.letterFrequency,
+    flags,
+    inkColor: resolveInkColor(state.ink),
+    wordFrequency,
+    letterFrequency,
   });
+};
+
+/**
+ * Цвет, заданный выбором чернил вручную.
+ *
+ * @param ink — выбор чернил
+ * @returns цвет тона или произвольный цвет; `null` — тона нет в палитре,
+ *   цвет выбирает рецепт
+ */
+export const resolveInkColor = (ink: GeneratorInk): string | null => {
+  switch (ink.kind) {
+    case 'tone': {
+      return (
+        INK_PALETTE.find(({ id }) => {
+          return id === ink.toneId;
+        })?.color || null
+      );
+    }
+
+    case 'custom': {
+      return ink.color;
+    }
+
+    default: {
+      throw new Error(`Неизвестный выбор чернил: ${JSON.stringify(ink)}`);
+    }
+  }
+};
+
+/**
+ * Всё, что страница берёт из рецепта прогона, одним плоским снимком: цвет
+ * чернил, почерк и качество кодирования. Плоский, чтобы подписка через
+ * `useShallow` не видела нового значения, пока рецепт не изменился по сути:
+ * сам рецепт собирается заново на каждый вызов.
+ *
+ * @param state — состояние генератора
+ * @param pageCount — число страниц прогона
+ * @returns величины рецепта для отрисовки страниц
+ */
+export const selectPageRecipe = (
+  state: GeneratorState,
+  pageCount: number
+): PageRecipeValues => {
+  const recipe = selectRunRecipe(state, pageCount);
+  const { flags, wordFrequency, letterFrequency } = state.realism;
+
+  if (!recipe) {
+    return {
+      inkColor: resolveInkColor(state.ink) || INK_PALETTE[0]?.color || '',
+      handwritingSeed: state.runSeed,
+      flags,
+      wordFrequency,
+      letterFrequency,
+      jpegQuality: DEFAULT_OPTICS.jpegQuality,
+    };
+  }
+
+  return {
+    inkColor: recipe.inkColor,
+    handwritingSeed: recipe.handwriting.seed,
+    flags: recipe.handwriting.flags,
+    wordFrequency: recipe.handwriting.wordFrequency,
+    letterFrequency: recipe.handwriting.letterFrequency,
+    jpegQuality: recipe.optics.jpegQuality,
+  };
 };
 
 /**
@@ -120,20 +189,4 @@ export const buildPageSheetSequence = (
   return (pageIndex) => {
     return sheetAt(pageIndex).id;
   };
-};
-
-/**
- * Оптика прогона: чем растеризуется страница. Отдельным селектором, потому что
- * сборка рецепта проходит по всем страницам, а вызывающей стороне нужна одна
- * величина.
- *
- * @param state — состояние генератора
- * @param pageCount — число страниц прогона
- * @returns качество кодирования снимка
- */
-export const selectRunOptics = (
-  state: GeneratorState,
-  pageCount: number
-): PageOpticsRecipe => {
-  return selectRunRecipe(state, pageCount)?.optics || DEFAULT_OPTICS;
 };

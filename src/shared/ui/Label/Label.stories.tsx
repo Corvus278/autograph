@@ -15,7 +15,7 @@ const meta = {
 
         <input
           id="text"
-          className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
+          className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-fg"
         />
       </div>
     );

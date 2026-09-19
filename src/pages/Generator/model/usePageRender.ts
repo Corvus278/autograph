@@ -13,7 +13,7 @@ import { getPageCalibration } from './geometrySelectors';
 import { mirrorLightingField } from './mirrorLightingField';
 import type { PageRenderSource } from './pageRender.types';
 import { findSheet } from './paperSelectors';
-import { buildPageSheetSequence, selectRunOptics } from './recipeSelectors';
+import { buildPageSheetSequence, selectPageRecipe } from './recipeSelectors';
 import { useFontGlyphs } from './useFontGlyphs';
 import { useGeneratorStore } from './useGeneratorStore';
 import { usePageGeometry } from './usePageGeometry';
@@ -39,20 +39,20 @@ const EMPTY_PAGE: Page = { lines: [] };
  * прогона — той же, по которой раскладывает `usePageLayout`.
  *
  * @param pages — страницы прогона с посчитанной раскладкой и листом каждой
+ * @param requestedIndex — какую страницу рисовать, считая с нуля; по умолчанию —
+ *   текущую. Разворот просит так вторую страницу пары
  * @returns источник отрисовки; `null` — семья листов не выбрана или листов в
  *   ней нет
  */
-export const usePageRender = (pages: LayoutPage[]): PageRenderSource | null => {
+export const usePageRender = (
+  pages: LayoutPage[],
+  requestedIndex?: number
+): PageRenderSource | null => {
   const { family, metrics, correction, fontFamily } = usePageGeometry();
   const {
     pageIndex,
     isBackgroundHidden,
-    inkColor,
-    flags,
     hasContourVariance,
-    wordFrequency,
-    letterFrequency,
-    seed,
     runSeed,
     sheetId,
     isSheetPinned,
@@ -61,21 +61,20 @@ export const usePageRender = (pages: LayoutPage[]): PageRenderSource | null => {
       return {
         pageIndex: state.pageIndex,
         isBackgroundHidden: state.isBackgroundHidden,
-        inkColor: state.inkColor,
-        flags: state.flags,
-        hasContourVariance: state.hasContourVariance,
-        wordFrequency: state.wordFrequency,
-        letterFrequency: state.letterFrequency,
-        seed: state.seed,
+        hasContourVariance: state.realism.hasContourVariance,
         runSeed: state.runSeed,
         sheetId: state.sheetId,
         isSheetPinned: state.isSheetPinned,
       };
     })
   );
-  const optics = useGeneratorStore(
+  /**
+   * Цвет чернил и почерк — только из рецепта прогона: так цвет у предпросмотра
+   * и снимка один, а правка текста рисунок почерка не трогает.
+   */
+  const recipe = useGeneratorStore(
     useShallow((state) => {
-      return selectRunOptics(state, pages.length);
+      return selectPageRecipe(state, pages.length);
     })
   );
   /**
@@ -89,8 +88,11 @@ export const usePageRender = (pages: LayoutPage[]): PageRenderSource | null => {
   /**
    * Лист и сторона разворота берутся по показанной странице, а не по номеру,
    * которого в раскладке ещё нет.
+   *
+   * `??`, а не `||`: запрошенная первая страница — ноль, и `||` подменил бы её
+   * текущей.
    */
-  const drawnIndex = resolveShownPageIndex(pageIndex, pages.length);
+  const drawnIndex = resolveShownPageIndex(requestedIndex ?? pageIndex, pages.length);
   const layoutPage = pages[drawnIndex];
   const sheet =
     (family && findSheet(family, layoutPage?.sheetId || sheetIdAt(drawnIndex))) || null;
@@ -123,22 +125,22 @@ export const usePageRender = (pages: LayoutPage[]): PageRenderSource | null => {
         sheetImage,
         metrics,
         correction,
-        inkColor,
+        inkColor: recipe.inkColor,
         ink: { lighting, texture, seed: runSeed },
         glyphs: glyphSource
           ? { source: glyphSource, hasVariance: hasContourVariance }
           : null,
         fontFamily,
-        flags,
-        wordFrequency,
-        letterFrequency,
-        seed,
+        flags: recipe.flags,
+        wordFrequency: recipe.wordFrequency,
+        letterFrequency: recipe.letterFrequency,
+        seed: recipe.handwritingSeed,
         scale,
       });
     },
     pageWidth: sheet.width,
     pageHeight: sheet.height,
     previewScale: PAGE_WIDTH / sheet.width,
-    jpegQuality: optics.jpegQuality,
+    jpegQuality: recipe.jpegQuality,
   };
 };

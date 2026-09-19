@@ -7,7 +7,7 @@ import { resolveShownPageIndex } from './buildPageRenderParams';
 import { buildPageTask } from './buildPageTask';
 import type { PageFontSource, RunRenderPlan } from './pageTask.types';
 import { findSheet } from './paperSelectors';
-import { buildPageSheetSequence, selectRunOptics } from './recipeSelectors';
+import { buildPageSheetSequence, selectPageRecipe } from './recipeSelectors';
 import { findFontUrl } from './useFontGlyphs';
 import { useGeneratorStore } from './useGeneratorStore';
 import { usePageGeometry } from './usePageGeometry';
@@ -39,13 +39,8 @@ export const useRunRender = (pages: LayoutPage[]): RunRenderPlan | null => {
   const {
     pageIndex,
     isBackgroundHidden,
-    inkColor,
-    flags,
-    wordFrequency,
-    letterFrequency,
-    seed,
-    runSeed,
     hasContourVariance,
+    runSeed,
     sheetId,
     isSheetPinned,
   } = useGeneratorStore(
@@ -53,21 +48,20 @@ export const useRunRender = (pages: LayoutPage[]): RunRenderPlan | null => {
       return {
         pageIndex: state.pageIndex,
         isBackgroundHidden: state.isBackgroundHidden,
-        inkColor: state.inkColor,
-        flags: state.flags,
-        wordFrequency: state.wordFrequency,
-        letterFrequency: state.letterFrequency,
-        seed: state.seed,
+        hasContourVariance: state.realism.hasContourVariance,
         runSeed: state.runSeed,
-        hasContourVariance: state.hasContourVariance,
         sheetId: state.sheetId,
         isSheetPinned: state.isSheetPinned,
       };
     })
   );
-  const optics = useGeneratorStore(
+  /**
+   * Цвет чернил и почерк — только из рецепта прогона: так цвет у предпросмотра
+   * и снимка один, а правка текста рисунок почерка не трогает.
+   */
+  const recipe = useGeneratorStore(
     useShallow((state) => {
-      return selectRunOptics(state, pages.length);
+      return selectPageRecipe(state, pages.length);
     })
   );
   /**
@@ -107,15 +101,15 @@ export const useRunRender = (pages: LayoutPage[]): RunRenderPlan | null => {
         isBackgroundHidden,
         metrics,
         correction,
-        inkColor,
+        inkColor: recipe.inkColor,
         fontFamily,
-        flags,
-        wordFrequency,
-        letterFrequency,
-        seed,
+        flags: recipe.flags,
+        wordFrequency: recipe.wordFrequency,
+        letterFrequency: recipe.letterFrequency,
+        seed: recipe.handwritingSeed,
         runSeed,
         font,
-        quality: optics.jpegQuality,
+        quality: recipe.jpegQuality,
       });
     },
   };

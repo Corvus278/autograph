@@ -28,6 +28,21 @@ const SKIPPED_STORY_FILES = [
 ];
 
 /**
+ * Отдельные stories без эталона, в виде `<файл> > <имя story>`.
+ *
+ * «Narrow Window» проверяет прокрутку в окне уже порога: страница там шире
+ * окна предпросмотра, и снимок тела захватил бы за краем окна чужой белый фон
+ * вместо раскладки. Сама раскладка снята в «Desktop».
+ *
+ * «Cancel Closes Dialog» проверяет закрытие диалога: после него на странице
+ * пусто, и эталон ничего не сторожит.
+ */
+const SKIPPED_STORIES = [
+  'GeneratorLayout.stories.tsx > Narrow Window',
+  'SheetDialog.stories.tsx > Cancel Closes Dialog',
+];
+
+/**
  * Снимок после каждой story. Снимается всё окно предпросмотра: у панели и
  * страницы важна вся раскладка, а не отдельный узел.
  *
@@ -36,12 +51,14 @@ const SKIPPED_STORY_FILES = [
  */
 afterEach(async (context) => {
   const fileName = context.task.file?.name ?? '';
+  const isSkippedFile = SKIPPED_STORY_FILES.some((skipped) => {
+    return fileName.endsWith(skipped);
+  });
+  const isSkippedStory = SKIPPED_STORIES.some((skipped) => {
+    return `${fileName} > ${context.task.name}`.endsWith(skipped);
+  });
 
-  if (
-    SKIPPED_STORY_FILES.some((skipped) => {
-      return fileName.endsWith(skipped);
-    })
-  ) {
+  if (isSkippedFile || isSkippedStory) {
     return;
   }
 

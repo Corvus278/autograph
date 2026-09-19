@@ -22,9 +22,9 @@ export const Checkbox: FC<CheckboxProps> = (props) => {
         checked={isChecked}
         disabled={isDisabled}
         onCheckedChange={handleCheckboxChange}
-        className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-zinc-600 bg-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-violet-500 data-[state=checked]:bg-violet-600"
+        className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-border-strong bg-surface-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent"
       >
-        <RadixCheckbox.Indicator className="text-xs leading-none text-white">
+        <RadixCheckbox.Indicator className="text-xs leading-none text-accent-fg">
           ✓
         </RadixCheckbox.Indicator>
       </RadixCheckbox.Root>

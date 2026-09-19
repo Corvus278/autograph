@@ -23,7 +23,7 @@ export const TextArea: FC<TextAreaProps> = (props) => {
         value={value}
         rows={rows}
         onChange={handleTextInput}
-        className="resize-y rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400"
+        className="resize-y rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
       />
     </div>
   );

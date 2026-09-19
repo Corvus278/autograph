@@ -1,1 +1,0 @@
-export { PaperGroup } from './PaperGroup';
