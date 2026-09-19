@@ -10,6 +10,7 @@ import {
 import { useGeneratorStore } from '../../../../../model/useGeneratorStore';
 
 import { decodeSheetImage } from './decodeSheetImage';
+import { requestManualRuling } from './manualRulingRequest';
 import type { SheetImport, SheetImportOptions } from './useSheetImport.types';
 
 /**
@@ -109,11 +110,12 @@ export const useSheetImport = (): SheetImport => {
        * семьи отступу.
        */
       const ruling = buildSheetRuling(measurement?.source || MISSING_RULING, frame);
+      const sheetId = nextSheetId();
 
       addUserSheet({
         familyId: family.id,
         sheet: {
-          id: nextSheetId(),
+          id: sheetId,
           label: toSheetLabel(file.name),
           src,
           width: frame.width,
@@ -130,6 +132,14 @@ export const useSheetImport = (): SheetImport => {
         isAnalyzed: true,
         isBlank,
       });
+
+      /**
+       * Нулевой шаг — разлиновки нет: без ручного ввода строки встали бы по
+       * синтетической гребёнке, не совпадающей с линиями снимка.
+       */
+      if (ruling.step <= 0) {
+        requestManualRuling(sheetId);
+      }
     } catch {
       setError('Не удалось прочитать фотографию');
     } finally {
