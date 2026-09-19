@@ -1887,9 +1887,13 @@ const applySheet = (
     sheetId,
     isSheetPinned: true,
     pageIndex,
-    hasContourVariance: false,
     customFontFamily,
   });
+  /**
+   * Ровное письмо: попадание на линии проверяется по базовым линиям, а
+   * искажения почерка сдвигали бы буквы с них.
+   */
+  useGeneratorStore.getState().selectRealismLevel('even');
 };
 
 /**

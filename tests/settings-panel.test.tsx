@@ -1,6 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
+import { selectRunRecipe } from '@pages/Generator/model/recipeSelectors';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -187,12 +188,12 @@ describe('группа «Текст и шрифт»', () => {
     expect(store().customFontFamily).toBeNull();
   });
 
-  it('меняет цвет чернил', async () => {
+  it('показывает в режиме «Авто» цвет чернил рецепта', async () => {
     render(<SettingsPanel />);
 
     const control = screen.getByLabelText('Цвет чернил');
 
-    expect(control.getAttribute('value')).toBe(DEFAULT_GENERATOR_STATE.inkColor);
+    expect(control.getAttribute('value')).toBe(selectRunRecipe(store(), 1)?.inkColor);
   });
 });
 
@@ -423,10 +424,15 @@ describe('группа «Модификации почерка»', () => {
     render(<SettingsPanel />);
     await openSection(user, 'Модификации почерка');
 
+    const { flags } = store().realism;
+
     await user.click(screen.getByRole('checkbox', { name: 'Съезд линий' }));
 
-    expect(store().flags.isLineRotated).toBe(true);
-    expect(store().flags.isWordRotated).toBe(false);
+    expect(store().realism.flags).toEqual({
+      ...flags,
+      isLineRotated: !flags.isLineRotated,
+    });
+    expect(store().realism.level).toBe('custom');
   });
 
   it('вариативность контуров включена по умолчанию и выключается', async () => {
@@ -438,7 +444,7 @@ describe('группа «Модификации почерка»', () => {
     const toggle = screen.getByRole('checkbox', { name: 'Вариативность контуров букв' });
 
     expect(toggle.getAttribute('data-state')).toBe('checked');
-    expect(store().hasContourVariance).toBe(true);
+    expect(store().realism.hasContourVariance).toBe(true);
 
     await user.click(toggle);
 
@@ -447,20 +453,20 @@ describe('группа «Модификации почерка»', () => {
      * Флаг живёт в сторе, а не в панели: до отрисовки он доходит оттуда же,
      * откуда и остальные параметры почерка.
      */
-    expect(store().hasContourVariance).toBe(false);
+    expect(store().realism.hasContourVariance).toBe(false);
   });
 
-  it('«Перегенерировать» меняет seed', async () => {
+  it('«Перегенерировать» меняет seed прогона', async () => {
     const user = userEvent.setup();
 
     render(<SettingsPanel />);
     await openSection(user, 'Модификации почерка');
 
-    const before = store().seed;
+    const before = store().runSeed;
 
     await user.click(screen.getByRole('button', { name: 'Перегенерировать' }));
 
-    expect(store().seed).not.toBe(before);
+    expect(store().runSeed).not.toBe(before);
   });
 });
 

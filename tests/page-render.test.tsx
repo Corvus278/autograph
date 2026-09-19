@@ -5,10 +5,15 @@ import { PAGE_WIDTH } from '@pages/Generator/config';
 import { deriveGeometry } from '@pages/Generator/lib/calibrate/deriveGeometry';
 import type { LayoutPage } from '@pages/Generator/lib/paginate/paginate.types';
 import type { PaperFamily } from '@pages/Generator/lib/paper';
-import { JPEG_QUALITY } from '@pages/Generator/lib/recipe';
+import { INK_PALETTE, JPEG_QUALITY } from '@pages/Generator/lib/recipe';
+import type { GeneratorInk } from '@pages/Generator/model/generator.types';
 import { getPageCalibration } from '@pages/Generator/model/geometrySelectors';
+import type { PageRenderSource } from '@pages/Generator/model/pageRender.types';
 import { findSheet } from '@pages/Generator/model/paperSelectors';
-import { buildPageSheetSequence } from '@pages/Generator/model/recipeSelectors';
+import {
+  buildPageSheetSequence,
+  selectRunRecipe,
+} from '@pages/Generator/model/recipeSelectors';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -99,6 +104,17 @@ const renderSource = (pages: LayoutPage[]) => {
   });
 
   return result.current;
+};
+
+/**
+ * Seed первого слова страницы: из него и номера слова выводится весь рисунок
+ * почерка, поэтому по нему видно, какой seed почерка дошёл до отрисовки.
+ *
+ * @param source — источник отрисовки
+ * @returns seed первого слова; `undefined` — слов нет
+ */
+const firstWordSeed = (source: PageRenderSource | null): number | undefined => {
+  return source?.buildParams(1).page.lines[0]?.words[0]?.seed;
 };
 
 beforeEach(() => {
@@ -195,6 +211,53 @@ describe('источник отрисовки страницы', () => {
       bend: calibration.ruling.bend,
       perspective: calibration.ruling.perspective,
     });
+  });
+
+  it('в режиме «Авто» красит чернила цветом рецепта и меняет его с прогоном', () => {
+    const pages = buildLayoutPages();
+    const before = renderSource(pages).source?.buildParams(1).inkColor;
+
+    expect(before).toBe(selectRunRecipe(useGeneratorStore.getState(), 2)?.inkColor);
+
+    useGeneratorStore.getState().startNewRun();
+
+    const after = renderSource(pages).source?.buildParams(1).inkColor;
+
+    expect(after).toBe(selectRunRecipe(useGeneratorStore.getState(), 2)?.inkColor);
+    expect(after).not.toBe(before);
+  });
+
+  it('держит тон палитры и произвольный цвет при новом прогоне', () => {
+    const pages = buildLayoutPages();
+    const tone = INK_PALETTE[1];
+
+    if (!tone) {
+      throw new Error('Палитра чернил пуста');
+    }
+
+    const choices: [GeneratorInk, string][] = [
+      [{ kind: 'tone', toneId: tone.id }, tone.color],
+      [{ kind: 'custom', color: '#123456' }, '#123456'],
+    ];
+
+    choices.forEach(([ink, color]) => {
+      useGeneratorStore.getState().setInk(ink);
+
+      expect(renderSource(pages).source?.buildParams(1).inkColor).toBe(color);
+
+      useGeneratorStore.getState().startNewRun();
+
+      expect(renderSource(pages).source?.buildParams(1).inkColor).toBe(color);
+    });
+  });
+
+  it('не меняет seed почерка на странице при правке текста', () => {
+    const pages = buildLayoutPages();
+    const before = firstWordSeed(renderSource(pages).source);
+
+    useGeneratorStore.getState().setText('совсем другой текст');
+
+    expect(firstWordSeed(renderSource(pages).source)).toBe(before);
   });
 
   it('берёт качество кодирования из рецепта прогона', () => {

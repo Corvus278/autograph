@@ -485,6 +485,12 @@ const applyFamily = (familyId: string): void => {
     text: LONG_TEXT,
     familyId,
   });
+  /**
+   * Ровное письмо с вариативностью контуров: искажения почерка сдвигали бы
+   * буквы с базовых линий, которые здесь и проверяются.
+   */
+  useGeneratorStore.getState().selectRealismLevel('even');
+  useGeneratorStore.getState().setContourVariance(true);
 };
 
 /**
@@ -513,6 +519,12 @@ const applySheet = (
     isSheetPinned: true,
     pageIndex,
   });
+  /**
+   * Ровное письмо с вариативностью контуров: искажения почерка сдвигали бы
+   * буквы с базовых линий, которые здесь и проверяются.
+   */
+  useGeneratorStore.getState().selectRealismLevel('even');
+  useGeneratorStore.getState().setContourVariance(true);
 };
 
 /**

@@ -161,6 +161,11 @@ beforeEach(() => {
     familyId: FAMILY.id,
     sheetId: FAMILY.sheets[0]?.id || '',
   });
+  /**
+   * Ровное письмо: слова рисуются целиком и на своих местах, иначе побуквенные
+   * искажения дробили бы слово на буквы и ленту вызовов.
+   */
+  useGeneratorStore.getState().selectRealismLevel('even');
 });
 
 afterEach(() => {
@@ -257,7 +262,7 @@ describe('кэш разбивки', () => {
     const measuresBefore = factory.createCalls();
 
     act(() => {
-      useGeneratorStore.getState().setInkColor('#ff0000');
+      useGeneratorStore.getState().setInk({ kind: 'custom', color: '#ff0000' });
     });
 
     await waitFor(() => {

@@ -9,7 +9,10 @@ import type {
   RunRenderPlan,
 } from '@pages/Generator/model/pageTask.types';
 import { findSheet } from '@pages/Generator/model/paperSelectors';
-import { buildPageSheetSequence } from '@pages/Generator/model/recipeSelectors';
+import {
+  buildPageSheetSequence,
+  selectRunRecipe,
+} from '@pages/Generator/model/recipeSelectors';
 import { renderPageRequest } from '@pages/Generator/model/renderPageRequest';
 import {
   DEFAULT_GENERATOR_STATE,
@@ -286,6 +289,50 @@ describe('пачка отражает раскладку прогона', () => 
     const second = await renderRun();
 
     expect(second).toEqual(first);
+  });
+
+  it('красит страницы пачки цветом и почерком рецепта прогона', () => {
+    const before = buildPlan().buildTask(0).params;
+    const recipe = selectRunRecipe(useGeneratorStore.getState(), buildPlan().pageCount);
+
+    expect(before.inkColor).toBe(recipe?.inkColor);
+
+    useGeneratorStore.getState().setText('совсем другой текст');
+
+    expect(buildPlan().buildTask(0).params).toEqual(before);
+
+    useGeneratorStore.getState().startNewRun();
+
+    expect(buildPlan().buildTask(0).params.inkColor).not.toBe(before.inkColor);
+  });
+
+  it('на ступени «Ровно» рисует страницу одинаково при любом прогоне', async () => {
+    /**
+     * Лист и чернила закреплены: иначе новый прогон менял бы их, и лента
+     * разошлась бы не из-за почерка.
+     */
+    useGeneratorStore.setState({ isSheetPinned: true });
+    useGeneratorStore.getState().setInk({ kind: 'custom', color: '#123456' });
+
+    const ribbonsOf = async (): Promise<[PageRibbon, PageRibbon]> => {
+      const before = await renderRibbon(buildPlan().buildTask(0));
+
+      useGeneratorStore.getState().startNewRun();
+
+      return [before, await renderRibbon(buildPlan().buildTask(0))];
+    };
+
+    useGeneratorStore.getState().selectRealismLevel('normal');
+
+    const [normalBefore, normalAfter] = await ribbonsOf();
+
+    expect(normalAfter).not.toEqual(normalBefore);
+
+    useGeneratorStore.getState().selectRealismLevel('even');
+
+    const [evenBefore, evenAfter] = await ribbonsOf();
+
+    expect(evenAfter).toEqual(evenBefore);
   });
 
   it('рисует соседние страницы прогона по-разному', async () => {

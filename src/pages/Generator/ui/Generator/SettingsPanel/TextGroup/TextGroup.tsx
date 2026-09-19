@@ -7,6 +7,7 @@ import type { FC } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { HANDWRITING_FONTS } from '../../../../config';
+import { resolveInkColor, selectRunRecipe } from '../../../../model/recipeSelectors';
 import { useCustomFont } from '../../../../model/useCustomFont';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
 
@@ -24,7 +25,11 @@ export const TextGroup: FC = () => {
         text: state.text,
         fontFamily: state.fontFamily,
         customFontFamily: state.customFontFamily,
-        inkColor: state.inkColor,
+        /**
+         * В режиме «Авто» показывается цвет рецепта: тот, которым страница и
+         * нарисована.
+         */
+        inkColor: resolveInkColor(state.ink) || selectRunRecipe(state, 1)?.inkColor || '',
       };
     })
   );
@@ -34,8 +39,8 @@ export const TextGroup: FC = () => {
   const setFontFamily = useGeneratorStore((state) => {
     return state.setFontFamily;
   });
-  const setInkColor = useGeneratorStore((state) => {
-    return state.setInkColor;
+  const setInk = useGeneratorStore((state) => {
+    return state.setInk;
   });
   const customFont = useCustomFont();
 
@@ -48,7 +53,7 @@ export const TextGroup: FC = () => {
   };
 
   const handleInkColorChange = (value: string) => {
-    setInkColor(value);
+    setInk({ kind: 'custom', color: value });
   };
 
   const handleFontFileSelect = (file: File) => {

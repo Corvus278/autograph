@@ -9,34 +9,14 @@ import type { ParameterRange } from './config.types';
 export const PAGE_WIDTH = 700;
 
 /**
- * Значения по умолчанию подобраны так, чтобы текст ложился по линейкам
- * встроенных фонов.
+ * Значения по умолчанию.
  */
-export const DEFAULT_FONT_SIZE = 1.6;
-export const DEFAULT_BLOCK_WIDTH = 446;
-export const DEFAULT_LINE_SPACING = -2;
-export const DEFAULT_TOP_OFFSET = 5;
-export const DEFAULT_LEFT_PADDING = 5;
-export const DEFAULT_BLOCK_ROTATE = 0;
 export const DEFAULT_BOTTOM_MARGIN = 0;
-export const DEFAULT_INK_COLOR = '#1f3a93';
-export const DEFAULT_WORD_FREQUENCY = 1;
-export const DEFAULT_LETTER_FREQUENCY = 1;
 export const DEFAULT_SCENE_ROTATE = 0;
 export const DEFAULT_SCENE_SHIFT_X = 0;
 export const DEFAULT_SCENE_SHIFT_Y = 0;
 export const DEFAULT_SCENE_SCALE = 0;
 export const DEFAULT_SCENE_DARKEN = 0.06;
-
-/**
- * Границы слайдеров: за этими пределами текст уезжает с листа.
- */
-export const FONT_SIZE_RANGE: ParameterRange = { min: 0.1, max: 10, step: 0.1 };
-export const BLOCK_WIDTH_RANGE: ParameterRange = { min: 100, max: 1000, step: 1 };
-export const LINE_SPACING_RANGE: ParameterRange = { min: -100, max: 100, step: 1 };
-export const TOP_OFFSET_RANGE: ParameterRange = { min: -50, max: 300, step: 1 };
-export const LEFT_PADDING_RANGE: ParameterRange = { min: 0, max: 600, step: 1 };
-export const BLOCK_ROTATE_RANGE: ParameterRange = { min: -60, max: 60, step: 1 };
 
 /**
  * Запас снизу в шагах разлиновки. Шаг слайдера — целый шаг разлиновки: на

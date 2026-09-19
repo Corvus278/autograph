@@ -30,10 +30,10 @@ export const DistortionGroup: FC = () => {
   const { flags, hasContourVariance, wordFrequency, letterFrequency } = useGeneratorStore(
     useShallow((state) => {
       return {
-        flags: state.flags,
-        hasContourVariance: state.hasContourVariance,
-        wordFrequency: state.wordFrequency,
-        letterFrequency: state.letterFrequency,
+        flags: state.realism.flags,
+        hasContourVariance: state.realism.hasContourVariance,
+        wordFrequency: state.realism.wordFrequency,
+        letterFrequency: state.realism.letterFrequency,
       };
     })
   );
@@ -49,8 +49,8 @@ export const DistortionGroup: FC = () => {
   const setLetterFrequency = useGeneratorStore((state) => {
     return state.setLetterFrequency;
   });
-  const regenerate = useGeneratorStore((state) => {
-    return state.regenerate;
+  const startNewRun = useGeneratorStore((state) => {
+    return state.startNewRun;
   });
 
   const handleContourVarianceChange = (isChecked: boolean) => {
@@ -66,7 +66,7 @@ export const DistortionGroup: FC = () => {
   };
 
   const handleRegenerateClick = () => {
-    regenerate();
+    startNewRun();
   };
 
   return (

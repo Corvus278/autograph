@@ -6,6 +6,7 @@ import { GRID_FAMILY_ID, LINED_FAMILY_ID } from '../../../config';
 import type { Page } from '../../../lib/paginate/paginate.types';
 import type { DistortionFlags } from '../../../lib/randomize/randomize.types';
 import type { Line } from '../../../lib/split/splitParagraphs.types';
+import type { GeneratorRealism } from '../../../model/generator.types';
 import { loadPaperFamilies } from '../../../model/paperProfiles';
 import {
   DEFAULT_GENERATOR_STATE,
@@ -44,6 +45,26 @@ const PagePreviewStory: FC<PagePreviewStoryProps> = (props) => {
  * скриншотные эталоны не сошлись бы.
  */
 const SEED = 42;
+
+/**
+ * Реализм stories: ровное письмо с вариативностью контуров. Искажения story
+ * включает сама, по одному, — со ступенью по умолчанию они шли бы все сразу.
+ */
+const STORY_REALISM: GeneratorRealism = {
+  level: 'custom',
+  flags: {
+    isWordRotated: false,
+    isWordSkewed: false,
+    isWordShifted: false,
+    isLetterSpacingRandom: false,
+    isLetterFontRandom: false,
+    isLineRotated: false,
+    isLineShifted: false,
+  },
+  wordFrequency: 1,
+  letterFrequency: 1,
+  hasContourVariance: true,
+};
 
 /**
  * Экземпляры с самым заметным наклоном разлиновки в пресет-паке: на них видно,
@@ -85,8 +106,8 @@ const applyState = async (
   useGeneratorStore.setState({
     ...DEFAULT_GENERATOR_STATE,
     presetFamilies,
-    seed: SEED,
-    flags: { ...DEFAULT_GENERATOR_STATE.flags, ...flags },
+    runSeed: SEED,
+    realism: { ...STORY_REALISM, flags: { ...STORY_REALISM.flags, ...flags } },
     ...patch,
   });
 };
@@ -282,13 +303,13 @@ export const ManyLines: Story = {
  */
 export const ContourVariance: Story = {
   beforeEach: async () => {
-    await applyState({}, { hasContourVariance: true });
+    await applyState({}, { realism: { ...STORY_REALISM, hasContourVariance: true } });
   },
 };
 
 export const WithoutContourVariance: Story = {
   beforeEach: async () => {
-    await applyState({}, { hasContourVariance: false });
+    await applyState({}, { realism: { ...STORY_REALISM, hasContourVariance: false } });
   },
 };
 

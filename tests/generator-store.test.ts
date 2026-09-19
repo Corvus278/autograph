@@ -1,3 +1,4 @@
+import { DEFAULT_REALISM_LEVEL_ID, REALISM_LEVELS } from '@pages/Generator/config';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -16,24 +17,55 @@ beforeEach(() => {
   useGeneratorStore.setState(DEFAULT_GENERATOR_STATE);
 });
 
+/**
+ * Поля старой модели, которых в сторе быть не должно: абсолютная геометрия,
+ * встроенный фон, seed искажений и пара «цвет + признак авто».
+ */
+const REMOVED_FIELDS = [
+  'seed',
+  'fontSize',
+  'blockWidth',
+  'lineSpacing',
+  'topOffset',
+  'leftPadding',
+  'blockRotate',
+  'backgroundId',
+  'customBackgroundSrc',
+  'selectBackground',
+  'setCustomBackground',
+  'inkColor',
+  'isInkColorAuto',
+  'flags',
+  'wordFrequency',
+  'letterFrequency',
+  'hasContourVariance',
+  'regenerate',
+];
+
 describe('значения по умолчанию', () => {
-  it('совпадают с подобранными стартовыми значениями слайдеров', () => {
-    expect(store().fontSize).toBe(1.6);
-    expect(store().blockWidth).toBe(446);
-    expect(store().lineSpacing).toBe(-2);
-    expect(store().topOffset).toBe(5);
-    expect(store().leftPadding).toBe(5);
-    expect(store().blockRotate).toBe(0);
+  it('совпадают с подобранными стартовыми значениями', () => {
     expect(store().bottomMargin).toBe(0);
-    expect(store().wordFrequency).toBe(1);
-    expect(store().letterFrequency).toBe(1);
     expect(store().sceneDarken).toBe(0.06);
   });
 
-  it('открывают генератор с непустым текстом и выбранным шрифтом', () => {
+  it('открывают генератор с непустым текстом, выбранным шрифтом и чернилами «Авто»', () => {
     expect(store().text).not.toBe('');
     expect(store().fontFamily).toBe('Abram');
-    expect(store().backgroundId).toBe('grid');
+    expect(store().ink).toEqual({ kind: 'auto' });
+  });
+
+  it('открывают просмотр вписанным листом без разворота', () => {
+    expect(store().pageIndex).toBe(0);
+    expect(store().isSpread).toBe(false);
+    expect(store().zoom).toBe('fit');
+  });
+
+  it('не содержат полей старой модели', () => {
+    const state = store();
+
+    REMOVED_FIELDS.forEach((field) => {
+      expect(field in state, field).toBe(false);
+    });
   });
 });
 
@@ -44,12 +76,24 @@ describe('действия стора', () => {
     expect(store().text).toBe('новый текст');
   });
 
-  it('меняет шрифт и цвет чернил', () => {
+  it('меняет шрифт', () => {
     store().setFontFamily('Eskal');
-    store().setInkColor('#0000ff');
 
     expect(store().fontFamily).toBe('Eskal');
-    expect(store().inkColor).toBe('#0000ff');
+  });
+
+  it('выбирает чернила тоном палитры и произвольным цветом', () => {
+    store().setInk({ kind: 'tone', toneId: 'gel-black' });
+
+    expect(store().ink).toEqual({ kind: 'tone', toneId: 'gel-black' });
+
+    store().setInk({ kind: 'custom', color: '#0000ff' });
+
+    expect(store().ink).toEqual({ kind: 'custom', color: '#0000ff' });
+
+    store().setInk({ kind: 'auto' });
+
+    expect(store().ink).toEqual({ kind: 'auto' });
   });
 
   it('ставит и сбрасывает свой шрифт', () => {
@@ -62,19 +106,10 @@ describe('действия стора', () => {
     expect(store().customFontFamily).toBeNull();
   });
 
-  it('меняет геометрию блока текста', () => {
-    store().setGeometry({ fontSize: 2.4, blockWidth: 500 });
+  it('меняет запас снизу', () => {
+    store().setGeometry({ bottomMargin: 2 });
 
-    expect(store().fontSize).toBe(2.4);
-    expect(store().blockWidth).toBe(500);
-  });
-
-  it('сбрасывает загруженный фон при выборе встроенного', () => {
-    store().setCustomBackground('data:image/png;base64,aaa');
-    store().selectBackground('lined');
-
-    expect(store().backgroundId).toBe('lined');
-    expect(store().customBackgroundSrc).toBeNull();
+    expect(store().bottomMargin).toBe(2);
   });
 
   it('включает режим «убрать фон»', () => {
@@ -83,35 +118,40 @@ describe('действия стора', () => {
     expect(store().isBackgroundHidden).toBe(true);
   });
 
-  it('переключает вид искажений', () => {
+  it('переключает вид искажений и делает реализм ручным', () => {
+    store().selectRealismLevel('even');
     store().toggleDistortion('isWordRotated');
 
-    expect(store().flags.isWordRotated).toBe(true);
-    expect(store().flags.isWordSkewed).toBe(false);
+    expect(store().realism.flags.isWordRotated).toBe(true);
+    expect(store().realism.flags.isWordSkewed).toBe(false);
+    expect(store().realism.level).toBe('custom');
 
     store().toggleDistortion('isWordRotated');
 
-    expect(store().flags.isWordRotated).toBe(false);
+    expect(store().realism.flags.isWordRotated).toBe(false);
   });
 
   it('переключает вариативность контуров букв', () => {
-    expect(useGeneratorStore.getState().hasContourVariance).toBe(true);
+    expect(store().realism.hasContourVariance).toBe(true);
 
-    useGeneratorStore.getState().setContourVariance(false);
+    store().setContourVariance(false);
 
-    expect(useGeneratorStore.getState().hasContourVariance).toBe(false);
+    expect(store().realism.hasContourVariance).toBe(false);
 
-    useGeneratorStore.getState().setContourVariance(true);
+    store().setContourVariance(true);
 
-    expect(useGeneratorStore.getState().hasContourVariance).toBe(true);
+    expect(store().realism.hasContourVariance).toBe(true);
   });
 
-  it('меняет частоты побуквенных искажений', () => {
+  it('меняет частоты побуквенных искажений, не трогая флаги', () => {
+    const { flags } = store().realism;
+
     store().setWordFrequency(3);
     store().setLetterFrequency(4);
 
-    expect(store().wordFrequency).toBe(3);
-    expect(store().letterFrequency).toBe(4);
+    expect(store().realism.wordFrequency).toBe(3);
+    expect(store().realism.letterFrequency).toBe(4);
+    expect(store().realism.flags).toEqual(flags);
   });
 
   it('сбрасывает загруженную сцену при выборе встроенной', () => {
@@ -149,40 +189,110 @@ describe('действия стора', () => {
 
     expect(store().pageIndex).toBe(0);
   });
+
+  it('включает разворот и меняет масштаб просмотра', () => {
+    store().setIsSpread(true);
+    store().setZoom(1.5);
+
+    expect(store().isSpread).toBe(true);
+    expect(store().zoom).toBe(1.5);
+
+    store().setZoom('fit');
+
+    expect(store().zoom).toBe('fit');
+  });
 });
 
-describe('seed случайных искажений', () => {
-  it('меняется при правке текста', () => {
-    const before = store().seed;
+describe('реализм', () => {
+  it('по умолчанию выбран уровень «Обычно» с включёнными искажениями', () => {
+    const { realism } = store();
+
+    expect(realism.level).toBe(DEFAULT_REALISM_LEVEL_ID);
+    expect(realism.level).toBe('normal');
+    expect(Object.values(realism.flags).some(Boolean)).toBe(true);
+  });
+
+  it('ступень пишет в реализм свои значения', () => {
+    REALISM_LEVELS.forEach((level) => {
+      store().selectRealismLevel(level.id);
+
+      expect(store().realism).toEqual({
+        level: level.id,
+        flags: level.flags,
+        wordFrequency: level.wordFrequency,
+        letterFrequency: level.letterFrequency,
+        hasContourVariance: level.hasContourVariance,
+      });
+    });
+  });
+
+  it('«Ровно» выключает все искажения и вариативность контуров', () => {
+    store().selectRealismLevel('even');
+
+    expect(Object.values(store().realism.flags).some(Boolean)).toBe(false);
+    expect(store().realism.hasContourVariance).toBe(false);
+  });
+
+  it('правка одного флага даёт «Свой» и не трогает остальные', () => {
+    store().selectRealismLevel('normal');
+
+    const { flags, wordFrequency, letterFrequency, hasContourVariance } = store().realism;
+
+    store().toggleDistortion('isWordSkewed');
+
+    expect(store().realism).toEqual({
+      level: 'custom',
+      flags: { ...flags, isWordSkewed: !flags.isWordSkewed },
+      wordFrequency,
+      letterFrequency,
+      hasContourVariance,
+    });
+  });
+
+  it('выбор ступени перезаписывает свою настройку', () => {
+    store().toggleDistortion('isLetterFontRandom');
+    store().setWordFrequency(5);
+    store().selectRealismLevel('neat');
+
+    expect(store().realism.level).toBe('neat');
+    expect(store().realism.flags.isLetterFontRandom).toBe(false);
+    expect(store().realism.wordFrequency).toBe(
+      REALISM_LEVELS.find(({ id }) => {
+        return id === 'neat';
+      })?.wordFrequency
+    );
+  });
+});
+
+describe('seed прогона', () => {
+  it('меняется по «Перегенерировать» — новому прогону', () => {
+    const before = store().runSeed;
+
+    store().startNewRun();
+
+    expect(store().runSeed).not.toBe(before);
+  });
+
+  it('не меняется при смене уровня реализма', () => {
+    const before = store().runSeed;
+
+    store().selectRealismLevel('sloppy');
+    store().selectRealismLevel('even');
+
+    expect(store().runSeed).toBe(before);
+  });
+
+  it('не меняется при правке текста, реализма, чернил, страницы и просмотра', () => {
+    const before = store().runSeed;
 
     store().setText('другой текст');
-
-    expect(store().seed).not.toBe(before);
-  });
-
-  it('меняется при переключении искажения', () => {
-    const before = store().seed;
-
     store().toggleDistortion('isLineRotated');
-
-    expect(store().seed).not.toBe(before);
-  });
-
-  it('меняется по «Перегенерировать»', () => {
-    const before = store().seed;
-
-    store().regenerate();
-
-    expect(store().seed).not.toBe(before);
-  });
-
-  it('не меняется при переключении страницы и правке геометрии', () => {
-    const before = store().seed;
-
+    store().setWordFrequency(3);
+    store().setInk({ kind: 'custom', color: '#ff0000' });
     store().goToPage(1);
-    store().setGeometry({ fontSize: 3 });
+    store().setZoom(2);
     store().setFontFamily('Lexa');
 
-    expect(store().seed).toBe(before);
+    expect(store().runSeed).toBe(before);
   });
 });

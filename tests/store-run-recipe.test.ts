@@ -68,7 +68,7 @@ describe('состав рецепта', () => {
   });
 
   it('не меняет цвет чернил, заданный вручную', () => {
-    store().setInkColor('#123456');
+    store().setInk({ kind: 'custom', color: '#123456' });
     store().startNewRun();
 
     expect(recipe()?.inkColor).toBe('#123456');

@@ -137,7 +137,7 @@ describe('usePageGeometry', () => {
     buildRunRecipeSpy.mockClear();
 
     act(() => {
-      store().setInkColor('#ff0000');
+      store().setInk({ kind: 'custom', color: '#ff0000' });
       store().setText('другой текст');
     });
 

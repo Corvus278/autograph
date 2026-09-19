@@ -305,13 +305,6 @@ describe('поправка поверх вычисленной геометри�
     expect(store().geometryCorrection.topOffset).toBe(0.5);
     expect(store().geometryCorrection.leftPadding).toBe(0.25);
   });
-
-  it('не трогает абсолютные значения слайдеров старой модели', () => {
-    store().setGeometryCorrection({ topOffset: 0.5 });
-
-    expect(store().topOffset).toBe(DEFAULT_GENERATOR_STATE.topOffset);
-    expect(store().blockWidth).toBe(DEFAULT_GENERATOR_STATE.blockWidth);
-  });
 });
 
 describe('запас снизу', () => {

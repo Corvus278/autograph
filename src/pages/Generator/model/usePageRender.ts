@@ -13,7 +13,7 @@ import { getPageCalibration } from './geometrySelectors';
 import { mirrorLightingField } from './mirrorLightingField';
 import type { PageRenderSource } from './pageRender.types';
 import { findSheet } from './paperSelectors';
-import { buildPageSheetSequence, selectRunOptics } from './recipeSelectors';
+import { buildPageSheetSequence, selectPageRecipe } from './recipeSelectors';
 import { useFontGlyphs } from './useFontGlyphs';
 import { useGeneratorStore } from './useGeneratorStore';
 import { usePageGeometry } from './usePageGeometry';
@@ -47,12 +47,7 @@ export const usePageRender = (pages: LayoutPage[]): PageRenderSource | null => {
   const {
     pageIndex,
     isBackgroundHidden,
-    inkColor,
-    flags,
     hasContourVariance,
-    wordFrequency,
-    letterFrequency,
-    seed,
     runSeed,
     sheetId,
     isSheetPinned,
@@ -61,21 +56,20 @@ export const usePageRender = (pages: LayoutPage[]): PageRenderSource | null => {
       return {
         pageIndex: state.pageIndex,
         isBackgroundHidden: state.isBackgroundHidden,
-        inkColor: state.inkColor,
-        flags: state.flags,
-        hasContourVariance: state.hasContourVariance,
-        wordFrequency: state.wordFrequency,
-        letterFrequency: state.letterFrequency,
-        seed: state.seed,
+        hasContourVariance: state.realism.hasContourVariance,
         runSeed: state.runSeed,
         sheetId: state.sheetId,
         isSheetPinned: state.isSheetPinned,
       };
     })
   );
-  const optics = useGeneratorStore(
+  /**
+   * Цвет чернил и почерк — только из рецепта прогона: так «Авто» меняет цвет с
+   * прогоном, а правка текста рисунок почерка не трогает.
+   */
+  const recipe = useGeneratorStore(
     useShallow((state) => {
-      return selectRunOptics(state, pages.length);
+      return selectPageRecipe(state, pages.length);
     })
   );
   /**
@@ -123,22 +117,22 @@ export const usePageRender = (pages: LayoutPage[]): PageRenderSource | null => {
         sheetImage,
         metrics,
         correction,
-        inkColor,
+        inkColor: recipe.inkColor,
         ink: { lighting, texture, seed: runSeed },
         glyphs: glyphSource
           ? { source: glyphSource, hasVariance: hasContourVariance }
           : null,
         fontFamily,
-        flags,
-        wordFrequency,
-        letterFrequency,
-        seed,
+        flags: recipe.flags,
+        wordFrequency: recipe.wordFrequency,
+        letterFrequency: recipe.letterFrequency,
+        seed: recipe.handwritingSeed,
         scale,
       });
     },
     pageWidth: sheet.width,
     pageHeight: sheet.height,
     previewScale: PAGE_WIDTH / sheet.width,
-    jpegQuality: optics.jpegQuality,
+    jpegQuality: recipe.jpegQuality,
   };
 };

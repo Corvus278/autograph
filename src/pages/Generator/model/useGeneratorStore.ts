@@ -1,31 +1,24 @@
 import { create } from 'zustand';
 
 import {
-  DEFAULT_BLOCK_ROTATE,
-  DEFAULT_BLOCK_WIDTH,
   DEFAULT_BOTTOM_MARGIN,
-  DEFAULT_FONT_SIZE,
   DEFAULT_GEOMETRY_CORRECTION,
-  DEFAULT_INK_COLOR,
-  DEFAULT_LEFT_PADDING,
-  DEFAULT_LETTER_FREQUENCY,
-  DEFAULT_LINE_SPACING,
+  DEFAULT_REALISM_LEVEL_ID,
   DEFAULT_RUN_SEED,
   DEFAULT_SCENE_DARKEN,
   DEFAULT_SCENE_ROTATE,
   DEFAULT_SCENE_SCALE,
   DEFAULT_SCENE_SHIFT_X,
   DEFAULT_SCENE_SHIFT_Y,
-  DEFAULT_TOP_OFFSET,
-  DEFAULT_WORD_FREQUENCY,
   HANDWRITING_FONTS,
-  PAGE_BACKGROUNDS,
   PRESET_PAPER_FAMILIES,
+  REALISM_LEVELS,
+  type RealismLevelId,
   SCENES,
 } from '../config';
 import type { PaperFamily } from '../lib/paper/paper.types';
 
-import type { GeneratorState, GeneratorStore } from './generator.types';
+import type { GeneratorRealism, GeneratorState, GeneratorStore } from './generator.types';
 import { selectPaperFamilies } from './paperSelectors';
 import type { PaperSelection } from './useGeneratorStore.types';
 import { deleteUserSheet, readUserSheets, writeUserSheet } from './userSheetsStorage';
@@ -40,57 +33,70 @@ const DEFAULT_TEXT = [
   'Это рукописный текст: набери свой, выбери шрифт и подкрути настройки почерка.',
 ].join('\n');
 
+/**
+ * Реализм ступени: её значения вместе с её идентификатором.
+ *
+ * @param levelId — идентификатор ступени
+ * @returns реализм ступени; `null` — такой ступени в таблице нет
+ */
+const findLevelRealism = (levelId: RealismLevelId): GeneratorRealism | null => {
+  const level = REALISM_LEVELS.find(({ id }) => {
+    return id === levelId;
+  });
+
+  if (!level) {
+    return null;
+  }
+
+  const { id, flags, wordFrequency, letterFrequency, hasContourVariance } = level;
+
+  return { level: id, flags, wordFrequency, letterFrequency, hasContourVariance };
+};
+
+/**
+ * Реализм ступени по умолчанию. Таблица ступеней без неё — ошибка сборки
+ * конфига, а не состояние, которое стор мог бы пережить.
+ *
+ * @param levelId — идентификатор ступени
+ * @returns реализм ступени
+ */
+const toLevelRealism = (levelId: RealismLevelId): GeneratorRealism => {
+  const realism = findLevelRealism(levelId);
+
+  if (!realism) {
+    throw new Error(`Нет ступени реализма: ${levelId}`);
+  }
+
+  return realism;
+};
+
 const DEFAULT_STATE: GeneratorState = {
   text: DEFAULT_TEXT,
   fontFamily: HANDWRITING_FONTS[0]?.family ?? '',
-  customFontFamily: null,
-  inkColor: DEFAULT_INK_COLOR,
-  fontSize: DEFAULT_FONT_SIZE,
-  blockWidth: DEFAULT_BLOCK_WIDTH,
-  lineSpacing: DEFAULT_LINE_SPACING,
-  topOffset: DEFAULT_TOP_OFFSET,
-  leftPadding: DEFAULT_LEFT_PADDING,
-  blockRotate: DEFAULT_BLOCK_ROTATE,
+  ink: { kind: 'auto' },
+  familyId: PRESET_PAPER_FAMILIES[0]?.id || '',
+  sheetId: PRESET_PAPER_FAMILIES[0]?.sheets[0]?.id || '',
+  isSheetPinned: false,
+  realism: toLevelRealism(DEFAULT_REALISM_LEVEL_ID),
+  geometryCorrection: DEFAULT_GEOMETRY_CORRECTION,
   bottomMargin: DEFAULT_BOTTOM_MARGIN,
-  backgroundId: PAGE_BACKGROUNDS[0]?.id ?? '',
-  customBackgroundSrc: null,
-  isBackgroundHidden: false,
-  flags: {
-    isWordRotated: false,
-    isWordSkewed: false,
-    isWordShifted: false,
-    isLetterSpacingRandom: false,
-    isLetterFontRandom: false,
-    isLineRotated: false,
-    isLineShifted: false,
-  },
-  /**
-   * Вариативность включена по умолчанию: одинаковые буквы, совпадающие
-   * контуром, — первое, по чему рукописный набор отличают от настоящего
-   * почерка.
-   */
-  hasContourVariance: true,
-  wordFrequency: DEFAULT_WORD_FREQUENCY,
-  letterFrequency: DEFAULT_LETTER_FREQUENCY,
   isSceneEnabled: false,
   sceneId: SCENES[0]?.id ?? '',
-  customSceneSrc: null,
   sceneRotate: DEFAULT_SCENE_ROTATE,
   sceneShiftX: DEFAULT_SCENE_SHIFT_X,
   sceneShiftY: DEFAULT_SCENE_SHIFT_Y,
   sceneScale: DEFAULT_SCENE_SCALE,
   sceneDarken: DEFAULT_SCENE_DARKEN,
   hasSceneShadow: false,
+  runSeed: DEFAULT_RUN_SEED,
   pageIndex: 0,
-  seed: 1,
+  isSpread: false,
+  zoom: 'fit',
   presetFamilies: PRESET_PAPER_FAMILIES,
   userSheets: [],
-  familyId: PRESET_PAPER_FAMILIES[0]?.id || '',
-  sheetId: PRESET_PAPER_FAMILIES[0]?.sheets[0]?.id || '',
-  isSheetPinned: false,
-  geometryCorrection: DEFAULT_GEOMETRY_CORRECTION,
-  isInkColorAuto: true,
-  runSeed: DEFAULT_RUN_SEED,
+  customFontFamily: null,
+  customSceneSrc: null,
+  isBackgroundHidden: false,
 };
 
 /**
@@ -127,20 +133,32 @@ const resolveSelection = (
 
 /**
  * Следующий seed — соседнее целое, а не случайное число: соседние seed дают
- * заметно разный рисунок почерка, зато переход предсказуем и проверяется
- * тестом.
+ * заметно разный рецепт, зато переход предсказуем и проверяется тестом.
  */
 const nextSeed = (seed: number): number => {
   return (seed + 1) >>> 0;
+};
+
+/**
+ * Реализм после правки отдельного поля: ступень снимается, потому что набор
+ * значений больше не её.
+ *
+ * @param state — текущее состояние генератора
+ * @param patch — изменённые поля реализма
+ * @returns реализм с правкой и ступенью `custom`
+ */
+const toCustomRealism = (
+  state: GeneratorState,
+  patch: Partial<GeneratorRealism>
+): GeneratorRealism => {
+  return { ...state.realism, ...patch, level: 'custom' };
 };
 
 export const useGeneratorStore = create<GeneratorStore>((set) => {
   return {
     ...DEFAULT_STATE,
     setText: (text) => {
-      return set((state) => {
-        return { text, seed: nextSeed(state.seed) };
-      });
+      return set({ text });
     },
     setFontFamily: (fontFamily) => {
       return set({ fontFamily });
@@ -148,42 +166,47 @@ export const useGeneratorStore = create<GeneratorStore>((set) => {
     setCustomFontFamily: (customFontFamily) => {
       return set({ customFontFamily });
     },
-    setInkColor: (inkColor) => {
-      return set({ inkColor, isInkColorAuto: false });
+    setInk: (ink) => {
+      return set({ ink });
     },
     setGeometry: (patch) => {
       return set(patch);
-    },
-    selectBackground: (backgroundId) => {
-      return set({ backgroundId, customBackgroundSrc: null });
-    },
-    setCustomBackground: (customBackgroundSrc) => {
-      return set({ customBackgroundSrc });
     },
     setBackgroundHidden: (isBackgroundHidden) => {
       return set({ isBackgroundHidden });
     },
     toggleDistortion: (flag) => {
       return set((state) => {
+        const { flags } = state.realism;
+
         return {
-          flags: { ...state.flags, [flag]: !state.flags[flag] },
-          seed: nextSeed(state.seed),
+          realism: toCustomRealism(state, { flags: { ...flags, [flag]: !flags[flag] } }),
         };
       });
     },
     setContourVariance: (hasContourVariance) => {
-      return set({ hasContourVariance });
+      return set((state) => {
+        return { realism: toCustomRealism(state, { hasContourVariance }) };
+      });
     },
     setWordFrequency: (wordFrequency) => {
-      return set({ wordFrequency });
+      return set((state) => {
+        return { realism: toCustomRealism(state, { wordFrequency }) };
+      });
     },
     setLetterFrequency: (letterFrequency) => {
-      return set({ letterFrequency });
-    },
-    regenerate: () => {
       return set((state) => {
-        return { seed: nextSeed(state.seed) };
+        return { realism: toCustomRealism(state, { letterFrequency }) };
       });
+    },
+    selectRealismLevel: (levelId) => {
+      const realism = findLevelRealism(levelId);
+
+      if (!realism) {
+        return;
+      }
+
+      set({ realism });
     },
     setSceneEnabled: (isSceneEnabled) => {
       return set({ isSceneEnabled });
@@ -196,6 +219,12 @@ export const useGeneratorStore = create<GeneratorStore>((set) => {
     },
     setSceneParams: (patch) => {
       return set(patch);
+    },
+    setIsSpread: (isSpread) => {
+      return set({ isSpread });
+    },
+    setZoom: (zoom) => {
+      return set({ zoom });
     },
     goToPage: (pageIndex) => {
       return set({ pageIndex: Math.max(pageIndex, 0) });
@@ -298,7 +327,7 @@ export const useGeneratorStore = create<GeneratorStore>((set) => {
     },
     startNewRun: () => {
       return set((state) => {
-        return { runSeed: nextSeed(state.runSeed), seed: nextSeed(state.seed) };
+        return { runSeed: nextSeed(state.runSeed) };
       });
     },
   };

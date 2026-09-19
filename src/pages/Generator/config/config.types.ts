@@ -1,4 +1,5 @@
 import type { PaperSheet } from '../lib/paper/paper.types';
+import type { DistortionFlags } from '../lib/randomize/randomize.types';
 
 /**
  * Встроенный рукописный шрифт. `family` совпадает с именем в `@font-face`.
@@ -16,34 +17,45 @@ export type HandwritingFont = {
 };
 
 /**
- * Встроенный фон листа. Размеры фона задают размер страницы, поэтому лежат
- * рядом: по ним считается разбивка на страницы до загрузки картинки.
+ * Ступень реализма почерка. Порядок и значения ступеней — `realismLevels.ts`;
+ * здесь только имена, чтобы стор мог хранить выбранную ступень явно.
  */
-export type PageBackground = {
+export type RealismLevelId = 'even' | 'neat' | 'normal' | 'sloppy';
+
+/**
+ * Ступень реализма почерка: набор значений, который выбор ступени пишет в
+ * реализм документа.
+ */
+export type RealismLevel = {
   /**
-   * Идентификатор фона в сторе.
+   * Идентификатор ступени.
    */
-  id: string;
+  id: RealismLevelId;
 
   /**
-   * Подпись в списке фонов.
+   * Подпись ступени.
    */
   label: string;
 
   /**
-   * Путь к картинке от корня сайта.
+   * Включённые виды искажений почерка.
    */
-  src: string;
+  flags: DistortionFlags;
 
   /**
-   * Ширина картинки в пикселях.
+   * Каждое какое по счёту слово получает побуквенные искажения: 1 — каждое.
    */
-  width: number;
+  wordFrequency: number;
 
   /**
-   * Высота картинки в пикселях.
+   * Верхняя граница числа искажаемых букв в слове.
    */
-  height: number;
+  letterFrequency: number;
+
+  /**
+   * Вариативность контуров букв.
+   */
+  hasContourVariance: boolean;
 };
 
 /**
