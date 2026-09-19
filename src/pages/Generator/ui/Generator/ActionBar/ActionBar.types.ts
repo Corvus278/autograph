@@ -1,6 +1,6 @@
 import type { RunRenderPlan } from '../../../model/pageTask.types';
 
-export type SaveBarProps = {
+export type ActionBarProps = {
   /**
    * План отрисовки прогона. `null` — сохранять пока нечего.
    */

@@ -26,7 +26,11 @@ describe('маршруты', () => {
       expect(screen.getByTestId('page')).toBeDefined();
     });
 
-    expect(screen.getByRole('textbox', { name: 'Текст' })).toBeDefined();
+    /**
+     * Поле текста есть и в колонке текста, и в старой панели настроек, пока
+     * её не сменила новая.
+     */
+    expect(screen.getAllByRole('textbox', { name: 'Текст' }).length).toBeGreaterThan(0);
   });
 
   it('на /create-font показывает инструкцию со ссылкой на генератор', () => {
@@ -45,7 +49,7 @@ describe('маршруты', () => {
     expect(screen.getByRole('link', { name: 'Открыть генератор' })).toBeDefined();
   });
 
-  it.each(['/create-font', '/нет-такой-страницы'])(
+  it.each(['/', '/create-font', '/нет-такой-страницы'])(
     'на %s показывает общую шапку с названием и переходами',
     (path) => {
       renderAt(path);
@@ -75,6 +79,20 @@ describe('маршруты', () => {
     ).toBeDefined();
     expect(
       within(screen.getByRole('banner')).getByRole('link', { name: 'Autograph' })
+    ).toBeDefined();
+  });
+
+  it('из генератора пункт шапки о своём шрифте открывает инструкцию', async () => {
+    const user = userEvent.setup();
+
+    renderAt('/');
+
+    await user.click(
+      within(screen.getByRole('banner')).getByRole('link', { name: 'Свой шрифт' })
+    );
+
+    expect(
+      screen.getByRole('heading', { name: 'Как создать шрифт онлайн' })
     ).toBeDefined();
   });
 

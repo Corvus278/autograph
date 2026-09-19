@@ -44,3 +44,16 @@
 Отступления от D7: проверка полей в getItem, а не в merge; проверка ссылок в экшенах стора, а не в хуках (поведение то же).
 Аудит: ok с первого круга; question — диапазон поправки геометрии в сессии не проверяется (диапазоны лежат в GeometryGroup.tsx, не в config) → пользователю в финале.
 Долг: undo во время драга (есть previewBase) теряет previewBase — учесть в G5/G7; слушатель pagehide копится после vi.resetModules в тестах.
+
+### Вопросы пользователю
+
+1. @radix-ui/react-toolbar добавлен в G3 вне proposal (стрелки по toolbar по WAI-ARIA) — оставить?
+2. G4 question: диапазон поправки геометрии в сохранённой сессии не проверяется (только конечность); вынести диапазоны в config и проверять или принять?
+3. 7.3 — ручная приёмка в браузере; 5.4 — числа ступеней реализма на глаз.
+
+### G5 · Каркас, текст, действия, undo
+
+Каркас GeneratorLayout со слотами (header/text/viewport/settings/actions), TextPane со счётчиком, ActionBar (SaveBar/BatchBar удалены), HistoryControls в шапке, useHistoryHotkeys по event.code; во время драга (previewBase) хоткеи ничего не делают — долг G4 закрыт.
+Отступления: GeneratorLayout/ и HistoryControls/ вне списка файлов; колонка настроек min-w токена и растёт до G9; routes.test поправлен в G5 по указанию координатора.
+Аудит: ok с первого круга; покрытие пачки из batch-export/save-bar перенесено в action-bar.test.
+Долг (G9): routes.test поле «Текст» через getAllByRole — вернуть getByRole; подсказка «Введите текст…» без aria-describedby у кнопок; нет явной проверки, что composeScene не вызван при выключенной сцене.
