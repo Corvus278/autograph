@@ -1,7 +1,6 @@
 /**
  * @vitest-environment jsdom
  */
-import { PAGE_WIDTH } from '@pages/Generator/config';
 import type { PaperFamily } from '@pages/Generator/lib/paper';
 import { clearLayoutCache } from '@pages/Generator/model/measureLayout';
 import { findSheet } from '@pages/Generator/model/paperSelectors';
@@ -12,8 +11,8 @@ import {
 } from '@pages/Generator/model/useGeneratorStore';
 import { usePageLayout } from '@pages/Generator/model/usePageLayout';
 import { usePageRender } from '@pages/Generator/model/usePageRender';
-import { PageNav } from '@pages/Generator/ui/Generator/PageNav';
-import { PagePreview } from '@pages/Generator/ui/Generator/PagePreview';
+import { useRunRender } from '@pages/Generator/model/useRunRender';
+import { SheetViewport } from '@pages/Generator/ui/Generator/SheetViewport';
 import {
   act,
   cleanup,
@@ -50,14 +49,9 @@ const Harness: FC<HarnessProps> = (props) => {
   const { factory } = props;
   const pages = usePageLayout(factory.create);
   const source = usePageRender(pages);
+  const plan = useRunRender(pages);
 
-  return (
-    <>
-      <PagePreview source={source} />
-
-      <PageNav pageCount={pages.length} />
-    </>
-  );
+  return <SheetViewport source={source} plan={plan} />;
 };
 
 const FAMILY = buildRenderFamily();
@@ -100,6 +94,15 @@ const getPageCanvas = (): HTMLCanvasElement => {
   }
 
   return canvas;
+};
+
+/**
+ * Число страниц из навигации «N / M».
+ *
+ * @returns число страниц прогона
+ */
+const getPageCount = (): number => {
+  return Number((screen.getByTestId('page-count').textContent || '').replace('/', ''));
 };
 
 /**
@@ -179,7 +182,7 @@ describe('разбивка на строки и страницы', () => {
     await renderHarness(factory);
 
     expect(getDrawnWords()).toEqual(['раз', 'два', 'три', 'четыре', 'пять', 'шесть']);
-    expect(screen.queryByRole('navigation', { name: 'Страницы' })).toBeNull();
+    expect(getPageCount()).toBe(1);
   });
 
   it('разбивает на страницы по вместимости листа', async () => {
@@ -189,7 +192,7 @@ describe('разбивка на строки и страницы', () => {
     await renderHarness(factory);
 
     expect(getDrawnWords()).toEqual(['раз', 'два', 'три', 'четыре']);
-    expect(screen.getAllByRole('button')).toHaveLength(2);
+    expect(getPageCount()).toBe(2);
   });
 
   it('показывает выбранную страницу', async () => {
@@ -407,6 +410,31 @@ describe('листы с разными пропорциями', () => {
   const FRAMED_FAMILY = buildFramedFamily();
 
   /**
+   * Область просмотра, в которой за вычетом отступов по 24 пикселя остаётся
+   * 200 × 400: оба листа вписываются по ширине, и лист на экране шириной в 200
+   * пикселей, какой бы ни была ширина его кадра.
+   */
+  const VIEWPORT = { width: 248, height: 448 };
+
+  const FIT_WIDTH = 200;
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      value: VIEWPORT.width,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      value: VIEWPORT.height,
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
+    Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight');
+  });
+
+  /**
    * Пропорции кадра листа, доставшегося странице в прогоне.
    *
    * @param pageIndex — номер страницы, считая с нуля
@@ -439,11 +467,11 @@ describe('листы с разными пропорциями', () => {
     });
     await renderHarness(createFactory());
     await waitFor(() => {
-      expect(screen.getAllByRole('button')).toHaveLength(2);
+      expect(getPageCount()).toBe(2);
     });
   };
 
-  it('держит ширину предпросмотра, а высоту ведёт за кадром листа страницы', async () => {
+  it('вписывает лист в область, а высоту ведёт за кадром листа страницы', async () => {
     await renderFramedHarness();
 
     expect(getFrameRatio(0)).not.toBeCloseTo(getFrameRatio(1));
@@ -457,8 +485,8 @@ describe('листы с разными пропорциями', () => {
         expect(getCanvasRatio()).toBeCloseTo(getFrameRatio(pageIndex), 2);
       });
 
-      expect(getPageCanvas().width).toBe(PAGE_WIDTH);
-      expect(screen.getByTestId('page').style.width).toBe(`${PAGE_WIDTH}px`);
+      expect(getPageCanvas().width).toBe(FIT_WIDTH);
+      expect(screen.getByTestId('page').style.width).toBe(`${String(FIT_WIDTH)}px`);
     }
   });
 
@@ -478,7 +506,7 @@ describe('листы с разными пропорциями', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByRole('button').length).toBeGreaterThan(2);
+      expect(getPageCount()).toBeGreaterThan(2);
     });
 
     expect(useGeneratorStore.getState().pageIndex).toBe(1);
@@ -495,7 +523,7 @@ describe('листы с разными пропорциями', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByRole('button').length).toBeGreaterThan(2);
+      expect(getPageCount()).toBeGreaterThan(2);
     });
 
     act(() => {
@@ -511,7 +539,7 @@ describe('листы с разными пропорциями', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByRole('button')).toHaveLength(2);
+      expect(getPageCount()).toBe(2);
     });
 
     expect(useGeneratorStore.getState().pageIndex).toBe(1);
