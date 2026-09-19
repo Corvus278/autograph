@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { type FC, useState } from 'react';
 import { expect, fn, userEvent, within } from 'storybook/test';
 
 import { LINED_FAMILY_ID } from '../../../../config';
@@ -10,6 +11,7 @@ import {
 } from '../../../../model/useGeneratorStore';
 
 import { SheetDialog } from './SheetDialog';
+import type { SheetDialogProps } from './SheetDialog.types';
 
 /**
  * Свой лист story: фотография из пресет-пака под своим идентификатором — так
@@ -59,10 +61,43 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Диалог своего листа: поля границ и разлиновки заполнены измеренным, «Отмена»
- * закрывает его, не трогая лист.
+ * Диалог своего листа в покое: поля границ и разлиновки заполнены измеренным.
+ * Действий нет — снимок открытого диалога детерминирован.
  */
 export const Open: Story = {
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const dialog = await body.findByRole('dialog', {
+      name: `Лист «${USER_SHEET_LABEL}»`,
+    });
+
+    await expect(within(dialog).getByLabelText('Шаг строк, px')).not.toHaveValue(null);
+  },
+};
+
+/**
+ * Диалог, открытый лист которого держит состояние обёртки: колбэк закрытия
+ * действительно закрывает диалог, как на экране.
+ */
+const ControlledSheetDialog: FC<SheetDialogProps> = (props) => {
+  const { sheetId: initialSheetId, onSheetIdChange } = props;
+  const [sheetId, setSheetId] = useState(initialSheetId);
+
+  const handleSheetIdChange = (nextSheetId: string | null) => {
+    setSheetId(nextSheetId);
+    onSheetIdChange(nextSheetId);
+  };
+
+  return <SheetDialog sheetId={sheetId} onSheetIdChange={handleSheetIdChange} />;
+};
+
+/**
+ * «Отмена» закрывает диалог, не трогая лист.
+ */
+export const CancelClosesDialog: Story = {
+  render: (args) => {
+    return <ControlledSheetDialog {...args} />;
+  },
   play: async ({ args, canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
     const dialog = await body.findByRole('dialog', {
@@ -70,11 +105,10 @@ export const Open: Story = {
     });
     const sheetBefore = useGeneratorStore.getState().userSheets[0]?.sheet;
 
-    await expect(within(dialog).getByLabelText('Шаг строк, px')).not.toHaveValue(null);
-
     await userEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }));
 
     await expect(args.onSheetIdChange).toHaveBeenCalledWith(null);
+    await expect(body.queryByRole('dialog')).toBeNull();
     await expect(useGeneratorStore.getState().userSheets[0]?.sheet).toBe(sheetBefore);
   },
 };

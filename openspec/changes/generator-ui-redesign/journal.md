@@ -91,3 +91,10 @@ ExpertSettings: Disclosure → Accordion из 5 групп (свёрнуты), �
 Отступления: правки вне файлов G9 — shared/ui/Button (describedBy), ui-primitives/cx тесты, пути моков; a11y landmark-unique — секции пикеров div role=group, группа «Лист» → «Бумага».
 Аудит: ok с первого круга; покрытие settings-panel.test перенесено.
 Долг: story Screen проверяет группы toBeVisible, а не expectInWindow; нет теста «сворачивает группу, не трогая параметры». Для G10: CLAUDE.md:297 старый путь useSheetRemeasure; эталоны PagePreview/SettingsPanel/Slider без stories.
+
+### G10 · Эталоны и документация
+
+Эталоны пересняты в docker (88), удалены эталоны PagePreview/SettingsPanel/Slider; test:visual ×3 зелёный. CLAUDE.md обновлён под новый экран, стор, историю, сессию, widgets/AppHeader, алиасы.
+Решение координатора (блокер нестабильности): SheetDialog/Open без клика «Отмена», проверка «Отмена» — в CancelClosesDialog без эталона; GeneratorLayout/Narrow-Window исключена из скриншотов через новый SKIPPED_STORIES (страница шире окна, снимок выходит за iframe).
+Аудит: ok с первого круга.
+Долг: в CLAUDE.md нет GeneratorLayout в списке ui/Generator; «примитивы на Radix» неточно; эталоны SheetViewport/Fit и Zoom-And-Fit побайтно равны. Нативное «Choose File / No file chosen» в FileInput (HandwritingPicker, SceneSection) — на итоговый аудит.
