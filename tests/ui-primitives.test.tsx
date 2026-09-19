@@ -7,6 +7,7 @@ import { ColorInput } from '@shared/ui/ColorInput';
 import { Select } from '@shared/ui/Select';
 import { Slider } from '@shared/ui/Slider';
 import { TextArea } from '@shared/ui/TextArea';
+import { ValueSlider } from '@shared/ui/ValueSlider';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -69,6 +70,54 @@ describe('Slider', () => {
     );
 
     expect(screen.getByRole('slider', { name: 'Ширина блока' })).toBeDefined();
+  });
+});
+
+describe('ValueSlider', () => {
+  const formatDegrees = (value: number) => {
+    return `${value}°`;
+  };
+
+  it('показывает значение через форматтер и в тексте, и в aria-valuetext', () => {
+    render(
+      <ValueSlider
+        label="Поворот"
+        value={-3}
+        min={-10}
+        max={10}
+        step={1}
+        formatValue={formatDegrees}
+        onChange={vi.fn()}
+      />
+    );
+
+    const slider = screen.getByRole('slider', { name: 'Поворот' });
+
+    expect(screen.getByText('-3°')).toBeDefined();
+    expect(slider.getAttribute('aria-valuetext')).toBe('-3°');
+  });
+
+  it('отдаёт окончательное значение в onValueCommit', async () => {
+    const user = userEvent.setup();
+    const handleCommit = vi.fn();
+
+    render(
+      <ValueSlider
+        label="Поворот"
+        value={0}
+        min={-10}
+        max={10}
+        step={1}
+        formatValue={formatDegrees}
+        onChange={vi.fn()}
+        onValueCommit={handleCommit}
+      />
+    );
+
+    screen.getByRole('slider').focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(handleCommit).toHaveBeenLastCalledWith(1);
   });
 });
 

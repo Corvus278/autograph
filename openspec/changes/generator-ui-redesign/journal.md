@@ -19,3 +19,12 @@
 Отступление: поля scene* оставлены плоскими в документе (форму K1 не задаёт).
 Аудит: ok с первого круга.
 Долг: шкала частот у wordFrequency и letterFrequency направлена противоположно (1 = очень часто / очень редко) — учесть в форматтерах K4 (G2) и G8; realism-levels.test не проверяет частоты; нет прямой проверки inkColor/pages после selectRealismLevel; flags ступени по ссылке на незамороженный конфиг; мёртвые public/33.jpg, line.jpg, page_3.png — убрать в G9/G10; эталоны скриншотов разойдутся до G10.
+
+### G2 · Токены, форматтеры, ValueSlider
+
+Форматтеры lib/format: доли шага, градусы, px, проценты из доли, частоты словами — два форматтера частот (у wordFrequency шкала обратная), долг G1 закрыт.
+Токены D2 в @theme (oklch); примитивы на токенах; ValueSlider с formatValue и onValueCommit; Slider — обёртка до G9.
+Отступление: токенов --text-*--line-height нет (stylelint custom-property-pattern), интервалы из темы Tailwind.
+Проверка 3.1 «край листа в story» перенесена в G6.
+Аудит: ok с первого круга.
+Долг: нет утилиты для подписей секций (капс xs с разрядкой) — собирать одинаково в G5/G7–G9; fg-subtle на hover:bg-border = 4,08:1 < AA — не класть; Slider отдаёт aria-valuetext голым числом — удалить в G9; .prettierrc без tailwindStylesheet (классы токенов сортируются в начало) — добавить в G3; twMerge не сливает spacing-токены w-text-panel/h-header — для G5.

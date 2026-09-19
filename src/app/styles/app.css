@@ -1,29 +1,69 @@
 @import 'tailwindcss';
 
 /**
- * Фон страницы — недостающая ступень палитры `neutral`: цвет нейтрально-серый
- * (насыщенность и тон нулевые, как во всей этой палитре), а по светлоте
- * ложится ровно между `neutral-800` (26.9%) и `neutral-900` (20.5%). Отсюда и
- * имя по общей сетке, а не собственное.
+ * Семантические токены тёмной темы. Классы интерфейса берут цвета, радиусы,
+ * тени и размеры только отсюда, а не из палитр Tailwind: смена оттенка —
+ * правка одного токена, а не поиск по компонентам.
  *
- * Кроме цвета здесь ширина рабочей области: вёрстка десктопная, ниже 1280
- * пикселей раскладка не перестраивается.
+ * Поверхности. Фотография листа светлая, и на фоне панелей её край теряется,
+ * поэтому область просмотра (`canvas`) на ступень светлее панелей
+ * (`surface`) и карточек (`surface-raised`), а контур листа держат обводка и
+ * тень `--shadow-sheet`. Нейтральные цвета чуть холодные — в тон чернильному
+ * акценту.
+ *
+ * Текст. Светлоты подобраны под WCAG AA (4,5:1) на самой светлой поверхности —
+ * области просмотра: `fg-subtle` там даёт около 4,7:1, на панелях больше.
+ *
+ * Акцент — «чернильный» синий. Его светлота держит белую подпись
+ * (`accent-fg`) выше 4,5:1, а на панелях сам акцент как граница элемента — выше
+ * 3:1.
+ *
+ * Шкала текста и радиусы повторяют значения Tailwind по умолчанию: они
+ * объявлены здесь, чтобы весь визуальный язык читался в одном месте.
+ * Межстрочные интервалы размеров остаются из темы Tailwind: имена вида
+ * `--text-xs--line-height` не проходят правило имён stylelint.
+ *
+ * Размеры — каркас экрана. Вёрстка десктопная: уже `--spacing-desktop`
+ * раскладка не перестраивается.
  */
 @theme {
-  --color-neutral-850: oklch(24.776% 0 0deg);
+  --color-canvas: oklch(29% 0.008 260deg);
+  --color-surface: oklch(20.5% 0.008 260deg);
+  --color-surface-raised: oklch(25% 0.008 260deg);
+  --color-border: oklch(33% 0.008 260deg);
+  --color-border-strong: oklch(43% 0.01 260deg);
+  --color-fg: oklch(96% 0.004 260deg);
+  --color-fg-muted: oklch(80% 0.008 260deg);
+  --color-fg-subtle: oklch(67% 0.01 260deg);
+  --color-accent: oklch(55% 0.17 260deg);
+  --color-accent-hover: oklch(60% 0.17 260deg);
+  --color-accent-fg: oklch(100% 0 0deg);
+  --color-focus: oklch(74% 0.14 250deg);
+  --color-danger: oklch(66% 0.19 25deg);
+  --color-success: oklch(72% 0.15 150deg);
+  --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --shadow-sheet: 0 0 0 1px oklch(0% 0 0deg / 40%), 0 6px 24px oklch(0% 0 0deg / 45%);
+  --shadow-popover: 0 0 0 1px oklch(0% 0 0deg / 30%), 0 8px 24px oklch(0% 0 0deg / 50%);
   --spacing-desktop: 80rem;
+  --spacing-text-panel: 22.5rem;
+  --spacing-settings-panel: 21.25rem;
+  --spacing-header: 3rem;
+  --spacing-action-bar: 4rem;
 }
 
 html,
 body {
   min-width: var(--spacing-desktop);
-  color: var(--color-zinc-100);
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
-  background-color: var(--color-neutral-850);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  background-color: var(--color-surface);
 }
 
 /**

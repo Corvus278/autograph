@@ -18,11 +18,11 @@ export const Tooltip: FC<TooltipProps> = (props) => {
         <RadixTooltip.Portal>
           <RadixTooltip.Content
             sideOffset={6}
-            className="z-50 max-w-64 rounded-md bg-zinc-800 px-2 py-1 text-xs text-zinc-100 shadow-lg"
+            className="bg-surface-raised text-fg shadow-popover z-50 max-w-64 rounded-md px-2 py-1 text-xs"
           >
             {content}
 
-            <RadixTooltip.Arrow className="fill-zinc-800" />
+            <RadixTooltip.Arrow className="fill-surface-raised" />
           </RadixTooltip.Content>
         </RadixTooltip.Portal>
       </RadixTooltip.Root>

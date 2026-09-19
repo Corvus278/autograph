@@ -33,11 +33,11 @@ export const FileInput: FC<FileInputProps> = (props) => {
         disabled={isDisabled}
         aria-describedby={error ? errorId : undefined}
         onChange={handleFileChange}
-        className="cursor-pointer text-sm text-zinc-400 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-sm file:text-zinc-100 hover:file:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+        className="text-fg-muted file:bg-surface-raised file:text-fg hover:file:bg-border focus-visible:outline-focus cursor-pointer text-sm file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:px-3 file:py-1.5 file:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
       />
 
       {error ? (
-        <p id={errorId} className="text-xs text-red-400">
+        <p id={errorId} className="text-danger text-xs">
           {error}
         </p>
       ) : null}

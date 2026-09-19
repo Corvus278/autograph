@@ -10,7 +10,7 @@ export const Label: FC<LabelProps> = (props) => {
   return (
     <RadixLabel.Root
       htmlFor={htmlFor}
-      className={cx('text-sm font-medium text-zinc-300 select-none', className)}
+      className={cx('text-fg-muted text-sm font-medium select-none', className)}
     >
       {children}
     </RadixLabel.Root>

@@ -21,7 +21,7 @@ export const ColorInput: FC<ColorInputProps> = (props) => {
       <Label htmlFor={controlId}>{label}</Label>
 
       <div className="flex items-center gap-2">
-        <span className="text-sm text-zinc-400 uppercase">{value}</span>
+        <span className="text-fg-muted text-sm uppercase">{value}</span>
 
         <input
           id={controlId}
@@ -29,7 +29,7 @@ export const ColorInput: FC<ColorInputProps> = (props) => {
           value={value}
           disabled={isDisabled}
           onChange={handleColorChange}
-          className="color-input h-8 w-12 cursor-pointer rounded-md border border-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="color-input border-border-strong focus-visible:outline-focus h-8 w-12 cursor-pointer rounded-md border focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         />
       </div>
     </div>

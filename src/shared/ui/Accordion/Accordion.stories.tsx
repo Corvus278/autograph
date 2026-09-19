@@ -11,11 +11,11 @@ const meta = {
     children: (
       <>
         <AccordionSection value="text" title="Текст и шрифт">
-          <p className="text-sm text-zinc-400">Контролы группы «Текст и шрифт»</p>
+          <p className="text-fg-muted text-sm">Контролы группы «Текст и шрифт»</p>
         </AccordionSection>
 
         <AccordionSection value="geometry" title="Геометрия">
-          <p className="text-sm text-zinc-400">Контролы группы «Геометрия»</p>
+          <p className="text-fg-muted text-sm">Контролы группы «Геометрия»</p>
         </AccordionSection>
       </>
     ),
