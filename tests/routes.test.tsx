@@ -26,11 +26,7 @@ describe('маршруты', () => {
       expect(screen.getByTestId('page')).toBeDefined();
     });
 
-    /**
-     * Поле текста есть и в колонке текста, и в старой панели настроек, пока
-     * её не сменила новая.
-     */
-    expect(screen.getAllByRole('textbox', { name: 'Текст' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('textbox', { name: 'Текст' })).toBeDefined();
   });
 
   it('на /create-font показывает инструкцию со ссылкой на генератор', () => {

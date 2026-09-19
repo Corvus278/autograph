@@ -21,7 +21,14 @@ const button = cva(
 );
 
 export const Button: FC<ButtonProps> = (props) => {
-  const { children, onClick, variant, isDisabled = false, className } = props;
+  const {
+    children,
+    onClick,
+    variant,
+    isDisabled = false,
+    describedBy,
+    className,
+  } = props;
 
   const handleButtonClick = () => {
     onClick();
@@ -32,6 +39,7 @@ export const Button: FC<ButtonProps> = (props) => {
       type="button"
       className={cx(button({ variant }), className)}
       disabled={isDisabled}
+      aria-describedby={describedBy}
       onClick={handleButtonClick}
     >
       {children}

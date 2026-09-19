@@ -10,9 +10,8 @@ import { useStoredUserSheets } from '../../model/useStoredUserSheets';
 import { ActionBar } from './ActionBar';
 import { GeneratorLayout } from './GeneratorLayout';
 import { HistoryControls } from './HistoryControls';
-import { PageNav } from './PageNav';
-import { PagePreview } from './PagePreview';
-import { SettingsPanel } from './SettingsPanel';
+import { SettingsPane } from './SettingsPane';
+import { getPartnerIndex, SheetViewport } from './SheetViewport';
 import { TextPane } from './TextPane';
 import { useHistoryHotkeys } from './useHistoryHotkeys';
 
@@ -28,23 +27,20 @@ export const Generator: FC = () => {
   const pages = usePageLayout();
   const source = usePageRender(pages);
   const plan = useRunRender(pages);
+  /**
+   * Вторая страница разворота рисуется тем же путём, что и текущая: так она
+   * совпадает с файлом, который сохранила бы, — вместе с зеркалом чётной.
+   */
+  const partnerSource = usePageRender(pages, getPartnerIndex(plan?.pageIndex || 0));
 
   return (
     <GeneratorLayout
       header={<AppHeader actions={<HistoryControls />} />}
       text={<TextPane pageCount={pages.length} />}
       viewport={
-        <div className="flex flex-col items-center gap-4 p-6">
-          <PagePreview source={source} />
-
-          <PageNav pageCount={pages.length} />
-        </div>
+        <SheetViewport source={source} partnerSource={partnerSource} plan={plan} />
       }
-      settings={
-        <div className="p-4">
-          <SettingsPanel />
-        </div>
-      }
+      settings={<SettingsPane />}
       actions={<ActionBar plan={plan} />}
     />
   );

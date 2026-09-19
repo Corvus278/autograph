@@ -11,8 +11,8 @@ import type { GeneratorLayoutProps } from './GeneratorLayout.types';
  * `min-width` у `html`: в окне уже порога страница прокручивается по
  * горизонтали, а колонки не сжимаются.
  *
- * Колонка настроек шириной не меньше своего токена, но растёт по содержимому:
- * панель, которую в неё кладут, задаёт ширину сама.
+ * Колонка настроек — ровно по своему токену: длинная подпись или раскрытая
+ * экспертная группа иначе раздвигали бы колонку и сжимали лист.
  */
 export const GeneratorLayout: FC<GeneratorLayoutProps> = (props) => {
   const { header, text, viewport, settings, actions } = props;
@@ -28,7 +28,7 @@ export const GeneratorLayout: FC<GeneratorLayoutProps> = (props) => {
 
         <div className="relative min-w-0 flex-1 overflow-auto bg-canvas">{viewport}</div>
 
-        <div className="min-w-settings-panel shrink-0 overflow-y-auto border-l border-border bg-surface">
+        <div className="w-settings-panel shrink-0 overflow-y-auto border-l border-border bg-surface">
           {settings}
         </div>
       </main>

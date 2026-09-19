@@ -31,7 +31,7 @@ export const ExpertSettings: FC = () => {
           <HandwritingSection />
         </AccordionSection>
 
-        <AccordionSection value="sheet" title="Лист">
+        <AccordionSection value="sheet" title="Бумага">
           <SheetPinSection />
         </AccordionSection>
 

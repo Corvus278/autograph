@@ -1,5 +1,6 @@
 import { Button } from '@shared/ui/Button';
 import type { FC } from 'react';
+import { useId } from 'react';
 
 import { useBatchExport } from '../../../model/useBatchExport';
 import { useExportPage } from '../../../model/useExportPage';
@@ -27,10 +28,16 @@ export const ActionBar: FC<ActionBarProps> = (props) => {
   const startNewRun = useGeneratorStore((state) => {
     return state.startNewRun;
   });
+  const hintId = useId();
   const pageExport = useExportPage(plan);
   const batchExport = useBatchExport(plan);
   const { progress, isRunning } = batchExport;
   const error = pageExport.error || batchExport.error;
+  /**
+   * Подсказка связана с кнопками, а не просто стоит рядом: читалка, дойдя до
+   * недоступной кнопки, иначе не узнала бы причину.
+   */
+  const describedBy = isTextEmpty ? hintId : undefined;
 
   const handleRegenerateClick = () => {
     startNewRun();
@@ -56,7 +63,9 @@ export const ActionBar: FC<ActionBarProps> = (props) => {
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-3 text-sm">
         {isTextEmpty ? (
-          <p className="text-fg-muted">Введите текст, чтобы сохранить страницы</p>
+          <p id={hintId} className="text-fg-muted">
+            Введите текст, чтобы сохранить страницы
+          </p>
         ) : null}
 
         {error ? (
@@ -81,6 +90,7 @@ export const ActionBar: FC<ActionBarProps> = (props) => {
       <Button
         variant="secondary"
         isDisabled={isTextEmpty || isRunning}
+        describedBy={describedBy}
         onClick={handleBatchClick}
       >
         Скачать все
@@ -89,6 +99,7 @@ export const ActionBar: FC<ActionBarProps> = (props) => {
       <Button
         variant="primary"
         isDisabled={isTextEmpty || pageExport.isSaving}
+        describedBy={describedBy}
         onClick={handleSaveClick}
       >
         {pageExport.isSaving ? 'Сохраняю…' : 'Сохранить страницу'}

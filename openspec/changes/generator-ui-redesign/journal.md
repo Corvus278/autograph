@@ -79,3 +79,15 @@ ExpertSettings: Disclosure → Accordion из 5 групп (свёрнуты), �
 Отступления: «Запас снизу» подписан со знаком (formatStepFraction); кнопки переименованы по задаче. Тесты paper-group-* перенесены в sheet-dialog.test 1:1 (26 it).
 Аудит: ok с первого круга; question — «Перемерить» пишет лист сразу (вместе с флажком без разлиновки), спека «применять только по подтверждению» → пользователю.
 Долг (G9): при монтаже SheetDialog — стабильный onSheetIdChange; ровно один SheetDialog (подписчики в модуле); перенос useSheetImport вместе с manualRulingRequest*.
+
+### Вопросы пользователю (дополнение)
+
+4. G8 question: «Перемерить» в SheetDialog применяет перемер (и флажок «без разлиновки» из черновика) сразу, без «Сохранить»; спека: «изменения применяются только по подтверждению» — считать «Перемерить» подтверждением?
+
+### G9 · Сборка экрана и удаление старого UI
+
+Экран собран: SettingsPane (пикеры + ExpertSettings + один SheetDialog со стабильным onSheetIdChange), SheetViewport, ActionBar; хуки листа перенесены в SettingsPane/. Удалены SettingsPanel, PagePreview, PageNav, Slider, settings-panel.test, public/{33.jpg,line.jpg,page_3.png}. Пробные stories переведены на SheetViewport; story Screen/ExpertMode 1440×900 — проверка 4.1 закрыта.
+Закрыт долг G9: getByRole в routes, aria-describedby у недоступных кнопок, composeScene при выключенной сцене, разворот→экспорт сквозным тестом, selectPageSheetId после смены семьи, w-settings-panel.
+Отступления: правки вне файлов G9 — shared/ui/Button (describedBy), ui-primitives/cx тесты, пути моков; a11y landmark-unique — секции пикеров div role=group, группа «Лист» → «Бумага».
+Аудит: ok с первого круга; покрытие settings-panel.test перенесено.
+Долг: story Screen проверяет группы toBeVisible, а не expectInWindow; нет теста «сворачивает группу, не трогая параметры». Для G10: CLAUDE.md:297 старый путь useSheetRemeasure; эталоны PagePreview/SettingsPanel/Slider без stories.

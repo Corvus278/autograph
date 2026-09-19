@@ -69,7 +69,7 @@ const { decodeSheetImage } = vi.hoisted(() => {
 });
 
 vi.mock(
-  '@pages/Generator/ui/Generator/SettingsPanel/PaperGroup/useSheetImport/decodeSheetImage',
+  '@pages/Generator/ui/Generator/SettingsPane/useSheetImport/decodeSheetImage',
   () => {
     return { decodeSheetImage };
   }

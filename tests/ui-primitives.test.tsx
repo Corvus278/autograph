@@ -9,7 +9,6 @@ import { Disclosure } from '@shared/ui/Disclosure';
 import { IconButton } from '@shared/ui/IconButton';
 import { SegmentedControl } from '@shared/ui/SegmentedControl';
 import { Select } from '@shared/ui/Select';
-import { Slider } from '@shared/ui/Slider';
 import { Swatch, SwatchGroup } from '@shared/ui/Swatch';
 import { TextArea } from '@shared/ui/TextArea';
 import { TileRadio } from '@shared/ui/TileRadio';
@@ -22,63 +21,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(() => {
   cleanup();
-});
-
-describe('Slider', () => {
-  it('меняет значение стрелками с клавиатуры', async () => {
-    const user = userEvent.setup();
-    const handleChange = vi.fn();
-
-    render(
-      <Slider
-        label="Размер шрифта"
-        value={5}
-        min={0}
-        max={10}
-        step={1}
-        onChange={handleChange}
-      />
-    );
-
-    await user.tab();
-    await user.keyboard('{ArrowRight}');
-
-    expect(handleChange).toHaveBeenCalledWith(6);
-
-    await user.keyboard('{ArrowLeft}');
-
-    expect(handleChange).toHaveBeenLastCalledWith(4);
-  });
-
-  it('показывает текущее значение рядом с подписью', () => {
-    render(
-      <Slider
-        label="Ширина блока"
-        value={446}
-        min={100}
-        max={1000}
-        step={1}
-        onChange={vi.fn()}
-      />
-    );
-
-    expect(screen.getByText('446')).toBeDefined();
-  });
-
-  it('связывает подпись со слайдером', () => {
-    render(
-      <Slider
-        label="Ширина блока"
-        value={446}
-        min={100}
-        max={1000}
-        step={1}
-        onChange={vi.fn()}
-      />
-    );
-
-    expect(screen.getByRole('slider', { name: 'Ширина блока' })).toBeDefined();
-  });
 });
 
 describe('ValueSlider', () => {

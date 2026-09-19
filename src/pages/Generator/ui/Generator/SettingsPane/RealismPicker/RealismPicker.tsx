@@ -48,7 +48,7 @@ export const RealismPicker: FC = () => {
   };
 
   return (
-    <section aria-labelledby={titleId} className="flex flex-col gap-2">
+    <div role="group" aria-labelledby={titleId} className="flex flex-col gap-2">
       <h3
         id={titleId}
         className="text-xs font-semibold tracking-wider text-fg-muted uppercase"
@@ -62,6 +62,6 @@ export const RealismPicker: FC = () => {
         options={level === CUSTOM_LEVEL ? CUSTOM_OPTIONS : LEVEL_OPTIONS}
         onChange={handleLevelChange}
       />
-    </section>
+    </div>
   );
 };

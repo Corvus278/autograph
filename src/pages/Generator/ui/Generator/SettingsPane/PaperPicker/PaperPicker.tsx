@@ -10,7 +10,7 @@ import type { PaperFamily, PaperSheet } from '../../../../lib/paper';
 import { selectPageSheetId } from '../../../../model/recipeSelectors';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
 import type { UserSheetRecord } from '../../../../model/userSheetsStorage.types';
-import { useSheetImport } from '../../SettingsPanel/PaperGroup/useSheetImport';
+import { useSheetImport } from '../useSheetImport';
 
 import type { PaperPickerProps } from './PaperPicker.types';
 
@@ -126,7 +126,7 @@ export const PaperPicker: FC<PaperPickerProps> = (props) => {
   };
 
   return (
-    <section aria-labelledby={titleId} className="flex flex-col gap-2">
+    <div role="group" aria-labelledby={titleId} className="flex flex-col gap-2">
       <h3
         id={titleId}
         className="text-xs font-semibold tracking-wider text-fg-muted uppercase"
@@ -220,6 +220,6 @@ export const PaperPicker: FC<PaperPickerProps> = (props) => {
           })}
         </ul>
       ) : null}
-    </section>
+    </div>
   );
 };

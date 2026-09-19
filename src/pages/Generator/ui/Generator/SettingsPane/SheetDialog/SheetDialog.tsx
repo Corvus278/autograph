@@ -5,8 +5,8 @@ import { useShallow } from 'zustand/react/shallow';
 import type { PaperMargins } from '../../../../lib/paper';
 import { findFamily } from '../../../../model/paperSelectors';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
-import { useManualRulingRequest } from '../../SettingsPanel/PaperGroup/useSheetImport';
-import { useSheetRemeasure } from '../../SettingsPanel/PaperGroup/useSheetRemeasure';
+import { useManualRulingRequest } from '../useSheetImport';
+import { useSheetRemeasure } from '../useSheetRemeasure';
 
 import type { SheetDialogProps } from './SheetDialog.types';
 import { SheetDialogForm } from './SheetDialogForm';

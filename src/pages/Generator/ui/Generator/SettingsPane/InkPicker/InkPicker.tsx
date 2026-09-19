@@ -65,7 +65,7 @@ export const InkPicker: FC = () => {
   };
 
   return (
-    <section aria-labelledby={titleId} className="flex flex-col gap-2">
+    <div role="group" aria-labelledby={titleId} className="flex flex-col gap-2">
       <h3
         id={titleId}
         className="text-xs font-semibold tracking-wider text-fg-muted uppercase"
@@ -86,6 +86,6 @@ export const InkPicker: FC = () => {
           return <Swatch key={id} value={id} label={label} color={color} />;
         })}
       </SwatchGroup>
-    </section>
+    </div>
   );
 };
