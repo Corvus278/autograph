@@ -18,7 +18,7 @@ export const Tooltip: FC<TooltipProps> = (props) => {
         <RadixTooltip.Portal>
           <RadixTooltip.Content
             sideOffset={6}
-            className="bg-surface-raised text-fg shadow-popover z-50 max-w-64 rounded-md px-2 py-1 text-xs"
+            className="z-50 max-w-64 rounded-md bg-surface-raised px-2 py-1 text-xs text-fg shadow-popover"
           >
             {content}
 

@@ -15,9 +15,9 @@ export const RadioOption: FC<RadioOptionProps> = (props) => {
       <RadixRadioGroup.Item
         id={controlId}
         value={value}
-        className="border-border-strong bg-surface-raised focus-visible:outline-focus data-[state=checked]:border-accent flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full border focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border-strong bg-surface-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-accent"
       >
-        <RadixRadioGroup.Indicator className="bg-accent size-2 rounded-full" />
+        <RadixRadioGroup.Indicator className="size-2 rounded-full bg-accent" />
       </RadixRadioGroup.Item>
 
       <Label htmlFor={controlId} className="cursor-pointer">

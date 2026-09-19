@@ -28,3 +28,11 @@
 Проверка 3.1 «край листа в story» перенесена в G6.
 Аудит: ok с первого круга.
 Долг: нет утилиты для подписей секций (капс xs с разрядкой) — собирать одинаково в G5/G7–G9; fg-subtle на hover:bg-border = 4,08:1 < AA — не класть; Slider отдаёт aria-valuetext голым числом — удалить в G9; .prettierrc без tailwindStylesheet (классы токенов сортируются в начало) — добавить в G3; twMerge не сливает spacing-токены w-text-panel/h-header — для G5.
+
+### G3 · Новые примитивы, шапка, другие экраны
+
+Примитивы SegmentedControl, TileRadio, Swatch/SwatchGroup, Dialog (управляемый, trigger необязателен), Disclosure, IconButton, Toolbar на Radix; widgets/AppHeader со слотом actions; шапка на CreateFont и NotFound.
+Решение координатора: .prettierrc tailwindStylesheet + пересортировка классов.
+Отступления: добавлен @radix-ui/react-toolbar вне proposal — вопрос пользователю в финале; алиас @widgets в tsconfig/vite/vitest вне файлов группы (вынужденно); <header> в CreateFont → <div> (второй banner).
+Аудит: ok с первого круга.
+Долг: в routes.test добавить «/» и «генератор → Свой шрифт» после монтирования шапки (G5/G9); Swatch — знак всегда text-accent-fg, на светлой заливке проверить контраст в G7; SegmentedControl внутри Toolbar — вложенный роуминг, решить в G6; фраза «widgets пустой» в CLAUDE.md — в G10.

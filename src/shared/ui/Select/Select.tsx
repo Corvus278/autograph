@@ -26,7 +26,7 @@ export const Select: FC<SelectProps> = (props) => {
       >
         <RadixSelect.Trigger
           id={controlId}
-          className="border-border-strong bg-surface-raised text-fg focus-visible:outline-focus flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-50"
         >
           <RadixSelect.Value />
 
@@ -34,14 +34,14 @@ export const Select: FC<SelectProps> = (props) => {
         </RadixSelect.Trigger>
 
         <RadixSelect.Portal>
-          <RadixSelect.Content className="border-border-strong bg-surface-raised text-fg shadow-popover z-50 overflow-hidden rounded-md border">
+          <RadixSelect.Content className="z-50 overflow-hidden rounded-md border border-border-strong bg-surface-raised text-fg shadow-popover">
             <RadixSelect.Viewport className="max-h-72 p-1">
               {options.map(({ value: optionValue, label: optionLabel }) => {
                 return (
                   <RadixSelect.Item
                     key={optionValue}
                     value={optionValue}
-                    className="text-fg-muted data-highlighted:bg-border data-[state=checked]:text-fg cursor-pointer rounded-sm px-3 py-1.5 text-sm outline-hidden data-[state=checked]:font-medium"
+                    className="cursor-pointer rounded-sm px-3 py-1.5 text-sm text-fg-muted outline-hidden data-highlighted:bg-border data-[state=checked]:font-medium data-[state=checked]:text-fg"
                   >
                     <RadixSelect.ItemText>{optionLabel}</RadixSelect.ItemText>
                   </RadixSelect.Item>

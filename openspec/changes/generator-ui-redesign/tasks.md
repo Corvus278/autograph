@@ -17,8 +17,8 @@
 
 - [x] 3.1 Токены в `@theme` по таблице D2 (тёмная тема, `oklch`, область просмотра на ступень светлее панелей), `min-width` через `--spacing-desktop`, `--color-neutral-850` заменить семантическими токенами. Проверка: `npm run lint` (stylelint + prettier) зелёный; край светлого листа читается на фоне области просмотра в story; `rg "violet-|zinc-|neutral-850" src` пусто после группы 5.
 - [x] 3.2 Перевести существующие примитивы `shared/ui` на токены, `Slider` → `ValueSlider` с подписью значения и единицей. Проверка: stories примитивов проходят `a11y` в `npm run test:stories`.
-- [ ] 3.3 Новые примитивы `SegmentedControl`, `TileRadio`, `Swatch`/`SwatchGroup`, `Dialog`, `Disclosure`, `IconButton`, `Toolbar` на Radix; добавить `@radix-ui/react-dialog`, `@radix-ui/react-toggle-group`, `@radix-ui/react-collapsible`. Проверка: у каждого story и тест клавиатуры в `tests/ui-primitives.test.tsx` (стрелки в группах, Esc закрывает диалог, фокус возвращается на кнопку-триггер).
-- [ ] 3.4 `widgets/AppHeader` со слотом действий страницы; правило для `widgets` в `steiger.config.ts`, если нужно. Проверка: `npm run lint:fsd` зелёный, story шапки.
+- [x] 3.3 Новые примитивы `SegmentedControl`, `TileRadio`, `Swatch`/`SwatchGroup`, `Dialog`, `Disclosure`, `IconButton`, `Toolbar` на Radix; добавить `@radix-ui/react-dialog`, `@radix-ui/react-toggle-group`, `@radix-ui/react-collapsible`. Проверка: у каждого story и тест клавиатуры в `tests/ui-primitives.test.tsx` (стрелки в группах, Esc закрывает диалог, фокус возвращается на кнопку-триггер).
+- [x] 3.4 `widgets/AppHeader` со слотом действий страницы; правило для `widgets` в `steiger.config.ts`, если нужно. Проверка: `npm run lint:fsd` зелёный, story шапки.
 
 ## 4. Экран генератора
 
@@ -43,7 +43,7 @@
 
 ## 6. Другие экраны
 
-- [ ] 6.1 CreateFont и NotFound на `AppHeader` и токенах, без изменения контента. Проверка: `tests/routes.test.tsx` обновлён (шапка на всех трёх экранах, переходы) и зелёный.
+- [x] 6.1 CreateFont и NotFound на `AppHeader` и токенах, без изменения контента. Проверка: `tests/routes.test.tsx` обновлён (шапка на всех трёх экранах, переходы) и зелёный.
 
 ## 7. Проверка целиком и документация
 

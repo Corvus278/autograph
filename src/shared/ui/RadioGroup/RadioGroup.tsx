@@ -16,7 +16,7 @@ export const RadioGroup: FC<RadioGroupProps> = (props) => {
 
   return (
     <div className={cx('flex flex-col gap-2', className)}>
-      <span id={labelId} className="text-fg-muted text-sm">
+      <span id={labelId} className="text-sm text-fg-muted">
         {label}
       </span>
 

@@ -24,7 +24,7 @@ export const Generator: FC = () => {
   const plan = useRunRender(pages);
 
   return (
-    <main className="w-desktop mx-auto flex items-start gap-6 p-6">
+    <main className="mx-auto flex w-desktop items-start gap-6 p-6">
       <section className="flex grow flex-col items-center gap-4">
         <Link
           to="/create-font"

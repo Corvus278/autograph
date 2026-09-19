@@ -9,10 +9,10 @@ export const AccordionSection: FC<AccordionSectionProps> = (props) => {
   return (
     <RadixAccordion.Item
       value={value}
-      className="border-border bg-surface-raised overflow-hidden rounded-md border"
+      className="overflow-hidden rounded-md border border-border bg-surface-raised"
     >
       <RadixAccordion.Header>
-        <RadixAccordion.Trigger className="text-fg hover:bg-border focus-visible:outline-focus flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm font-medium focus-visible:outline-2 focus-visible:-outline-offset-2">
+        <RadixAccordion.Trigger className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm font-medium text-fg hover:bg-border focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus">
           {title}
 
           <span aria-hidden="true" className="text-fg-subtle">
@@ -21,7 +21,7 @@ export const AccordionSection: FC<AccordionSectionProps> = (props) => {
         </RadixAccordion.Trigger>
       </RadixAccordion.Header>
 
-      <RadixAccordion.Content className="border-border border-t px-3 py-3">
+      <RadixAccordion.Content className="border-t border-border px-3 py-3">
         {children}
       </RadixAccordion.Content>
     </RadixAccordion.Item>
