@@ -11,9 +11,6 @@ const meta = {
     value: 'blue',
     onChange: fn(),
     children: [
-      <Swatch key="auto" value="auto" label="Случайные из палитры" color="#3f4a5c">
-        A
-      </Swatch>,
       <Swatch key="blue" value="blue" label="Синие" color="#1c3f94" />,
       <Swatch key="violet" value="violet" label="Фиолетовые" color="#3b2a8c" />,
       <Swatch key="black" value="black" label="Чёрные" color="#1a1a1a" />,

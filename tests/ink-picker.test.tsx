@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import type { LayoutPage } from '@pages/Generator/lib/paginate/paginate.types';
-import { INK_PALETTE } from '@pages/Generator/lib/recipe';
+import { DEFAULT_INK_TONE_ID, INK_PALETTE } from '@pages/Generator/lib/recipe';
 import {
   DEFAULT_GENERATOR_STATE,
   useGeneratorStore,
@@ -18,8 +18,9 @@ import { buildRenderFamily } from './helpers/paper-family';
 const FAMILY = buildRenderFamily();
 
 /**
- * Сколько прогонов перебирается в поисках смены цвета в режиме «Авто»: на
- * семи тонах палитры хотя бы один из стольких прогонов выдаёт другой цвет.
+ * Сколько прогонов перебирается в проверке, что выбранный тон с прогоном не
+ * меняется: если бы рецепт подменял цвет, на семи тонах палитры хотя бы один
+ * из стольких прогонов выдал бы другой.
  */
 const RUN_ATTEMPTS = 20;
 
@@ -61,25 +62,30 @@ afterEach(() => {
 });
 
 describe('InkPicker', () => {
-  it('первым идёт «Авто», за ним тоны палитры с названиями', () => {
+  it('в ряду только тоны палитры, по умолчанию отмечена синяя шариковая', () => {
+    const defaultTone = INK_PALETTE.find(({ id }) => {
+      return id === DEFAULT_INK_TONE_ID;
+    });
+
     render(<InkPicker />);
 
     const labels = screen.getAllByRole('radio').map((swatch) => {
       return swatch.getAttribute('aria-label');
     });
 
-    expect(labels).toEqual([
-      'Авто',
-      ...INK_PALETTE.map(({ label }) => {
+    expect(labels).toEqual(
+      INK_PALETTE.map(({ label }) => {
         return label;
-      }),
-    ]);
-    expect(screen.getByRole('radio', { name: 'Авто' }).getAttribute('aria-checked')).toBe(
-      'true'
+      })
     );
+    expect(defaultTone?.label).toBe('Синяя шариковая');
+    expect(
+      screen.getByRole('radio', { name: 'Синяя шариковая' }).getAttribute('aria-checked')
+    ).toBe('true');
+    expect(screen.getByText('Синяя шариковая', { selector: 'p' })).toBeDefined();
   });
 
-  it('выбор тона пишет тон, «Авто» возвращает рецепт', async () => {
+  it('выбор тона отмечает его свотч и меняет подпись', async () => {
     const user = userEvent.setup();
     const tone = INK_PALETTE[2];
 
@@ -88,10 +94,26 @@ describe('InkPicker', () => {
     await user.click(screen.getByRole('radio', { name: tone?.label || '' }));
 
     expect(store().ink).toEqual({ kind: 'tone', toneId: tone?.id });
+    expect(
+      screen.getByRole('radio', { name: tone?.label || '' }).getAttribute('aria-checked')
+    ).toBe('true');
+    expect(
+      screen.getByRole('radio', { name: 'Синяя шариковая' }).getAttribute('aria-checked')
+    ).toBe('false');
+    expect(screen.getByText(tone?.label || '', { selector: 'p' })).toBeDefined();
+  });
 
-    await user.click(screen.getByRole('radio', { name: 'Авто' }));
+  it('при своём цвете не отмечен ни один свотч, подпись — «Свой цвет»', () => {
+    store().setInk({ kind: 'custom', color: '#123456' });
 
-    expect(store().ink).toEqual({ kind: 'auto' });
+    render(<InkPicker />);
+
+    const checked = screen.getAllByRole('radio').filter((swatch) => {
+      return swatch.getAttribute('aria-checked') === 'true';
+    });
+
+    expect(checked).toEqual([]);
+    expect(screen.getByText('Свой цвет')).toBeDefined();
   });
 
   it('ручной цвет на странице не меняется после перегенерации', async () => {
@@ -112,9 +134,10 @@ describe('InkPicker', () => {
     expect([...colors]).toEqual([tone?.color]);
   });
 
-  it('в режиме «Авто» перегенерация меняет цвет на странице', () => {
-    render(<InkPicker />);
-
+  it('без выбора страница красится синей шариковой при любом прогоне', () => {
+    const defaultColor = INK_PALETTE.find(({ id }) => {
+      return id === DEFAULT_INK_TONE_ID;
+    })?.color;
     const colors = new Set<string | undefined>();
 
     for (let attempt = 0; attempt < RUN_ATTEMPTS; attempt += 1) {
@@ -122,6 +145,6 @@ describe('InkPicker', () => {
       colors.add(readPageInkColor());
     }
 
-    expect(colors.size).toBeGreaterThan(1);
+    expect([...colors]).toEqual([defaultColor]);
   });
 });

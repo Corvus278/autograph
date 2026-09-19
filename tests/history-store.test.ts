@@ -163,7 +163,7 @@ describe('история правок', () => {
 
   it('правка без изменения значения шага не создаёт', () => {
     store().setGeometryCorrection({ topOffset: 0 });
-    store().setInk({ kind: 'auto' });
+    store().setInk({ kind: 'tone', toneId: 'ballpoint-blue' });
 
     expect(selectIsUndoAvailable(store())).toBe(false);
   });

@@ -204,7 +204,10 @@ describe('экран генератора на маршруте «/»', () => {
     const inks = within(screen.getByRole('radiogroup', { name: 'Цвет чернил' }));
 
     expect(inks.getAllByRole('radio').length).toBeGreaterThan(1);
-    expect(inks.getByRole('radio', { name: 'Авто' })).toBeDefined();
+    expect(inks.queryByRole('radio', { name: 'Авто' })).toBeNull();
+    expect(
+      inks.getByRole('radio', { name: 'Синяя шариковая' }).getAttribute('aria-checked')
+    ).toBe('true');
     expect(screen.getByRole('radiogroup', { name: 'Реализм' })).toBeDefined();
     expect(
       screen

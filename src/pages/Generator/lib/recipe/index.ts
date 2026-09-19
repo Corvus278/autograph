@@ -5,6 +5,7 @@ export {
   JPEG_QUALITY,
 } from './buildRunRecipe';
 export {
+  DEFAULT_INK_TONE_ID,
   INK_COLOR_JITTER,
   INK_PALETTE,
   jitterInkColor,

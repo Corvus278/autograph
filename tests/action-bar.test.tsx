@@ -196,7 +196,7 @@ describe('полоса действий', () => {
 });
 
 describe('перегенерация', () => {
-  it('меняет seed прогона и цвет чернил страницы в режиме «Авто»', async () => {
+  it('меняет seed прогона, выбранный тон чернил не трогает', async () => {
     const family = buildRenderFamily();
 
     useGeneratorStore.setState({
@@ -217,7 +217,7 @@ describe('перегенерация', () => {
     await clickButton('Перегенерировать');
 
     expect(useGeneratorStore.getState().runSeed).not.toBe(seedBefore);
-    expect(result.current?.buildParams(1).inkColor).not.toBe(inkBefore);
+    expect(result.current?.buildParams(1).inkColor).toBe(inkBefore);
   });
 });
 

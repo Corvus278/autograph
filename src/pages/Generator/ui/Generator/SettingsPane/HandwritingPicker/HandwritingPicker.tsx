@@ -26,6 +26,11 @@ const CUSTOM_FONT_OPTION: HandwritingFont = {
  * Список собран на Radix Select напрямую, а не на `shared/ui/Select`: тому
  * пункт со своим начертанием не нужен ни в одном другом месте.
  *
+ * Список раскрывается под полем (`popper`), а не поверх него: выровненный по
+ * пункту список ставится один раз и при прокрутке панели отрывается от поля,
+ * наезжая на соседние секции. Ширина — ширина поля, высота — не больше места
+ * до края окна, лишнее прокручивается внутри списка.
+ *
  * Битый файл оставляет почерк прежним: шрифт становится активным только после
  * того, как браузер его разобрал, а ошибка показывается под полем файла.
  */
@@ -90,7 +95,11 @@ export const HandwritingPicker: FC = () => {
         </RadixSelect.Trigger>
 
         <RadixSelect.Portal>
-          <RadixSelect.Content className="z-50 overflow-hidden rounded-md border border-border-strong bg-surface-raised text-fg shadow-popover">
+          <RadixSelect.Content
+            position="popper"
+            sideOffset={4}
+            className="z-50 max-h-(--radix-select-content-available-height) w-(--radix-select-trigger-width) overflow-hidden rounded-md border border-border-strong bg-surface-raised text-fg shadow-popover"
+          >
             <RadixSelect.Viewport className="max-h-72 p-1">
               {options.map(({ family, label }) => {
                 return (

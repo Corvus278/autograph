@@ -165,8 +165,9 @@ const SCENE_IDS = SCENES.map(({ id }) => {
 
 /**
  * Выбор чернил. Вариант проверяется целиком: оттенок, которого нет в
- * палитре, или цвет не в `#rrggbb` — это «Авто» по умолчанию, а не
- * полупустой вариант.
+ * палитре, или цвет не в `#rrggbb` — это чернила по умолчанию, а не
+ * полупустой вариант. Так же читается и `auto` из сессий, где выбор цвета
+ * отдавался рецепту: терять из-за него всю сессию незачем.
  *
  * @param value — сохранённое значение
  * @param fallback — чернила по умолчанию
@@ -178,10 +179,6 @@ const readInk = (value: unknown, fallback: GeneratorInk): GeneratorInk => {
   }
 
   switch (value.kind) {
-    case 'auto': {
-      return { kind: 'auto' };
-    }
-
     case 'tone': {
       return typeof value.toneId === 'string' && TONE_IDS.includes(value.toneId)
         ? { kind: 'tone', toneId: value.toneId }

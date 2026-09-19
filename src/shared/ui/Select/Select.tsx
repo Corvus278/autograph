@@ -7,6 +7,12 @@ import { Label } from '../Label';
 
 import type { SelectProps } from './Select.types';
 
+/**
+ * Выпадающий список. Раскрывается под полем (`popper`), а не поверх него:
+ * выровненный по пункту список ставится один раз и при прокрутке страницы
+ * отрывается от поля. Ширина — ширина поля, высота — не больше места до края
+ * окна, лишнее прокручивается внутри списка.
+ */
 export const Select: FC<SelectProps> = (props) => {
   const { label, value, options, onChange, isDisabled = false, className } = props;
   const controlId = useId();
@@ -34,7 +40,11 @@ export const Select: FC<SelectProps> = (props) => {
         </RadixSelect.Trigger>
 
         <RadixSelect.Portal>
-          <RadixSelect.Content className="z-50 overflow-hidden rounded-md border border-border-strong bg-surface-raised text-fg shadow-popover">
+          <RadixSelect.Content
+            position="popper"
+            sideOffset={4}
+            className="z-50 max-h-(--radix-select-content-available-height) w-(--radix-select-trigger-width) overflow-hidden rounded-md border border-border-strong bg-surface-raised text-fg shadow-popover"
+          >
             <RadixSelect.Viewport className="max-h-72 p-1">
               {options.map(({ value: optionValue, label: optionLabel }) => {
                 return (

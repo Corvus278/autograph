@@ -12,11 +12,15 @@ import { useGeneratorStore } from '../../../../../model/useGeneratorStore';
  */
 const AUTO_VALUE = 'auto';
 
-const AUTO_OPTION: RadioGroupOption = { value: AUTO_VALUE, label: 'Авто — по рецепту' };
+const AUTO_OPTION: RadioGroupOption = {
+  value: AUTO_VALUE,
+  label: 'Разные листы на страницах',
+};
 
 /**
- * Закрепление экземпляра листа: выбранный лист встаёт на все страницы, «Авто»
- * возвращает раздачу рецепту. Список — экземпляры выбранной семьи вместе со
+ * Закрепление экземпляра листа: выбранный лист встаёт на все страницы, первый
+ * пункт возвращает раздачу рецепту. Подсказка видна всегда, а не во всплывашке:
+ * без неё пункт не объясняет, откуда берутся листы и когда они меняются. Список — экземпляры выбранной семьи вместе со
  * своими листами: чужие семьи рецепт этой семье не выдаёт.
  */
 export const SheetPinSection: FC = () => {
@@ -58,11 +62,18 @@ export const SheetPinSection: FC = () => {
   };
 
   return (
-    <RadioGroup
-      label="Экземпляр листа"
-      value={isSheetPinned ? sheetId : AUTO_VALUE}
-      options={options}
-      onChange={handleSheetChange}
-    />
+    <div className="flex flex-col gap-2">
+      <RadioGroup
+        label="Экземпляр листа"
+        value={isSheetPinned ? sheetId : AUTO_VALUE}
+        options={options}
+        onChange={handleSheetChange}
+      />
+
+      <p className="text-xs text-fg-muted">
+        «Разные листы на страницах»: каждой странице — свой снимок из набора семьи. Какой
+        — меняется при «Перегенерировать». Выбранный лист встаёт на все страницы.
+      </p>
+    </div>
   );
 };

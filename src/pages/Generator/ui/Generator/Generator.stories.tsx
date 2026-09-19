@@ -204,6 +204,77 @@ export const ExpertMode: Story = {
 };
 
 /**
+ * Зазор между полем почерка и раскрытым списком — `sideOffset` списка.
+ */
+const LIST_OFFSET = 4;
+
+/**
+ * На сколько прокручивается столбец настроек при раскрытом списке почерка:
+ * заметно, но так, чтобы поле осталось в окне.
+ */
+const LIST_SCROLL = 120;
+
+/**
+ * Проверяет, что список висит прямо под полем и шириной с него.
+ *
+ * @param trigger — поле списка
+ * @param list — раскрытый список
+ */
+const expectListUnderTrigger = async (trigger: HTMLElement, list: HTMLElement) => {
+  const triggerRect = trigger.getBoundingClientRect();
+  const listRect = list.getBoundingClientRect();
+
+  await expect(Math.abs(listRect.top - triggerRect.bottom - LIST_OFFSET)).toBeLessThan(1);
+  await expect(Math.abs(listRect.width - triggerRect.width)).toBeLessThan(1);
+  await expect(listRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+};
+
+/**
+ * Раскрытый список почерка висит под полем, шириной с поле и не ниже края
+ * окна — и остаётся под полем, когда столбец настроек прокручивается.
+ */
+export const HandwritingListFollowsTrigger: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await canvas.findByTestId('page');
+    await userEvent.click(canvas.getByRole('button', { name: 'Экспертный режим' }));
+
+    /**
+     * Группы раскрываются, чтобы столбец настроек был выше окна при любом
+     * размере окна прогона: иначе прокручивать было бы нечего.
+     */
+    for (const section of EXPERT_SECTIONS) {
+      await userEvent.click(canvas.getByRole('button', { name: section }));
+    }
+
+    const trigger = canvas.getByRole('combobox', { name: 'Почерк' });
+    const settingsColumn = findScrollParent(trigger);
+
+    await userEvent.click(trigger);
+
+    const list = await within(document.body).findByRole('listbox');
+
+    await expectListUnderTrigger(trigger, list);
+
+    settingsColumn.scrollTop += LIST_SCROLL;
+
+    await expect(settingsColumn.scrollTop).toBeGreaterThan(0);
+    await waitFor(async () => {
+      await expectListUnderTrigger(trigger, list);
+    });
+
+    /**
+     * Список закрывается перед проверкой доступности: открытый Radix-список
+     * скрывает остальной экран от вспомогательных технологий, и проверка
+     * `aria-hidden-focus` сработала бы на весь экран, а не на поле.
+     */
+    await userEvent.keyboard('{Escape}');
+    await expect(within(document.body).queryByRole('listbox')).toBeNull();
+  },
+};
+
+/**
  * Разворот на экране: пара страниц в области просмотра, вторая страница — та,
  * что идёт за первой.
  */

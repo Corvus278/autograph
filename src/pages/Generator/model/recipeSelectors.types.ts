@@ -5,7 +5,7 @@ import type { DistortionFlags } from '../lib/randomize/randomize.types';
  */
 export type PageRecipeValues = {
   /**
-   * Цвет чернил: ручной выбор или цвет рецепта в режиме «Авто».
+   * Цвет чернил: выбранный тон или произвольный цвет.
    */
   inkColor: string;
 

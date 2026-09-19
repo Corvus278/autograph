@@ -303,7 +303,10 @@ describe('пачка отражает раскладку прогона', () => 
 
     useGeneratorStore.getState().startNewRun();
 
-    expect(buildPlan().buildTask(0).params.inkColor).not.toBe(before.inkColor);
+    const after = buildPlan().buildTask(0).params;
+
+    expect(after.inkColor).toBe(before.inkColor);
+    expect(after).not.toEqual(before);
   });
 
   it('на ступени «Ровно» рисует страницу одинаково при любом прогоне', async () => {

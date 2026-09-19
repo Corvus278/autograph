@@ -23,7 +23,7 @@ import type { PageRecipeValues } from './recipeSelectors.types';
  *
  * Флаги и частоты побуквенной обработки рецепт копирует из реализма
  * документа, из seed выводится только seed почерка. Цвет чернил рецепт
- * выбирает сам только в режиме «Авто».
+ * выбирает сам, только если выбранного тона нет в палитре.
  *
  * @param state — состояние генератора
  * @param pageCount — число страниц прогона
@@ -56,15 +56,11 @@ export const selectRunRecipe = (
  * Цвет, заданный выбором чернил вручную.
  *
  * @param ink — выбор чернил
- * @returns цвет тона или произвольный цвет; `null` — цвет выбирает рецепт:
- *   режим «Авто» или тон, которого в палитре нет
+ * @returns цвет тона или произвольный цвет; `null` — тона нет в палитре,
+ *   цвет выбирает рецепт
  */
 export const resolveInkColor = (ink: GeneratorInk): string | null => {
   switch (ink.kind) {
-    case 'auto': {
-      return null;
-    }
-
     case 'tone': {
       return (
         INK_PALETTE.find(({ id }) => {

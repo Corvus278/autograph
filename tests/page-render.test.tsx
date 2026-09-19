@@ -5,7 +5,11 @@ import { PAGE_WIDTH } from '@pages/Generator/config';
 import { deriveGeometry } from '@pages/Generator/lib/calibrate/deriveGeometry';
 import type { LayoutPage } from '@pages/Generator/lib/paginate/paginate.types';
 import type { PaperFamily } from '@pages/Generator/lib/paper';
-import { INK_PALETTE, JPEG_QUALITY } from '@pages/Generator/lib/recipe';
+import {
+  DEFAULT_INK_TONE_ID,
+  INK_PALETTE,
+  JPEG_QUALITY,
+} from '@pages/Generator/lib/recipe';
 import type { GeneratorInk } from '@pages/Generator/model/generator.types';
 import { getPageCalibration } from '@pages/Generator/model/geometrySelectors';
 import type { PageRenderSource } from '@pages/Generator/model/pageRender.types';
@@ -213,18 +217,20 @@ describe('источник отрисовки страницы', () => {
     });
   });
 
-  it('в режиме «Авто» красит чернила цветом рецепта и меняет его с прогоном', () => {
+  it('по умолчанию красит чернила тоном по умолчанию и не меняет его с прогоном', () => {
     const pages = buildLayoutPages();
     const before = renderSource(pages).source?.buildParams(1).inkColor;
 
     expect(before).toBe(selectRunRecipe(useGeneratorStore.getState(), 2)?.inkColor);
+    expect(before).toBe(
+      INK_PALETTE.find(({ id }) => {
+        return id === DEFAULT_INK_TONE_ID;
+      })?.color
+    );
 
     useGeneratorStore.getState().startNewRun();
 
-    const after = renderSource(pages).source?.buildParams(1).inkColor;
-
-    expect(after).toBe(selectRunRecipe(useGeneratorStore.getState(), 2)?.inkColor);
-    expect(after).not.toBe(before);
+    expect(renderSource(pages).source?.buildParams(1).inkColor).toBe(before);
   });
 
   it('держит тон палитры и произвольный цвет при новом прогоне', () => {

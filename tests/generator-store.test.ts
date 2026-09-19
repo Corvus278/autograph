@@ -48,10 +48,10 @@ describe('значения по умолчанию', () => {
     expect(store().sceneDarken).toBe(0.06);
   });
 
-  it('открывают генератор с непустым текстом, выбранным шрифтом и чернилами «Авто»', () => {
+  it('открывают генератор с непустым текстом, выбранным шрифтом и синей шариковой', () => {
     expect(store().text).not.toBe('');
     expect(store().fontFamily).toBe('Abram');
-    expect(store().ink).toEqual({ kind: 'auto' });
+    expect(store().ink).toEqual({ kind: 'tone', toneId: 'ballpoint-blue' });
   });
 
   it('открывают просмотр вписанным листом без разворота', () => {
@@ -91,9 +91,9 @@ describe('действия стора', () => {
 
     expect(store().ink).toEqual({ kind: 'custom', color: '#0000ff' });
 
-    store().setInk({ kind: 'auto' });
+    store().setInk({ kind: 'tone', toneId: 'ballpoint-blue' });
 
-    expect(store().ink).toEqual({ kind: 'auto' });
+    expect(store().ink).toEqual({ kind: 'tone', toneId: 'ballpoint-blue' });
   });
 
   it('ставит и сбрасывает свой шрифт', () => {

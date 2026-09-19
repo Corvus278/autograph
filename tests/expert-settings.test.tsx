@@ -203,7 +203,7 @@ describe('экспертный режим', () => {
     expect(useGeneratorStore.getState().realism.flags.isWordRotated).toBe(false);
   });
 
-  it('закрепление экземпляра: выбор листа закрепляет его, «Авто» снимает', async () => {
+  it('закрепление экземпляра: выбор листа закрепляет его, «Разные листы» снимает', async () => {
     const user = userEvent.setup();
 
     render(<ExpertSettings />);
@@ -218,9 +218,12 @@ describe('экспертный режим', () => {
       isSheetPinned: true,
     });
 
-    await user.click(screen.getByRole('radio', { name: 'Авто — по рецепту' }));
+    await user.click(screen.getByRole('radio', { name: 'Разные листы на страницах' }));
 
     expect(useGeneratorStore.getState().isSheetPinned).toBe(false);
+    expect(
+      screen.getByText(/каждой странице — свой снимок из набора семьи/)
+    ).toBeDefined();
   });
 
   it('произвольный цвет чернил переключает чернила на свой цвет', async () => {

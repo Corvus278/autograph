@@ -7,15 +7,36 @@ import type { GeneratorInk } from '../../../../model/generator.types';
 import { useGeneratorStore } from '../../../../model/useGeneratorStore';
 
 /**
- * Значение свотча «Авто». Идентификаторы тонов палитры с ним не совпадают.
+ * Подпись при произвольном цвете: названия у него нет, а свотча в ряду тоже.
  */
-const AUTO_VALUE = 'auto';
+const CUSTOM_INK_LABEL = 'Свой цвет';
 
 /**
- * Заливка свотча «Авто»: нейтральная, а не цвет рецепта — иначе «Авто»
- * выглядел бы тоном палитры и путался с ним.
+ * Название выбранных чернил для подписи рядом со свотчами.
+ *
+ * @param ink — выбор чернил
+ * @returns название тона или подпись произвольного цвета; пустая строка —
+ *   тона нет в палитре
  */
-const AUTO_SWATCH_COLOR = 'var(--color-surface-raised)';
+const toInkLabel = (ink: GeneratorInk): string => {
+  switch (ink.kind) {
+    case 'tone': {
+      return (
+        INK_PALETTE.find(({ id }) => {
+          return id === ink.toneId;
+        })?.label || ''
+      );
+    }
+
+    case 'custom': {
+      return CUSTOM_INK_LABEL;
+    }
+
+    default: {
+      throw new Error(`Неизвестный выбор чернил: ${JSON.stringify(ink)}`);
+    }
+  }
+};
 
 /**
  * Какой свотч отмечен при данном выборе чернил.
@@ -25,10 +46,6 @@ const AUTO_SWATCH_COLOR = 'var(--color-surface-raised)';
  */
 const toSwatchValue = (ink: GeneratorInk): string => {
   switch (ink.kind) {
-    case 'auto': {
-      return AUTO_VALUE;
-    }
-
     case 'tone': {
       return ink.toneId;
     }
@@ -44,9 +61,11 @@ const toSwatchValue = (ink: GeneratorInk): string => {
 };
 
 /**
- * Выбор чернил: «Авто» и тоны палитры реальных ручек. Название тона — в
- * подсказке и в доступном имени свотча. Произвольный цвет задаётся в
- * экспертном режиме; пока он выбран, здесь не отмечен ни один свотч.
+ * Выбор чернил: тоны палитры реальных ручек. Название тона — в подсказке, в
+ * доступном имени свотча и подписью рядом с рядом: по одной заливке тёмные
+ * тона друг от друга не отличить. Произвольный цвет задаётся в экспертном
+ * режиме; пока он выбран, здесь не отмечен ни один свотч, а подпись — «Свой
+ * цвет».
  *
  * Знак на свотчах белый: все тоны палитры тёмные, самый светлый
  * (`#4b2e83` с разбросом рецепта) даёт с белым около 9:1.
@@ -61,27 +80,29 @@ export const InkPicker: FC = () => {
   });
 
   const handleSwatchChange = (value: string) => {
-    setInk(value === AUTO_VALUE ? { kind: 'auto' } : { kind: 'tone', toneId: value });
+    setInk({ kind: 'tone', toneId: value });
   };
 
   return (
     <div role="group" aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h3
-        id={titleId}
-        className="text-xs font-semibold tracking-wider text-fg-muted uppercase"
-      >
-        Чернила
-      </h3>
+      <div className="flex items-baseline justify-between gap-2">
+        <h3
+          id={titleId}
+          className="text-xs font-semibold tracking-wider text-fg-muted uppercase"
+        >
+          Чернила
+        </h3>
+
+        <p aria-live="polite" className="text-xs text-fg">
+          {toInkLabel(ink)}
+        </p>
+      </div>
 
       <SwatchGroup
         label="Цвет чернил"
         value={toSwatchValue(ink)}
         onChange={handleSwatchChange}
       >
-        <Swatch value={AUTO_VALUE} label="Авто" color={AUTO_SWATCH_COLOR}>
-          А
-        </Swatch>
-
         {INK_PALETTE.map(({ id, label, color }) => {
           return <Swatch key={id} value={id} label={label} color={color} />;
         })}

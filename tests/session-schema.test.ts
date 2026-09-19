@@ -151,7 +151,6 @@ describe('parseSession', () => {
 
   describe('чернила', () => {
     it.each([
-      [{ kind: 'auto' }],
       [{ kind: 'tone', toneId: 'ballpoint-black' }],
       [{ kind: 'custom', color: '#12ab9F' }],
     ])('годный вариант %j восстанавливается', (ink) => {
@@ -159,6 +158,7 @@ describe('parseSession', () => {
     });
 
     it.each([
+      [{ kind: 'auto' }],
       [{ kind: 'tone', toneId: 'neon-green' }],
       [{ kind: 'tone' }],
       [{ kind: 'custom', color: 'red' }],

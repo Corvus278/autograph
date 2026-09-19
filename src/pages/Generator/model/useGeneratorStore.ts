@@ -18,6 +18,7 @@ import {
   SCENES,
 } from '../config';
 import type { PaperFamily } from '../lib/paper/paper.types';
+import { DEFAULT_INK_TONE_ID } from '../lib/recipe';
 
 import type { GeneratorRealism, GeneratorState } from './generator.types';
 import { selectPaperFamilies } from './paperSelectors';
@@ -91,7 +92,7 @@ const toLevelRealism = (levelId: RealismLevelId): GeneratorRealism => {
 const DEFAULT_STATE: GeneratorStateWithHistory = {
   text: DEFAULT_TEXT,
   fontFamily: HANDWRITING_FONTS[0]?.family ?? '',
-  ink: { kind: 'auto' },
+  ink: { kind: 'tone', toneId: DEFAULT_INK_TONE_ID },
   familyId: PRESET_PAPER_FAMILIES[0]?.id || '',
   sheetId: PRESET_PAPER_FAMILIES[0]?.sheets[0]?.id || '',
   isSheetPinned: false,
