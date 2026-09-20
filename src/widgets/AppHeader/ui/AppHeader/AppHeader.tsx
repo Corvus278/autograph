@@ -1,3 +1,4 @@
+import { APP_VERSION } from '@shared/config';
 import type { FC } from 'react';
 import { Link, NavLink } from 'react-router';
 
@@ -12,12 +13,25 @@ export const AppHeader: FC<AppHeaderProps> = (props) => {
 
   return (
     <header className="flex h-header shrink-0 items-center gap-6 border-b border-border bg-surface px-4">
-      <Link
-        to="/"
-        className="rounded-sm text-base font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-      >
-        Autograph
-      </Link>
+      <div className="flex items-baseline gap-2">
+        <Link
+          to="/"
+          className="rounded-sm text-base font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+        >
+          Autograph
+        </Link>
+
+        {/**
+         * Версия — подпись рядом с названием, а не часть ссылки: в имя ссылки
+         * она добавила бы читалке номер, который никуда не ведёт. Пустая
+         * версия (dev-сервер, тесты) не рисуется вовсе.
+         */}
+        {APP_VERSION ? (
+          <span data-testid="app-version" className="text-xs text-fg-muted tabular-nums">
+            v{APP_VERSION}
+          </span>
+        ) : null}
+      </div>
 
       <div className="flex flex-1 items-center justify-center">{actions}</div>
 

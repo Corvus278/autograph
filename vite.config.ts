@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -5,12 +7,113 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import browserslistToEsbuild from 'browserslist-to-esbuild';
 import { defineConfig } from 'vite';
+import { VitePWA } from 'vite-plugin-pwa';
+
+/**
+ * Базовый путь задаёт деплой: GitHub Pages раздаёт проект из `/<репозиторий>/`,
+ * а dev-сервер, тесты и Storybook работают от корня.
+ *
+ * Плагин PWA сам подставляет его в `scope`, `start_url` и адреса service worker,
+ * но не в `src` иконок манифеста — их приходится собирать вручную.
+ */
+const basePath = process.env.BASE_PATH || '/';
+
+/**
+ * Файл крупнее порога выпадает из precache молча, поэтому порог задан явно:
+ * тест полноты precache читает его отсюда и сверяет с размерами файлов `dist`.
+ */
+const MAX_PRECACHED_FILE_SIZE = 2 * 1024 * 1024;
+
+/**
+ * Цвет темы приложения: им красятся системные элементы окна установленного
+ * приложения и фон заставки. Совпадает с `--color-surface` из темы.
+ */
+const THEME_COLOR = '#15171b';
+
+type PackageJson = {
+  /**
+   * Версия пакета, из неё берутся мажор и минор.
+   */
+  version?: string;
+};
+
+/**
+ * Версия приложения для интерфейса: `<мажор>.<минор>.<номер коммита>`.
+ *
+ * Мажор и минор живут в `package.json` и меняются руками, третье число —
+ * счётчик коммитов: он растёт сам и не требует помнить о бампе перед выкладкой.
+ * Считается на сборке, а не в рантайме: раздаче доступен только готовый код,
+ * и вычисленная на месте версия разошлась бы с тем, из чего он собран.
+ *
+ * Без git (сборка из архива, shallow clone без истории) счётчик недоступен, и
+ * версия не показывается вовсе: соврать номером хуже, чем промолчать.
+ */
+const readAppVersion = (): string => {
+  const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
+  const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as PackageJson;
+  const [major, minor] = (version || '').split('.');
+
+  if (!major || !minor) {
+    return '';
+  }
+
+  try {
+    const commitCount = execFileSync('git', ['rev-list', '--count', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim();
+
+    return `${major}.${minor}.${commitCount}`;
+  } catch {
+    /**
+     * Репозиторий недоступен — версия остаётся пустой, и шапка её не рисует.
+     */
+    return '';
+  }
+};
+
+const appVersion = readAppVersion();
+
+/**
+ * Крупные зависимости, которые приходят обычным импортом: приложение
+ * скачивается целиком при первом визите, и откладывать что-либо динамическим
+ * импортом незачем. Каждая уезжает в свой чанк: одним куском приложение
+ * переваливало за порог предупреждения сборки, а браузер разбирал весь код
+ * генератора до первого кадра.
+ *
+ * Ключ — имя чанка, значение — начало пути внутри `node_modules`. Порядок
+ * важен: `react-router` не должен попасть в чанк `react` по совпадению
+ * префикса, поэтому пути проверяются с завершающим слешем.
+ */
+const VENDOR_CHUNKS = [
+  { name: 'react', packages: ['react/', 'react-dom/', 'scheduler/', 'react-router/'] },
+  { name: 'radix', packages: ['@radix-ui/'] },
+  { name: 'opentype', packages: ['opentype.js/'] },
+  { name: 'jszip', packages: ['jszip/'] },
+];
+
+/**
+ * Чанк вендорной зависимости по пути модуля. Свой код приложения и всё
+ * остальное из `node_modules` остаются в общем чанке: дробить их по пакетам
+ * значило бы менять состав сборки при каждой правке зависимостей.
+ */
+const splitVendorChunk = (id: string): string | undefined => {
+  if (!id.includes('node_modules')) {
+    return undefined;
+  }
+
+  return VENDOR_CHUNKS.find(({ packages }) => {
+    return packages.some((packagePath) => {
+      return id.includes(`node_modules/${packagePath}`);
+    });
+  })?.name;
+};
 
 export default defineConfig({
-  // Базовый путь задаёт деплой: GitHub Pages раздаёт проект из `/<репозиторий>/`,
-  // а dev-сервер, тесты и Storybook работают от корня.
-  base: process.env.BASE_PATH || '/',
+  base: basePath,
   publicDir: 'public',
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   plugins: [
     react({
       babel: {
@@ -18,6 +121,105 @@ export default defineConfig({
       },
     }),
     tailwindcss(),
+    VitePWA({
+      /**
+       * Плашка, а не тихая перезагрузка: `autoUpdate` перезагрузил бы вкладку
+       * посреди набора текста, а каретку и прокрутку листа сессия в
+       * `localStorage` не переживает.
+       */
+      registerType: 'prompt',
+
+      /**
+       * Регистрацию ведёт приложение (`src/app/model/serviceWorkerRegistration.ts`)
+       * под `import.meta.env.PROD`: скрипт от плагина зарегистрировал бы service
+       * worker и в статическом Storybook, который собирается тем же
+       * production-билдом Vite.
+       */
+      injectRegister: null,
+
+      /**
+       * Значение по умолчанию, записанное явно: dev-сервер, Storybook и тесты
+       * идут без service worker, иначе правки не доходят до экрана без ручной
+       * очистки кэша.
+       */
+      devOptions: {
+        enabled: false,
+      },
+
+      /**
+       * Иконки манифеста плагин кладёт в precache отдельной пачкой, разыскивая
+       * их в `public` по `src` без базового пути: при `BASE_PATH=/autograph/`
+       * он их не находит, а при пустой базе добавляет вторыми экземплярами
+       * поверх `globPatterns`. `globPatterns` берёт их в обоих случаях, поэтому
+       * список precache остаётся одним и тем же при любой базе.
+       */
+      includeManifestIcons: false,
+      manifest: {
+        name: 'Autograph — генератор рукописного текста',
+        short_name: 'Autograph',
+        description:
+          'Генератор рукописного текста: текст, рукописный шрифт и фотография листа — на выходе страницы в JPEG.',
+        lang: 'ru',
+        display: 'standalone',
+        theme_color: THEME_COLOR,
+        background_color: THEME_COLOR,
+        icons: [
+          {
+            src: `${basePath}icon-192.png`,
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: `${basePath}icon-512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+          },
+          {
+            /**
+             * Маска Android срезает углы, поэтому у этой иконки рисунок ужат в
+             * центральные 80 % холста.
+             */
+            src: `${basePath}icon-maskable-512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
+      workbox: {
+        /**
+         * Дефолт Workbox молча пропустил бы `.jpg`, `.ttf` и `profiles.json` —
+         * то есть ровно то, без чего оффлайн-генератор превращается в пустой
+         * лист. Список повторяет расширения, которые реально лежат в `dist`;
+         * его полноту сторожит тест полноты precache.
+         */
+        globPatterns: ['**/*.{js,css,html,json,svg,png,jpg,ttf,webmanifest}'],
+
+        /**
+         * Сам манифест плагин кладёт в precache отдельной записью, поэтому из
+         * выборки по `globPatterns` он исключается: иначе один и тот же адрес
+         * попадает в список дважды.
+         */
+        globIgnores: ['**/node_modules/**/*', 'manifest.webmanifest'],
+
+        /**
+         * Workbox пишет адреса precache относительно `sw.js`; резолвятся они
+         * верно, но проверить базу в собранном списке было бы нечем. Префикс
+         * делает адреса абсолютными от базы.
+         */
+        modifyURLPrefix: { '': basePath },
+        maximumFileSizeToCacheInBytes: MAX_PRECACHED_FILE_SIZE,
+        cleanupOutdatedCaches: true,
+
+        /**
+         * SPA: маршруты `/`, `/create-font` и неизвестные адреса обслуживает
+         * один документ. Адрес — с базой: `modifyURLPrefix` правит только
+         * список precache, а этот адрес идёт в `sw.js` как записан, и
+         * относительный не совпал бы с ключом precache при чтении глазами.
+         */
+        navigateFallback: `${basePath}index.html`,
+      },
+    }),
   ],
   resolve: {
     alias: {
@@ -41,5 +243,10 @@ export default defineConfig({
     // Единственный источник правды о поддержке — `.browserslistrc`;
     // Vite его сам не читает, поэтому переводим запросы в esbuild-таргеты.
     target: browserslistToEsbuild(),
+    rollupOptions: {
+      output: {
+        manualChunks: splitVendorChunk,
+      },
+    },
   },
 });

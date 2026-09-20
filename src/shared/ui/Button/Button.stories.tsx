@@ -37,3 +37,7 @@ export const Focused: Story = {
 export const Disabled: Story = {
   args: { variant: 'primary', isDisabled: true },
 };
+
+export const Loading: Story = {
+  args: { variant: 'primary', isLoading: true },
+};

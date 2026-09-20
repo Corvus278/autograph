@@ -14,6 +14,13 @@ import { defineConfig } from 'vitest/config';
  */
 const ATTACHMENTS_DIR = 'tests/visual/.attachments';
 
+/**
+ * Тест полноты precache собирает проект трижды и потому идёт отдельным
+ * проектом: в `unit` он попадал бы в гейт коммита (`vitest --changed`) и делал
+ * бы каждый коммит минутным. Запускается командой `npm run test:pwa`.
+ */
+const PWA_PRECACHE_TEST = 'tests/pwa-precache.test.ts';
+
 const alias = {
   '@app': fileURLToPath(new URL('./src/app', import.meta.url)),
   '@pages': fileURLToPath(new URL('./src/pages', import.meta.url)),
@@ -31,10 +38,25 @@ export default defineConfig({
           name: 'unit',
           attachmentsDir: ATTACHMENTS_DIR,
           include: ['tests/**/*.test.{ts,tsx}'],
+          exclude: [PWA_PRECACHE_TEST],
           setupFiles: ['tests/helpers/jsdom-setup.ts'],
           // Окружение по умолчанию — node; компонентные тесты просят jsdom
           // директивой `@vitest-environment jsdom` в шапке файла.
           environment: 'node',
+        },
+      },
+      {
+        test: {
+          name: 'pwa',
+          attachmentsDir: ATTACHMENTS_DIR,
+          include: [PWA_PRECACHE_TEST],
+          environment: 'node',
+          /**
+           * Каждая сборка идёт секундами: таймауты по умолчанию (5 с) не
+           * оставляют ей шанса.
+           */
+          testTimeout: 180_000,
+          hookTimeout: 180_000,
         },
       },
       {
@@ -73,12 +95,16 @@ export default defineConfig({
               toMatchScreenshot: {
                 comparatorName: 'pixelmatch',
                 /**
-                 * Допуск маленький: снимок — целое окно предпросмотра, и
-                 * процент от него скрыл бы сдвиг отступа у отдельного
-                 * контрола. Эталон и прогон идут в одном docker-образе,
-                 * поэтому разброс сглаживания почти нулевой.
+                 * Допуск в пикселях, а не в доле кадра: доля растёт вместе с
+                 * окном, и на снимке целого экрана в неё укладывалась мелкая
+                 * подпись — правка проходила незамеченной. Трёх пикселей
+                 * хватает на разнобой сглаживания, а любое видимое изменение
+                 * крупнее.
+                 *
+                 * Эталон и прогон идут в одном docker-образе, поэтому разброс
+                 * растеризации почти нулевой и запас не нужен.
                  */
-                comparatorOptions: { allowedMismatchedPixelRatio: 0.0002 },
+                comparatorOptions: { allowedMismatchedPixels: 3 },
                 /**
                  * Все эталоны — в одной папке репозитория, а не россыпью
                  * `__screenshots__` рядом со stories: подпапка называется по

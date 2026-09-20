@@ -89,20 +89,27 @@ export const ActionBar: FC<ActionBarProps> = (props) => {
 
       <Button
         variant="secondary"
-        isDisabled={isTextEmpty || isRunning}
+        isDisabled={isTextEmpty}
+        isLoading={isRunning}
         describedBy={describedBy}
         onClick={handleBatchClick}
       >
         Скачать все
       </Button>
 
+      {/**
+       * Ход сохранения показывает индикатор на кнопке, а не сменившаяся
+       * подпись: подпись другой длины меняла бы ширину кнопки, и полоса
+       * действий дёргалась бы на каждое сохранение.
+       */}
       <Button
         variant="primary"
-        isDisabled={isTextEmpty || pageExport.isSaving}
+        isDisabled={isTextEmpty}
+        isLoading={pageExport.isSaving}
         describedBy={describedBy}
         onClick={handleSaveClick}
       >
-        {pageExport.isSaving ? 'Сохраняю…' : 'Сохранить страницу'}
+        Сохранить страницу
       </Button>
     </div>
   );

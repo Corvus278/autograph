@@ -8,12 +8,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:icons": "esbuild scripts/build-app-icons.ts --bundle --platform=node --format=esm --external:playwright --outfile=node_modules/.cache/build-app-icons.mjs --log-level=error && node node_modules/.cache/build-app-icons.mjs",
     "build:paper": "esbuild scripts/build-paper-profiles.ts --bundle --platform=node --format=esm --external:playwright --define:import.meta.env.BASE_URL='\"/\"' --outfile=node_modules/.cache/build-paper-profiles.mjs --log-level=error && node node_modules/.cache/build-paper-profiles.mjs",
     "measure:sheet": "esbuild scripts/measure-sheet.ts --bundle --platform=node --format=esm --external:playwright --define:import.meta.env.BASE_URL='\"/\"' --outfile=node_modules/.cache/measure-sheet.mjs --log-level=error && node node_modules/.cache/measure-sheet.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project=unit",
     "test:watch": "vitest --project=unit",
+    "test:pwa": "vitest run --project=pwa",
     "lint": "concurrently --kill-others-on-fail \"npm run lint:es\" \"npm run typecheck\" \"npm run lint:css\" \"npm run lint:format\" \"npm run lint:fsd\"",
     "lint:es": "eslint . --cache --cache-strategy=content",
     "lint:fix": "eslint . --fix",
@@ -66,6 +68,7 @@
     "typescript": "^5.9.2",
     "typescript-eslint": "8.57.0",
     "vite": "^7.1.5",
+    "vite-plugin-pwa": "^1.3.0",
     "vitest": "^4.1.11",
     "wait-on": "^9.1.0"
   },

@@ -1552,9 +1552,22 @@ describe('ручная правка границ листа', () => {
     await remeasure(user);
 
     expect(screen.getByText('Перемеряем лист…')).toBeDefined();
-    expect(
-      screen.getByRole('button', { name: 'Перемерить' }).hasAttribute('disabled')
-    ).toBe(true);
+
+    const remeasureButton = screen.getByRole('button', { name: 'Перемерить' });
+
+    expect(remeasureButton.getAttribute('aria-busy')).toBe('true');
+
+    /**
+     * Кнопка помечена занятой, а не выключена: она держит фокус, но повторный
+     * перемер с неё не уходит — иначе вторая фотография разбиралась бы поверх
+     * первой. Проверяются оба конца: без первой строки вернувшийся
+     * `isDisabled` прошёл бы тест незамеченным.
+     */
+    expect(remeasureButton.hasAttribute('disabled')).toBe(false);
+
+    await user.click(remeasureButton);
+
+    expect(decodeSheetImage).toHaveBeenCalledTimes(1);
 
     resolveDecode(createSyntheticSheet(TABLE_PHOTO));
 
