@@ -1,9 +1,8 @@
-import { registerSW } from 'virtual:pwa-register';
-
 import type {
   RegisterServiceWorkerOptions,
   UpdateServiceWorker,
-} from './serviceWorkerRegistration.types';
+} from '@widgets/ServiceWorkerBanner';
+import { registerSW } from 'virtual:pwa-register';
 
 /**
  * Период фоновой проверки новой версии. Браузер сверяет `sw.js` только при
@@ -18,6 +17,9 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
  * Единственный в приложении файл с импортом `virtual:pwa-register`: этот
  * модуль создаёт плагин сборки, и ни vitest, ни Storybook его не резолвят.
  * Всё остальное приложение получает регистрацию аргументом.
+ *
+ * Живёт рядом с точкой входа, а не в слайсе плашки: попади он в её публичное
+ * API, виртуальный импорт тянулся бы в каждый тест, который рисует `App`.
  *
  * Отказ регистрации не бросается наружу, а уходит в `onRegisterError`:
  * приложение обязано работать из сети, когда кэш сохранить не удалось.

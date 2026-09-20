@@ -1,10 +1,10 @@
+import { startServiceWorkerRegistration } from '@widgets/ServiceWorkerBanner';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './styles/app.css';
 
 import { registerServiceWorker } from './model/serviceWorkerRegistration';
-import { startServiceWorkerRegistration } from './model/useServiceWorkerState';
 import { App } from './App';
 
 /**

@@ -2,12 +2,12 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { RegisterServiceWorkerOptions } from '@app/model/serviceWorkerRegistration.types';
+import { act, cleanup, renderHook } from '@testing-library/react';
+import type { RegisterServiceWorkerOptions } from '@widgets/ServiceWorkerBanner';
 import {
   startServiceWorkerRegistration,
   useServiceWorkerState,
-} from '@app/model/useServiceWorkerState';
-import { act, cleanup, renderHook } from '@testing-library/react';
+} from '@widgets/ServiceWorkerBanner';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
