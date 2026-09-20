@@ -3,12 +3,13 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { act, cleanup, renderHook } from '@testing-library/react';
-import type { RegisterServiceWorkerOptions } from '@widgets/ServiceWorkerBanner';
 import {
   startServiceWorkerRegistration,
   useServiceWorkerState,
 } from '@widgets/ServiceWorkerBanner';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { createFakeRegistration } from './helpers/fake-service-worker-registration';
 
 /**
  * Виртуальный модуль `virtual:pwa-register` резолвится только сборкой Vite с
@@ -66,27 +67,6 @@ const findSourcesWith = async (needle: string): Promise<string[]> => {
 
     return acc;
   }, Promise.resolve([]));
-};
-
-/**
- * Поддельная регистрация: отдаёт колбэки наружу, чтобы тест проигрывал
- * события service worker сам, и считает вызовы перехода на новую версию.
- */
-const createFakeRegistration = () => {
-  const updateServiceWorker = vi.fn(async () => {});
-  const register = vi.fn((_options: RegisterServiceWorkerOptions) => {
-    return updateServiceWorker;
-  });
-
-  /**
-   * Колбэки последней регистрации: ими тест проигрывает события service
-   * worker.
-   */
-  const getOptions = (): RegisterServiceWorkerOptions | undefined => {
-    return register.mock.calls.at(-1)?.[0];
-  };
-
-  return { getOptions, register, updateServiceWorker };
 };
 
 afterEach(() => {
@@ -185,11 +165,21 @@ describe('состояние service worker', () => {
     expect(result.current).toMatchObject({ hasUpdate: false, isOfflineReady: false });
   });
 
-  it('молчит, когда регистрация не удалась', () => {
+  it('сбрасывает поднятые флаги, когда регистрация не удалась', () => {
     const { getOptions, register } = createFakeRegistration();
     const { result } = renderHook(() => {
       return useServiceWorkerState(register);
     });
+
+    /**
+     * Флаг поднимается до ошибки не для красоты: на нулевом состоянии
+     * проверка совпала бы и с обработчиком, который не делает ничего.
+     */
+    act(() => {
+      getOptions()?.onNeedRefresh();
+    });
+
+    expect(result.current.hasUpdate).toBe(true);
 
     act(() => {
       getOptions()?.onRegisterError(new Error('Хранилище недоступно'));

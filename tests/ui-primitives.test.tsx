@@ -154,7 +154,9 @@ describe('Button в состоянии загрузки', () => {
       </Button>
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Обновить' }));
 
     expect(handleClick).not.toHaveBeenCalled();
   });
@@ -184,13 +186,15 @@ describe('Button в состоянии загрузки', () => {
     );
 
     expect(screen.getByText('Обновить')).toBe(label);
-    expect(label.className).toContain('opacity-0');
 
     /**
-     * Подпись гасится прозрачностью, а не `visibility`: скрытая подпись ушла
-     * бы из дерева доступности, и читалка озвучила бы кнопку безымянной.
+     * Подпись гасится прозрачностью, а не снимается и не прячется: кнопка
+     * держит прежнюю ширину, а имя остаётся в дереве доступности. Полноту
+     * этого утверждения держит скриншотный слой — в jsdom стилей Tailwind нет,
+     * и перечислять здесь запрещённые классы бессмысленно: любой невключённый
+     * прошёл бы насквозь.
      */
-    expect(label.className).not.toContain('invisible');
+    expect(label.className).toContain('opacity-0');
     expect(screen.getByRole('button', { name: 'Обновить' })).toBe(label.parentElement);
   });
 

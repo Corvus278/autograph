@@ -1560,8 +1560,11 @@ describe('ручная правка границ листа', () => {
     /**
      * Кнопка помечена занятой, а не выключена: она держит фокус, но повторный
      * перемер с неё не уходит — иначе вторая фотография разбиралась бы поверх
-     * первой.
+     * первой. Проверяются оба конца: без первой строки вернувшийся
+     * `isDisabled` прошёл бы тест незамеченным.
      */
+    expect(remeasureButton.hasAttribute('disabled')).toBe(false);
+
     await user.click(remeasureButton);
 
     expect(decodeSheetImage).toHaveBeenCalledTimes(1);

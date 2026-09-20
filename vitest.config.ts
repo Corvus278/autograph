@@ -6,8 +6,6 @@ import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 
-import { STORYBOOK_VERSION_DEFINE } from './.storybook/appVersion';
-
 /**
  * Снимки упавших скриншотных тестов (`actual` и `diff`) — рядом с эталонами, а
  * не в корне репозитория: каталог по умолчанию (`.vitest-attachments`) лежит
@@ -31,11 +29,6 @@ const alias = {
 };
 
 export default defineConfig({
-  /**
-   * Версия для прогонов stories: проекты vitest собирают свои конфиги, и
-   * `viteFinal` из `.storybook/main.ts` до них не доходит.
-   */
-  define: STORYBOOK_VERSION_DEFINE,
   test: {
     projects: [
       {

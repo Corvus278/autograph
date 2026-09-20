@@ -2,11 +2,16 @@
  * @vitest-environment jsdom
  */
 import { App } from '@app/App';
+import {
+  DEFAULT_GENERATOR_STATE,
+  useGeneratorStore,
+} from '@pages/Generator/model/useGeneratorStore';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { RegisterServiceWorkerOptions } from '@widgets/ServiceWorkerBanner';
 import { startServiceWorkerRegistration } from '@widgets/ServiceWorkerBanner';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createFakeRegistration } from './helpers/fake-service-worker-registration';
 
 /**
  * Плашка проверяется на живом `App`, а не в одиночку: компонент, который никто
@@ -32,23 +37,6 @@ const UPDATE_MESSAGE = 'Вышла новая версия приложения'
 const OFFLINE_READY_MESSAGE = 'Приложение готово к работе без сети';
 
 /**
- * Поддельная регистрация: отдаёт колбэки наружу, чтобы тест проигрывал события
- * service worker сам, и считает переходы на новую версию.
- */
-const createFakeRegistration = () => {
-  const updateServiceWorker = vi.fn(async () => {});
-  const register = vi.fn((_options: RegisterServiceWorkerOptions) => {
-    return updateServiceWorker;
-  });
-
-  const getOptions = (): RegisterServiceWorkerOptions | undefined => {
-    return register.mock.calls.at(-1)?.[0];
-  };
-
-  return { getOptions, register, updateServiceWorker };
-};
-
-/**
  * Монтирует приложение на экране генератора с уже начатой поддельной
  * регистрацией. Адрес задаётся окну: `BrowserRouter` читает его при
  * монтировании.
@@ -62,6 +50,16 @@ const renderAppWithRegistration = () => {
 
   return registration;
 };
+
+/**
+ * Плашка проверяется на живом `App`, а с ним монтируется и экран генератора со
+ * своим стором и сессией в `localStorage`: оба живут вне React и без сброса
+ * переехали бы из теста в тест.
+ */
+beforeEach(() => {
+  useGeneratorStore.setState(DEFAULT_GENERATOR_STATE);
+  globalThis.localStorage?.clear();
+});
 
 afterEach(() => {
   cleanup();

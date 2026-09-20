@@ -90,7 +90,13 @@ export const ServiceWorkerBanner: FC = () => {
               </Button>
             )}
 
-            <Button variant="ghost" isDisabled={isUpdating} onClick={handleDismissClick}>
+            {/**
+             * Кнопка закрытия не гаснет на время перехода: переход может и не
+             * состояться — новая версия не активировалась, вкладка ушла в
+             * оффлайн, — а `isUpdating` снимать некому, и погашенная кнопка
+             * оставила бы пользователя с плашкой, которую нечем закрыть.
+             */}
+            <Button variant="ghost" onClick={handleDismissClick}>
               {hasUpdate ? 'Позже' : 'Понятно'}
             </Button>
           </div>

@@ -25,6 +25,19 @@ const basePath = process.env.BASE_PATH || '/';
 const MAX_PRECACHED_FILE_SIZE = 2 * 1024 * 1024;
 
 /**
+ * Цвет темы приложения: им красятся системные элементы окна установленного
+ * приложения и фон заставки. Совпадает с `--color-surface` из темы.
+ */
+const THEME_COLOR = '#15171b';
+
+type PackageJson = {
+  /**
+   * Версия пакета, из неё берутся мажор и минор.
+   */
+  version?: string;
+};
+
+/**
  * Версия приложения для интерфейса: `<мажор>.<минор>.<номер коммита>`.
  *
  * Мажор и минор живут в `package.json` и меняются руками, третье число —
@@ -37,12 +50,7 @@ const MAX_PRECACHED_FILE_SIZE = 2 * 1024 * 1024;
  */
 const readAppVersion = (): string => {
   const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
-  const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
-    /**
-     * Версия пакета, из неё берутся мажор и минор.
-     */
-    version?: string;
-  };
+  const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as PackageJson;
   const [major, minor] = (version || '').split('.');
 
   if (!major || !minor) {
@@ -153,8 +161,8 @@ export default defineConfig({
           'Генератор рукописного текста: текст, рукописный шрифт и фотография листа — на выходе страницы в JPEG.',
         lang: 'ru',
         display: 'standalone',
-        theme_color: '#15171b',
-        background_color: '#15171b',
+        theme_color: THEME_COLOR,
+        background_color: THEME_COLOR,
         icons: [
           {
             src: `${basePath}icon-192.png`,
