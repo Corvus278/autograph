@@ -1,5 +1,3 @@
-import JSZip from 'jszip';
-
 import type { BatchPacker, PageFileNameParams, ZipPackerParams } from './batch.types';
 
 /**
@@ -64,8 +62,15 @@ export const buildPageFileName = ({
  * Упаковщик пачки в zip. Страница кладётся в архив как есть, без промежуточной
  * копии её содержимого, и архив отдаётся сразу блобом: лишних копий пачки в
  * памяти не появляется.
+ *
+ * Библиотека архива подгружается здесь, а не импортом модуля: пачку выгружают
+ * заметно реже, чем сохраняют одну страницу, и в основном бандле она занимала
+ * бы место у всех.
  */
-export const createZipPacker = ({ totalPages }: ZipPackerParams): BatchPacker => {
+export const createZipPacker = async ({
+  totalPages,
+}: ZipPackerParams): Promise<BatchPacker> => {
+  const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
 
   return {

@@ -32,7 +32,7 @@ const packPages = async (
   totalPages: number,
   mimeType = PAGE_MIME_TYPE
 ): Promise<Blob> => {
-  const packer = createZipPacker({ totalPages });
+  const packer = await createZipPacker({ totalPages });
 
   for (let pageIndex = 0; pageIndex < totalPages; pageIndex += 1) {
     await packer.addPage(pageIndex, buildPage(pageIndex, mimeType));
@@ -49,7 +49,7 @@ const packSparsePages = async (
   totalPages: number,
   pageIndexes: number[]
 ): Promise<Blob> => {
-  const packer = createZipPacker({ totalPages });
+  const packer = await createZipPacker({ totalPages });
 
   for (const pageIndex of pageIndexes) {
     await packer.addPage(pageIndex, buildPage(pageIndex));

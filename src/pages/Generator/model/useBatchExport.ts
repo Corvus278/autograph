@@ -103,7 +103,7 @@ export const useBatchExport = (
         renderPage: (pageIndex, signal) => {
           return renderPage(plan.buildTask(pageIndex), signal);
         },
-        packer: createPacker(plan.pageCount),
+        packer: await createPacker(plan.pageCount),
         onProgress: (next) => {
           setProgress(next);
         },

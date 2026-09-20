@@ -22,6 +22,39 @@ const basePath = process.env.BASE_PATH || '/';
  */
 const MAX_PRECACHED_FILE_SIZE = 2 * 1024 * 1024;
 
+/**
+ * Крупные зависимости, которые нужны экрану сразу и потому не откладываются
+ * динамическим импортом. Каждая уезжает в свой чанк: одним куском приложение
+ * переваливало за порог предупреждения сборки, а браузер разбирал весь код
+ * генератора до первого кадра.
+ *
+ * Ключ — имя чанка, значение — начало пути внутри `node_modules`. Порядок
+ * важен: `react-router` не должен попасть в чанк `react` по совпадению
+ * префикса, поэтому пути проверяются с завершающим слешем.
+ */
+const VENDOR_CHUNKS = [
+  { name: 'react', packages: ['react/', 'react-dom/', 'scheduler/', 'react-router/'] },
+  { name: 'radix', packages: ['@radix-ui/'] },
+  { name: 'opentype', packages: ['opentype.js/'] },
+];
+
+/**
+ * Чанк вендорной зависимости по пути модуля. Свой код приложения и всё
+ * остальное из `node_modules` остаются в общем чанке: дробить их по пакетам
+ * значило бы менять состав сборки при каждой правке зависимостей.
+ */
+const splitVendorChunk = (id: string): string | undefined => {
+  if (!id.includes('node_modules')) {
+    return undefined;
+  }
+
+  return VENDOR_CHUNKS.find(({ packages }) => {
+    return packages.some((packagePath) => {
+      return id.includes(`node_modules/${packagePath}`);
+    });
+  })?.name;
+};
+
 export default defineConfig({
   base: basePath,
   publicDir: 'public',
@@ -121,5 +154,10 @@ export default defineConfig({
     // Единственный источник правды о поддержке — `.browserslistrc`;
     // Vite его сам не читает, поэтому переводим запросы в esbuild-таргеты.
     target: browserslistToEsbuild(),
+    rollupOptions: {
+      output: {
+        manualChunks: splitVendorChunk,
+      },
+    },
   },
 });
