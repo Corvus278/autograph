@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project=unit",
     "test:watch": "vitest --project=unit",
+    "test:pwa": "vitest run --project=pwa",
     "lint": "concurrently --kill-others-on-fail \"npm run lint:es\" \"npm run typecheck\" \"npm run lint:css\" \"npm run lint:format\" \"npm run lint:fsd\"",
     "lint:es": "eslint . --cache --cache-strategy=content",
     "lint:fix": "eslint . --fix",
