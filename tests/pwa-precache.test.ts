@@ -49,6 +49,15 @@ const EXPECTED_ICONS = [
 ];
 
 /**
+ * Вызов очистки устаревших кэшей в собранном `sw.js`. Проверяется вызов, а не
+ * имя опции: `cleanupOutdatedCaches` в конфиге — настройка Workbox, а удаляет
+ * кэши прошлых версий именно этот вызов в service worker. Без имени модуля
+ * перед ним: минификатор переименовывает переменную пространства имён
+ * workbox, а имя самого метода оставляет.
+ */
+const CLEANUP_OUTDATED_CACHES_CALL = /\bcleanupOutdatedCaches\(\)/;
+
+/**
  * Сборка проекта идёт секундами, а не миллисекундами, и таких сборок три.
  */
 const BUILD_TIMEOUT = 180_000;
@@ -174,6 +183,13 @@ describe.each(BASES)('сборка с базой %s', (base) => {
     const source = await readFile(path.join(outDir, 'sw.js'), 'utf8');
 
     expect(source).toContain(`createHandlerBoundToURL("${base}index.html")`);
+  });
+
+  it('чистит кэш предыдущих версий', async () => {
+    const { outDir } = requireBuild(base);
+    const source = await readFile(path.join(outDir, 'sw.js'), 'utf8');
+
+    expect(source).toMatch(CLEANUP_OUTDATED_CACHES_CALL);
   });
 
   it('описывает в манифесте три иконки от базового пути', async () => {
