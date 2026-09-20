@@ -6,11 +6,11 @@
 
 ## 2. Сборка: манифест и service worker
 
-- [ ] 2.1 Поставить `vite-plugin-pwa` в devDependencies; проверка — `npm ci` проходит, `npm run build` не падает
-- [ ] 2.2 Подключить плагин в `vite.config.ts` с `registerType: 'prompt'`, манифестом (имя, короткое имя, описание, `display: 'standalone'`, цвета темы и фона, три иконки из группы 1) и `devOptions` выключенными; проверка — `npm run build` кладёт в `dist` `manifest.webmanifest` и `sw.js`
-- [ ] 2.3 Задать `workbox.globPatterns` со всеми расширениями `dist` (`js,css,html,json,svg,png,jpg,ttf,webmanifest`), `cleanupOutdatedCaches: true`, `navigateFallback: 'index.html'`; проверка — precache-манифест в `dist/sw.js` содержит все восемь листов, их текстуры, все `.ttf` и `profiles.json`
-- [ ] 2.4 Добавить в `index.html` мета-теги темы (`theme-color`); проверка — `npm run build`, в `dist/index.html` есть ссылка на манифест (её вставляет плагин) и мета-тег темы
-- [ ] 2.5 Проверить сборку с базовым путём: `BASE_PATH=/autograph/ npm run build` — `scope`, `start_url`, адреса precache и `navigateFallback` начинаются с `/autograph/`; проверка — прогон `npm run preview` по этому пути открывает приложение
+- [x] 2.1 Поставить `vite-plugin-pwa` в devDependencies; проверка — `npm ci` проходит, `npm run build` не падает
+- [x] 2.2 Подключить плагин в `vite.config.ts` с `registerType: 'prompt'`, манифестом (имя, короткое имя, описание, `display: 'standalone'`, цвета темы и фона, три иконки из группы 1) и `devOptions` выключенными; проверка — `npm run build` кладёт в `dist` `manifest.webmanifest` и `sw.js`
+- [x] 2.3 Задать `workbox.globPatterns` со всеми расширениями `dist` (`js,css,html,json,svg,png,jpg,ttf,webmanifest`), `cleanupOutdatedCaches: true`, `navigateFallback: 'index.html'`; проверка — precache-манифест в `dist/sw.js` содержит все восемь листов, их текстуры, все `.ttf` и `profiles.json`
+- [x] 2.4 Добавить в `index.html` мета-теги темы (`theme-color`); проверка — `npm run build`, в `dist/index.html` есть ссылка на манифест (её вставляет плагин) и мета-тег темы
+- [x] 2.5 Проверить сборку с базовым путём: `BASE_PATH=/autograph/ npm run build` — `scope`, `start_url`, адреса precache и `navigateFallback` начинаются с `/autograph/`; проверка — прогон `npm run preview` по этому пути открывает приложение
 
 ## 3. Проверка полноты precache
 

@@ -31,3 +31,36 @@ G1 закрыта, аудит ok с первого круга.
 
 Долг: scripts/build-app-icons.ts:156 — пустой dataURL молча пишет пустой PNG вместо падения;
 tests/app-icons.test.ts:216 — у icon-192.png не проверен прозрачный угол.
+
+### Воркфлоу задачи
+
+Прогон начинался прямо в master — нарушение раздела «Воркфлоу задачи» в CLAUDE.md. Исправлено:
+issue #5 заведён, ветка `feature/5-offline-pwa` создана на коммите G1 (baf2f99), master возвращён
+на ee2314d (= origin/master). Коммиты групп идут в ветку.
+
+В финал добавлены шаги воркфлоу: push ветки, `gh pr create --base master` с `Closes #5` в теле,
+аудит `review-staged` в режиме «ветка против master», inline-комменты в PR, резолв тредов,
+`gh pr merge --squash --delete-branch`.
+
+### G2 · Плагин PWA, манифест, service worker
+
+G2 закрыта, аудит ok на втором круге (круг 1 — critical по базовому пути).
+
+Решения: `injectRegister: null` — регистрацию ведёт приложение под `import.meta.env.PROD`, иначе скрипт
+плагина зарегистрировал бы SW и в статическом Storybook. `includeManifestIcons: false` — плагин ищет иконки
+без базы и при `BASE_PATH` их не находит, а `globPatterns` берёт их всё равно. `theme_color`/`background_color`
+`#15171b` = `--color-surface` в не-oklch форме; добавлен `<meta name="color-scheme" content="dark">`.
+
+Критичное круга 1: адреса precache и `navigateFallback` шли относительными, без префикса базы. Развилка была
+«править код» против «править K3 и D6». Решение координатора — править код: задача 2.5 в tasks.md требует
+префикс буквально. Добавлены `workbox.modifyURLPrefix: {'': basePath}` и `navigateFallback: ${basePath}index.html`
+(`modifyURLPrefix` до него не достаёт). Дубль `manifest.webmanifest` в precache снят через `globIgnores`:
+46 записей на 46 файлов при обеих базах.
+
+Контракт для G3 (остаточное отступление): `manifest.webmanifest` — единственный относительный адрес precache,
+плагин кладёт его в `additionalManifestEntries`, а те применяются после `modifyURLPrefix`. Резолв от `sw.js`
+верный. Тест полноты обязан сверять адреса **после резолва от `<base>sw.js`**, а не по префиксу, иначе упадёт
+на этой одной записи. K3 читать с этой оговоркой; design D6 («плагин доклеивает базу сам») поведению
+vite-plugin-pwa 1.3.0 не соответствует — кандидат в правки артефактов спеки.
+
+Долг: «Старые версии кэша не накапливаются» проверяется только ручной задачей 6.3, автопроверки у G2 нет.
