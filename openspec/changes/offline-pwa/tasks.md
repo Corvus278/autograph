@@ -19,10 +19,10 @@
 
 ## 4. Регистрация service worker и состояние
 
-- [ ] 4.1 Добавить `vite-plugin-pwa/client` в `types` у `tsconfig.json`; проверка — `npm run typecheck` видит модуль `virtual:pwa-register`
-- [ ] 4.2 Написать `src/app/model/serviceWorkerRegistration.ts` — единственный файл с импортом `virtual:pwa-register`: вызывает `registerSW` с `immediate: true`, `updateViaCache: 'none'`, пробрасывает колбэки наружу, дёргает `registration.update()` по часовому таймеру и на возврат вкладки в фокус; проверка — `npm run lint` чистый, файл не импортируется никем, кроме хука и точки входа
-- [ ] 4.3 Написать `src/app/model/useServiceWorkerState.ts` — хук с состоянием `isOfflineReady` / `hasUpdate` и действиями «обновить» и «закрыть сообщение»; функция регистрации приходит аргументом с дефолтом из 4.2; проверка — юнит-тест `tests/service-worker-state.test.ts` на все переходы, включая отказ регистрации
-- [ ] 4.4 Вызвать регистрацию из `src/app/main.tsx` под `import.meta.env.PROD`; проверка — `npm run dev` и `npm run storybook` не регистрируют service worker (в DevTools → Application пусто)
+- [x] 4.1 Добавить `vite-plugin-pwa/client` в `types` у `tsconfig.json`; проверка — `npm run typecheck` видит модуль `virtual:pwa-register`
+- [x] 4.2 Написать `src/app/model/serviceWorkerRegistration.ts` — единственный файл с импортом `virtual:pwa-register`: вызывает `registerSW` с `immediate: true`, `updateViaCache: 'none'`, пробрасывает колбэки наружу, дёргает `registration.update()` по часовому таймеру и на возврат вкладки в фокус; проверка — `npm run lint` чистый, файл не импортируется никем, кроме хука и точки входа
+- [x] 4.3 Написать `src/app/model/useServiceWorkerState.ts` — хук с состоянием `isOfflineReady` / `hasUpdate` и действиями «обновить» и «закрыть сообщение»; функция регистрации приходит аргументом с дефолтом из 4.2; проверка — юнит-тест `tests/service-worker-state.test.ts` на все переходы, включая отказ регистрации
+- [x] 4.4 Вызвать регистрацию из `src/app/main.tsx` под `import.meta.env.PROD`; проверка — `npm run dev` и `npm run storybook` не регистрируют service worker (в DevTools → Application пусто)
 
 ## 5. Плашка обновления и сообщение о готовности
 
