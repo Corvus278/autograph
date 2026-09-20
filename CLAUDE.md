@@ -58,13 +58,16 @@ npm run storybook          # Storybook на http://localhost:6006
 index.html vite.config.ts vitest.config.ts tsconfig.json steiger.config.ts package.json
 eslint.config.mjs stylelint.config.mjs .prettierrc .editorconfig    # линтеры
 .lintstagedrc.mjs .husky/pre-commit                                  # гейт коммита
-.storybook/                                                          # main, preview, visual-setup
+.storybook/                                                          # main, preview, visual-setup, appVersion
+                                                                     # (версия витрины — фиксированная)
 scripts/build-paper-profiles.ts measure-sheet.ts sheet-photo-report.ts  # профили пресет-пака, замер одного листа
 scripts/build-app-icons.ts                                           # иконки приложения из favicon.svg
 src/
   app/            main.tsx (точка входа, здесь же старт регистрации service worker под PROD),
                   App.tsx (маршруты и плашка service worker), styles/app.css (Tailwind-тема и @font-face),
-                  model/serviceWorkerRegistration.ts (единственный файл с `virtual:pwa-register`)
+                  model/serviceWorkerRegistration.ts (единственный файл с `virtual:pwa-register`),
+                  model/scheduleUpdateChecks.ts (проверка обновления по часовому таймеру,
+                  на `visibilitychange` и на `focus`)
   widgets/
     AppHeader/    шапка всех экранов со слотом действий страницы (у генератора — undo/redo)
     ServiceWorkerBanner/  плашка обновления и сообщения о готовности к работе без сети (ui/) и её
@@ -94,8 +97,10 @@ src/
   shared/
     ui/           примитивы на Radix: ValueSlider, SegmentedControl, TileRadio, Swatch, Dialog, Disclosure,
                   Toolbar, Checkbox, RadioGroup, Select, Accordion, Label, Tooltip; без Radix — Button
-                  (вид — `buttonVariants`), IconButton, FileInput (скрытое поле + кнопка с именем файла),
-                  ColorInput, TextArea
+                  (вид — `buttonVariants`, индикатор ожидания — `isLoading`), IconButton, FileInput
+                  (скрытое поле + кнопка с именем файла), ColorInput, TextArea, Spinner (кольцо
+                  ожидания внутри чужих контролов)
+    config/       appVersion — APP_VERSION, версия сборки для шапки
     lib/styles/   cx, twMerge
     lib/random/   mulberry32, randomInt, pickRandomItems
     lib/files/    чтение файла как data URL, скачивание data URL и blob
@@ -403,8 +408,9 @@ precache не добавляет (`includeManifestIcons: false`): он ищет 
 
 `registerType: 'prompt'`, а не `autoUpdate`: тихая перезагрузка пришлась бы посреди набора текста, а каретку и
 прокрутку листа сессия в `localStorage` не переживает. Новая версия проверяется `registration.update()` по часовому
-таймеру и на `visibilitychange` при возврате во вкладку — генератор живёт одной вкладкой часами, и без своей проверки
-предложение обновиться дошло бы только после перезагрузки. `updateViaCache: 'none'` при этом **не задаётся**: у
+таймеру, на `visibilitychange` при возврате во вкладку и на `focus` окна — генератор живёт одной вкладкой часами, и без
+своей проверки предложение обновиться дошло бы только после перезагрузки. Слушателя два, потому что у установленного
+приложения вкладок нет: там о возврате сообщает только `focus`. `updateViaCache: 'none'` при этом **не задаётся**: у
 `registerSW` такого параметра нет, и выставить его можно лишь своей регистрацией в обход плагина. Роль «HTTP-кэш не
 отдаёт старый `sw.js`» закрыта этими же двумя проверками.
 
@@ -472,6 +478,9 @@ steiger.config.ts        # границы слоёв FSD
 - В stylelint выключены `property-no-vendor-prefix` / `value-no-vendor-prefix`, `import-notation` и разрешены
   at-правила Tailwind (`@theme`, `@apply`, `@layer`, …): Tailwind 4 объявляет тему прямо в CSS, а
   `@import 'tailwindcss'` плагин ищет по строковой форме.
+- `allowImportingTsExtensions` включён в `tsconfig.json`: Storybook предупреждает о локальных импортах без расширения
+  в `.storybook/main.ts` и просит писать их с `.ts`, а без флага такой импорт не пропускает `tsc`. Проверка типов от
+  этого не слабеет — сборка и так идёт через `noEmit`, а расширение стоит ровно в одном импорте.
 
 `.claude/hooks/lint.sh` — PostToolUse-хук: после каждой правки гоняет по файлу eslint (+`tsc --noEmit` для `.ts`/
 `.tsx`) или stylelint + `prettier --check` для `.css`. Ошибки в правленом файле блокируют правку.
