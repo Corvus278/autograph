@@ -179,7 +179,7 @@ export const SheetDialogForm: FC<SheetDialogFormProps> = (props) => {
 
         <Button
           variant="secondary"
-          isDisabled={isRemeasuring}
+          isLoading={isRemeasuring}
           onClick={handleRemeasureClick}
         >
           Перемерить

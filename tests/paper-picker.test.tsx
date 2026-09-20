@@ -97,6 +97,42 @@ describe('PaperPicker', () => {
     ).toBe('true');
   });
 
+  it('показывает разбор фотографии на плитке, не меняя её подписи', async () => {
+    const user = userEvent.setup();
+    let finishDecode: (sheet: ReturnType<typeof createSyntheticSheet>) => void = () => {};
+
+    decodeSheetImage.mockImplementation(() => {
+      return new Promise((resolve) => {
+        finishDecode = resolve;
+      });
+    });
+
+    render(<PaperPicker onSheetSettingsOpen={vi.fn()} />);
+
+    await user.upload(screen.getByLabelText('Своя фотография листа'), buildPhotoFile());
+
+    /**
+     * Подпись плитки не меняется: слово другой длины переносилось бы на вторую
+     * строку и двигало бы соседние плитки. Разбор виден индикатором, а для
+     * читалки — пометкой занятости.
+     */
+    const addTile = screen.getByRole('button', { name: 'Своё фото' });
+
+    await waitFor(() => {
+      expect(addTile.getAttribute('aria-busy')).toBe('true');
+    });
+
+    finishDecode(createSyntheticSheet(RULED_PHOTO));
+
+    await waitFor(() => {
+      expect(store().userSheets).toHaveLength(1);
+    });
+
+    expect(
+      screen.getByRole('button', { name: 'Своё фото' }).getAttribute('aria-busy')
+    ).toBe('false');
+  });
+
   it('добавленный лист — плитка с выбором и кнопкой настройки', async () => {
     const user = userEvent.setup();
     const handleSettingsOpen = vi.fn();

@@ -1,5 +1,6 @@
 import { cx } from '@shared/lib/styles';
 import { IconButton } from '@shared/ui/IconButton';
+import { Spinner } from '@shared/ui/Spinner';
 import type { TileRadioOption } from '@shared/ui/TileRadio';
 import { TileRadio } from '@shared/ui/TileRadio';
 import type { ChangeEvent, FC } from 'react';
@@ -143,9 +144,15 @@ export const PaperPicker: FC<PaperPickerProps> = (props) => {
           onChange={handleFamilyChange}
         />
 
+        {/**
+         * Разбор фотографии показывает индикатор на месте плюса, а подпись
+         * плитки не меняется: подпись другой длины переносилась бы на вторую
+         * строку и двигала бы соседние плитки.
+         */}
         <button
           type="button"
           disabled={sheetImport.isBusy}
+          aria-busy={sheetImport.isBusy}
           className={TILE_CLASS_NAME}
           onClick={handleAddClick}
         >
@@ -153,10 +160,10 @@ export const PaperPicker: FC<PaperPickerProps> = (props) => {
             aria-hidden="true"
             className="flex aspect-square w-full items-center justify-center rounded-sm bg-canvas text-lg"
           >
-            +
+            {sheetImport.isBusy ? <Spinner /> : '+'}
           </span>
 
-          <span>{sheetImport.isBusy ? 'Разбираем…' : 'Своё фото'}</span>
+          <span>Своё фото</span>
         </button>
 
         <input

@@ -244,6 +244,40 @@ describe('сохранение страницы', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('показывает ход сохранения на кнопке и не запускает его дважды', async () => {
+    let finishRender: (page: Blob) => void = () => {};
+
+    vi.mocked(renderPageInWorker).mockImplementation(() => {
+      return new Promise<Blob>((resolve) => {
+        finishRender = resolve;
+      });
+    });
+
+    render(<ActionBar plan={PLAN} />);
+
+    await clickButton('Сохранить страницу');
+
+    const saveButton = getButton('Сохранить страницу');
+
+    expect(saveButton.getAttribute('aria-busy')).toBe('true');
+
+    /**
+     * Подпись на месте: ход сохранения показывает индикатор, а сменившаяся
+     * подпись меняла бы ширину кнопки и дёргала полосу действий.
+     */
+    expect(saveButton.textContent).toContain('Сохранить страницу');
+
+    await clickButton('Сохранить страницу');
+
+    expect(renderPageInWorker).toHaveBeenCalledTimes(1);
+
+    finishRender(new Blob(['page'], { type: 'image/jpeg' }));
+
+    await waitFor(() => {
+      expect(getButton('Сохранить страницу').getAttribute('aria-busy')).toBe('false');
+    });
+  });
+
   it('при отказе отрисовки не скачивает файл и показывает сообщение', async () => {
     vi.mocked(renderPageInWorker).mockRejectedValue(new Error('отрисовка не удалась'));
 
@@ -367,6 +401,7 @@ describe('выгрузка пачки', () => {
 
     expect(screen.getByRole('status').textContent).toBe(`Готово 1 из ${PAGE_COUNT}`);
     expect(getButton('Отменить')).toBeDefined();
+    expect(getButton('Скачать все').getAttribute('aria-busy')).toBe('true');
   });
 
   it('скачивает архив и убирает прогресс, когда пачка дошла до конца', async () => {

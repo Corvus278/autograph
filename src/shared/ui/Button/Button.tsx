@@ -1,6 +1,8 @@
 import { cx } from '@shared/lib/styles';
 import type { FC } from 'react';
 
+import { Spinner } from '../Spinner';
+
 import { buttonVariants } from './Button.styles';
 import type { ButtonProps } from './Button.types';
 
@@ -42,30 +44,8 @@ export const Button: FC<ButtonProps> = (props) => {
       <span className={isLoading ? 'opacity-0' : undefined}>{children}</span>
 
       {isLoading && (
-        <span
-          className="absolute inset-0 flex items-center justify-center"
-          aria-hidden="true"
-        >
-          {/**
-           * Индикатор рисуется `currentColor`: цвет он берёт у своего вида
-           * кнопки и не заводит собственной палитры.
-           */}
-          <svg className="size-4 animate-spin" viewBox="0 0 16 16" fill="none">
-            <circle
-              cx="8"
-              cy="8"
-              r="6"
-              stroke="currentColor"
-              strokeOpacity="0.3"
-              strokeWidth="2"
-            />
-            <path
-              d="M14 8a6 6 0 0 0-6-6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
+        <span className="absolute inset-0 flex items-center justify-center">
+          <Spinner />
         </span>
       )}
     </button>
