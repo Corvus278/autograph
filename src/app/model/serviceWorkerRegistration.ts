@@ -4,12 +4,7 @@ import type {
 } from '@widgets/ServiceWorkerBanner';
 import { registerSW } from 'virtual:pwa-register';
 
-/**
- * Период фоновой проверки новой версии. Браузер сверяет `sw.js` только при
- * навигации, а генератор живёт одной вкладкой часами: без своей проверки
- * предложение обновиться дошло бы до пользователя лишь после перезагрузки.
- */
-const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+import { scheduleUpdateChecks } from './scheduleUpdateChecks';
 
 /**
  * Регистрирует service worker и возвращает переход на новую версию.
@@ -44,22 +39,12 @@ export const registerServiceWorker = ({
         return;
       }
 
-      const checkForUpdate = (): void => {
-        void registration.update();
-      };
-
-      globalThis.setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
-
       /**
-       * Возврат к вкладке — самый частый момент, когда версия успела
+       * Возврат к приложению — самый частый момент, когда версия успела
        * смениться: проверка по одному лишь часовому таймеру показала бы
        * предложение обновиться с опозданием до часа.
        */
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          checkForUpdate();
-        }
-      });
+      scheduleUpdateChecks(registration);
     },
   });
 };
