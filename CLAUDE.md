@@ -387,6 +387,82 @@ steiger.config.ts        # границы слоёв FSD
 `.claude/hooks/lint.sh` — PostToolUse-хук: после каждой правки гоняет по файлу eslint (+`tsc --noEmit` для `.ts`/
 `.tsx`) или stylelint + `prettier --check` для `.css`. Ошибки в правленом файле блокируют правку.
 
+## Воркфлоу задачи
+
+Одна задача — один issue, одна ветка, один PR. Репозиторий на GitHub, поэтому CLI — `gh` (`glab` здесь не
+применяется). Номер issue — сквозной идентификатор: он в имени ветки, в теле PR и в коммитах.
+
+1. **Issue.** Задача заводится в репозитории до правок — чтобы у PR был предмет, с которым аудит сверяет результат.
+   Тело описывает наблюдаемое поведение и критерий готовности, а не план правок.
+
+   ```bash
+   gh issue create --title '<кратко, что должно измениться>' --label enhancement --body '<описание и критерий готовности>'
+   ```
+
+   Метки из набора репозитория: `bug`, `enhancement`, `documentation`, `accessibility`.
+2. **Ветка от master.** Только от свежего `master`, не от текущей ветки: иначе в PR приедут чужие коммиты.
+   Имя — `<type>/<номер issue>-<краткое-имя>`, где `type` — `feature`, `fix`, `chore`, `docs`.
+
+   ```bash
+   git switch master && git pull --ff-only
+   git switch -c feature/42-sheet-perspective
+   ```
+3. **Правки и PR.** Правки идут в этой ветке; перед PR — `npm run lint` и `npm test` (гейт коммита их не заменяет:
+   `.husky/pre-commit` гоняет vitest только по изменённым файлам). PR привязывается к issue ключевым словом в теле,
+   иначе issue придётся закрывать руками.
+
+   ```bash
+   git push -u origin HEAD
+   gh pr create --base master --fill --body 'Closes #42
+
+   <что сделано и почему так>'
+   ```
+4. **Аудит.** Скилл `review-staged` в режиме «ветка против master». Находки ложатся **inline-комментами в PR** —
+   привязанными к файлу и строке, а не одним общим комментом: резолвить на повторном аудите можно только тред,
+   заведённый на строке.
+
+   Тело ревью — файл, а не флаги: у `gh api` нет формы для массива объектов.
+
+   ```json
+   {
+     "commit_id": "<sha головы ветки>",
+     "event": "COMMENT",
+     "comments": [
+       {"path": "src/pages/Generator/lib/paper/detectRulingBend.ts", "line": 118, "side": "RIGHT", "body": "<находка и что с ней делать>"}
+     ]
+   }
+   ```
+
+   ```bash
+   gh api --method POST repos/Corvus278/autograph/pulls/<N>/reviews --input /tmp/review.json
+   ```
+
+   Один тред — одна находка. `event: COMMENT`, а не `REQUEST_CHANGES`: автор PR и ревьюер здесь одно лицо, и
+   GitHub не даёт запросить правки у самого себя.
+5. **Правка комментов.** Каждая находка правится отдельно и пушится в ту же ветку. Спорную не правят молча —
+   ответ в треде с обоснованием тоже закрывает находку.
+
+   ```bash
+   gh api --method POST repos/Corvus278/autograph/pulls/<N>/comments/<databaseId первого коммента треда>/replies -f body='<как поправлено или почему нет>'
+   ```
+
+   Ответ идёт на **комментарий**, а не на тред: у REST есть только `databaseId` первого коммента, а резолв (шаг 6)
+   просит `id` треда из GraphQL. Оба берутся одним запросом ниже.
+6. **Повторный аудит и резолв.** Тот же `review-staged` по обновлённой ветке. Резолвится только тред, правка
+   которого подтверждена в коде: «ответил» и «поправил» — разные вещи. Резолв идёт через GraphQL — у REST такой
+   операции нет.
+
+   ```bash
+   # нерезолвнутые треды с путями и строками
+   gh api graphql -f query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100){nodes{id isResolved path line comments(first:1){nodes{databaseId body}}}}}}}' \
+     -F owner=Corvus278 -F repo=autograph -F pr=<N> --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not) | {id, path, line, commentId: .comments.nodes[0].databaseId}'
+
+   gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<id треда>
+   ```
+
+   Находки, всплывшие на повторном аудите заново, — новые треды: шаги 5 и 6 повторяются, пока нерезолвнутых не
+   останется. Мерж — после этого.
+
 ## Правила для агентов
 
 `.claude/rules/*.md`, читать перед правкой соответствующих файлов:
