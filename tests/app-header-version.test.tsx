@@ -37,7 +37,7 @@ describe('версия в шапке', () => {
 
     renderHeader();
 
-    expect(screen.getByTestId('app-version').textContent).toBe('1.0.42');
+    expect(screen.getByTestId('app-version').textContent).toBe('v1.0.42');
   });
 
   /**

@@ -28,7 +28,7 @@ export const AppHeader: FC<AppHeaderProps> = (props) => {
          */}
         {APP_VERSION ? (
           <span data-testid="app-version" className="text-xs text-fg-muted tabular-nums">
-            {APP_VERSION}
+            v{APP_VERSION}
           </span>
         ) : null}
       </div>
