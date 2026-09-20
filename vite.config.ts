@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +23,47 @@ const basePath = process.env.BASE_PATH || '/';
  * тест полноты precache читает его отсюда и сверяет с размерами файлов `dist`.
  */
 const MAX_PRECACHED_FILE_SIZE = 2 * 1024 * 1024;
+
+/**
+ * Версия приложения для интерфейса: `<мажор>.<минор>.<номер коммита>`.
+ *
+ * Мажор и минор живут в `package.json` и меняются руками, третье число —
+ * счётчик коммитов: он растёт сам и не требует помнить о бампе перед выкладкой.
+ * Считается на сборке, а не в рантайме: раздаче доступен только готовый код,
+ * и вычисленная на месте версия разошлась бы с тем, из чего он собран.
+ *
+ * Без git (сборка из архива, shallow clone без истории) счётчик недоступен, и
+ * версия не показывается вовсе: соврать номером хуже, чем промолчать.
+ */
+const readAppVersion = (): string => {
+  const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
+  const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+    /**
+     * Версия пакета, из неё берутся мажор и минор.
+     */
+    version?: string;
+  };
+  const [major, minor] = (version || '').split('.');
+
+  if (!major || !minor) {
+    return '';
+  }
+
+  try {
+    const commitCount = execFileSync('git', ['rev-list', '--count', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim();
+
+    return `${major}.${minor}.${commitCount}`;
+  } catch {
+    /**
+     * Репозиторий недоступен — версия остаётся пустой, и шапка её не рисует.
+     */
+    return '';
+  }
+};
+
+const appVersion = readAppVersion();
 
 /**
  * Крупные зависимости, которые нужны экрану сразу и потому не откладываются
@@ -58,6 +101,9 @@ const splitVendorChunk = (id: string): string | undefined => {
 export default defineConfig({
   base: basePath,
   publicDir: 'public',
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   plugins: [
     react({
       babel: {
