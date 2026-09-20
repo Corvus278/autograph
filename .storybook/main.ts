@@ -1,6 +1,6 @@
 import type { StorybookConfig } from '@storybook/react-vite';
 
-import { STORYBOOK_VERSION_DEFINE } from './appVersion';
+import { STORYBOOK_VERSION_DEFINE } from './appVersion.ts';
 
 const config: StorybookConfig = {
   stories: ['../src/**/*.stories.@(ts|tsx)'],
