@@ -1,6 +1,6 @@
 import { Button } from '@shared/ui/Button';
 import type { FC } from 'react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useServiceWorkerState } from '../../model/useServiceWorkerState';
 
@@ -53,7 +53,15 @@ export const ServiceWorkerBanner: FC = () => {
     };
   }, [dismiss, isOfflineNoticeShown]);
 
+  /**
+   * Переход на новую версию перезагружает страницу, и между нажатием и
+   * перезагрузкой проходит заметное время: без индикатора кнопка выглядела бы
+   * не нажавшейся, и пользователь давил бы её снова.
+   */
+  const [isUpdating, setIsUpdating] = useState(false);
+
   const handleUpdateClick = () => {
+    setIsUpdating(true);
     update();
   };
 
@@ -73,12 +81,16 @@ export const ServiceWorkerBanner: FC = () => {
             </p>
 
             {hasUpdate && (
-              <Button variant="primary" onClick={handleUpdateClick}>
+              <Button
+                variant="primary"
+                isLoading={isUpdating}
+                onClick={handleUpdateClick}
+              >
                 Обновить
               </Button>
             )}
 
-            <Button variant="ghost" onClick={handleDismissClick}>
+            <Button variant="ghost" isDisabled={isUpdating} onClick={handleDismissClick}>
               {hasUpdate ? 'Позже' : 'Понятно'}
             </Button>
           </div>

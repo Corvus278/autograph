@@ -144,6 +144,66 @@ describe('ColorInput', () => {
   });
 });
 
+describe('Button в состоянии загрузки', () => {
+  it('не пропускает повторное нажатие', async () => {
+    const handleClick = vi.fn();
+
+    render(
+      <Button isLoading onClick={handleClick}>
+        Обновить
+      </Button>
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+
+    expect(handleClick).not.toHaveBeenCalled();
+  });
+
+  it('помечает кнопку занятой для читалки', () => {
+    render(
+      <Button isLoading onClick={vi.fn()}>
+        Обновить
+      </Button>
+    );
+
+    const button = screen.getByRole('button', { name: 'Обновить' });
+
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('держит подпись в разметке, чтобы кнопка не меняла ширину', () => {
+    const { rerender } = render(<Button onClick={vi.fn()}>Обновить</Button>);
+
+    const label = screen.getByText('Обновить');
+
+    rerender(
+      <Button isLoading onClick={vi.fn()}>
+        Обновить
+      </Button>
+    );
+
+    expect(screen.getByText('Обновить')).toBe(label);
+    expect(label.className).toContain('opacity-0');
+
+    /**
+     * Подпись гасится прозрачностью, а не `visibility`: скрытая подпись ушла
+     * бы из дерева доступности, и читалка озвучила бы кнопку безымянной.
+     */
+    expect(label.className).not.toContain('invisible');
+    expect(screen.getByRole('button', { name: 'Обновить' })).toBe(label.parentElement);
+  });
+
+  it('оставляет подпись видимой, пока загрузки нет', () => {
+    render(<Button onClick={vi.fn()}>Обновить</Button>);
+
+    const button = screen.getByRole('button', { name: 'Обновить' });
+
+    expect(screen.getByText('Обновить').className).not.toContain('opacity-0');
+    expect(button.getAttribute('aria-busy')).toBe('false');
+  });
+});
+
 describe('внешний className', () => {
   it('перекрывает дефолтные классы компонента', () => {
     render(

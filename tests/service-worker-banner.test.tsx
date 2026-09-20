@@ -93,6 +93,28 @@ describe('плашка service worker', () => {
     expect(updateServiceWorker).toHaveBeenCalledTimes(1);
   });
 
+  it('показывает ход перехода и не даёт нажать кнопку второй раз', async () => {
+    const { getOptions, updateServiceWorker } = renderAppWithRegistration();
+
+    act(() => {
+      getOptions()?.onNeedRefresh();
+    });
+
+    const updateButton = screen.getByRole('button', { name: 'Обновить' });
+
+    await userEvent.click(updateButton);
+
+    expect(updateButton.getAttribute('aria-busy')).toBe('true');
+
+    await userEvent.click(updateButton);
+
+    /**
+     * Переход перезагружает страницу, и до перезагрузки кнопка остаётся на
+     * экране: без защиты второе нажатие ушло бы в service worker повторно.
+     */
+    expect(updateServiceWorker).toHaveBeenCalledTimes(1);
+  });
+
   it('молчит, пока новой версии нет', () => {
     renderAppWithRegistration();
 
