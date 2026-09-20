@@ -90,7 +90,7 @@ src/
     lib/files/    чтение файла как data URL, скачивание data URL и blob
     lib/url/      withBasePath — путь к файлу из public с базовым путём сборки
   types/          описания вендорных модулей без типов
-public/           копируется в dist/ как есть: fonts/*.ttf, paper/ (пресет-пак и профили), сцены, favicon
+public/           копируется в dist/ как есть: fonts/*.ttf, paper/ (пресет-пак и профили), сцены, favicon (svg + png-фолбэки)
 tests/            юнит- и компонентные тесты, helpers/
 ```
 
