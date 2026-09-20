@@ -15,11 +15,9 @@ export type BatchExportDeps = {
   renderPage: (task: PageRenderTask, signal?: AbortSignal | undefined) => Promise<Blob>;
 
   /**
-   * Создаёт упаковщик пачки под известное число страниц. Обещание, а не
-   * готовый упаковщик: библиотека архива подгружается по требованию, при
-   * первой выгрузке пачки.
+   * Создаёт упаковщик пачки под известное число страниц.
    */
-  createPacker: (pageCount: number) => Promise<BatchPacker>;
+  createPacker: (pageCount: number) => BatchPacker;
 
   /**
    * Отдаёт архив пользователю.

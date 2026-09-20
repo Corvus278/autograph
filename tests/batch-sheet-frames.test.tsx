@@ -213,7 +213,7 @@ describe('пачка на листах с разными кадрами', () => 
       renderPage: (pageIndex) => {
         return renderTask(plan.buildTask(pageIndex), surfaces);
       },
-      packer: await createZipPacker({ totalPages: plan.pageCount }),
+      packer: createZipPacker({ totalPages: plan.pageCount }),
     });
 
     if (!report.archive) {

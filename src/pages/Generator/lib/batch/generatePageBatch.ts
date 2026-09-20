@@ -49,7 +49,7 @@ export const generatePageBatch = async ({
   onProgress,
   signal,
 }: GeneratePageBatchParams): Promise<PageBatchReport> => {
-  const pagePacker = packer || (await createZipPacker({ totalPages: pageCount }));
+  const pagePacker = packer || createZipPacker({ totalPages: pageCount });
   const failedPageIndexes: number[] = [];
   let packedCount = 0;
 
