@@ -627,3 +627,536 @@ describe('createSyntheticSheet: помехи у края листа', () => {
     expect(readInk(image, 100, 45)).toBeCloseTo(LINE_DARKNESS, 3);
   });
 });
+
+/**
+ * Отпечаток растра — FNV-1a по байтам яркости. Хэш, а не массив чисел: растр
+ * даже маленького листа — сотни тысяч отсчётов, а держать нужно ровно одно
+ * утверждение — «ни один пиксель не сдвинулся».
+ *
+ * @param values — яркости пикселей листа
+ * @returns отпечаток из восьми шестнадцатеричных цифр
+ */
+const hashLuminance = (values: Float32Array): string => {
+  const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+  let hash = 0x81_1c_9d_c5;
+
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01_00_01_93) >>> 0;
+  }
+
+  return hash.toString(16).padStart(8, '0');
+};
+
+/**
+ * Лист с отпечатком его растра.
+ */
+type RasterFixture = {
+  /**
+   * Отпечаток растра, снятый до появления долей дрейфа и схождения.
+   */
+  digest: string;
+
+  /**
+   * Имя листа — по нему видно в отчёте, какая ветвь отрисовки разошлась.
+   */
+  name: string;
+
+  /**
+   * Описание листа.
+   */
+  params: SyntheticSheetParams;
+};
+
+/**
+ * Листы, покрывающие все ветви отрисовки: прямая гребёнка, наклон с линией
+ * поля, заданная напрямую перспектива, изгиб вместе с поверхностью и помехами.
+ * Отпечатки сняты на базе прогона и вписаны литералами: пересчитай их новым
+ * кодом — и проверка перестанет что-либо держать.
+ */
+const RASTER_FIXTURES: RasterFixture[] = [
+  { digest: 'c342f07d', name: 'defaults', params: {} },
+  {
+    digest: 'a32a9a4b',
+    name: 'linedTilted',
+    params: {
+      width: 300,
+      height: 400,
+      step: 21.5,
+      phase: 7.25,
+      angle: 1.3,
+      margins: { top: 30, right: 20, bottom: 40, left: 55 },
+      marginLineX: 48,
+      noise: 0.03,
+      lighting: 0.25,
+      seed: 7,
+    },
+  },
+  {
+    digest: '3fb6f6ea',
+    name: 'gridPerspective',
+    params: {
+      width: 360,
+      height: 480,
+      kind: 'grid',
+      step: 26,
+      phase: 5,
+      angle: -0.8,
+      margins: { top: 24, right: 18, bottom: 24, left: 30 },
+      rulingPerspective: { convergenceX: 0.0004, convergenceY: 0.0006 },
+      seed: 3,
+    },
+  },
+  {
+    digest: '0abf2a0d',
+    name: 'surfaceSpiralBend',
+    params: {
+      width: 320,
+      height: 420,
+      step: 23,
+      phase: 3.5,
+      angle: 0.6,
+      margins: { top: 40, right: 26, bottom: 36, left: 60 },
+      marginLineX: 54,
+      fade: 0.3,
+      driftFrom: 300,
+      drift: 2.5,
+      noise: 0.02,
+      seed: 11,
+      bend: (x: number, y: number): number => {
+        return 3 * Math.sin((x / 320) * Math.PI) + y * 0.001;
+      },
+      spiral: { x: 12, period: 31, radius: 4 },
+      lowContrastArea: { left: 200, top: 40, right: 320, bottom: 200, contrast: 0.35 },
+      surface: {
+        outline: {
+          topLeft: { x: 8, y: 10 },
+          topRight: { x: 312, y: 6 },
+          bottomRight: { x: 316, y: 412 },
+          bottomLeft: { x: 4, y: 416 },
+        },
+        cornerRadius: 6,
+        brightness: 0.28,
+        grain: 0.05,
+        vignette: 0.2,
+        cover: { side: 'left', width: 6, brightness: 0.15 },
+      },
+    },
+  },
+];
+
+/**
+ * Лист, у которого гребёнка задана до числа: по ней считаются номера крайних
+ * линий, между которыми и меряется дрейф.
+ */
+type CombSheet = SyntheticSheetParams & {
+  /**
+   * Высота кадра.
+   */
+  height: number;
+
+  /**
+   * Фаза разлиновки.
+   */
+  phase: number;
+
+  /**
+   * Шаг разлиновки.
+   */
+  step: number;
+};
+
+const DRIFT_SHARE = 0.25;
+
+const CONVERGENCE_SHARE = 0.2;
+
+const DRIFT_SHEET: CombSheet = {
+  width: 420,
+  height: 560,
+  step: 24,
+  phase: 12,
+  stepDrift: DRIFT_SHARE,
+};
+
+const CONVERGENCE_SHEET: CombSheet = {
+  width: 420,
+  height: 560,
+  step: 24,
+  phase: 12,
+  lineConvergence: CONVERGENCE_SHARE,
+};
+
+const HALVED_SHEET: SyntheticSheetParams = {
+  width: 480,
+  height: 400,
+  step: 20,
+  phase: 10,
+  kind: 'grid',
+  everySecondLineArea: { left: 240, top: 0, right: 479, bottom: 399, contrast: 0 },
+};
+
+/**
+ * Столбцы листа «через одну», не попавшие на вертикаль клетки: на вертикали
+ * чернила есть и там, где горизонтальная линия погашена.
+ */
+const HALVED_COLUMNS = { clear: 100, halved: 400 };
+
+/**
+ * Номера крайних линий листа без полей: первая и последняя, попавшие в кадр.
+ * Дрейф отсчитывается между ними же — там его меряет и детектор перспективы.
+ *
+ * @param sheet — лист с заданной гребёнкой
+ * @returns номера первой и последней линии на гребёнке
+ */
+const computeEdgeLines = ({ height, step, phase }: CombSheet): [number, number] => {
+  return [Math.ceil(-phase / step), Math.floor((height - phase) / step)];
+};
+
+/**
+ * Местный шаг разлиновки у линии: расстояние между местами полулинии выше и
+ * полулинии ниже неё. Разность симметрична вокруг линии и потому меряет ту же
+ * величину, что берёт детектор перспективы, а не промежуток до соседки,
+ * сдвинутый на полшага вглубь листа.
+ *
+ * @param params — описание листа
+ * @param index — номер линии на гребёнке
+ * @param x — столбец кадра
+ * @returns шаг в пикселях кадра
+ */
+const measureLocalStep = (
+  params: SyntheticSheetParams,
+  index: number,
+  x: number
+): number => {
+  return (
+    computeSyntheticLineY(params, index + 0.5, x) -
+    computeSyntheticLineY(params, index - 0.5, x)
+  );
+};
+
+/**
+ * Прямоугольник кадра, в котором читается период тёмных строк.
+ */
+type ProbeArea = {
+  /**
+   * Нижний край, строка кадра, не включительно.
+   */
+  bottom: number;
+
+  /**
+   * Левый край, столбец кадра.
+   */
+  left: number;
+
+  /**
+   * Правый край, столбец кадра включительно.
+   */
+  right: number;
+
+  /**
+   * Верхний край, строка кадра.
+   */
+  top: number;
+};
+
+/**
+ * Наименьший размах профиля, при котором он считается периодическим, а не
+ * ровной бумагой. Провал полноширинной линии глубже трёх десятых, а зерно
+ * бумаги, усреднённое по сотням столбцов, не даёт и сотой: пять сотых
+ * отделяют одно от другого с запасом в обе стороны.
+ */
+const MIN_PROFILE_SWING = 0.05;
+
+/**
+ * Расстояния между соседними тёмными строками в прямоугольнике кадра: так
+ * период разлиновки читается прямо с растра, без единой строки измерителя из
+ * `src` — иначе проверки «через одну» и ловушек опирались бы на то, что им же
+ * и предстоит проверять. Пусто — периодичности в прямоугольнике нет.
+ *
+ * Центром тёмной строки берётся середина участка ниже порога, а не местный
+ * минимум профиля: у широкого штриха дно плоское, и зерно бумаги рассыпало бы
+ * его на десяток минимумов подряд.
+ *
+ * @param image — кадр
+ * @param area — прямоугольник кадра
+ * @returns расстояния между соседними тёмными строками
+ */
+const measureRowGaps = (image: SheetImageData, area: ProbeArea): number[] => {
+  const { width, luminance } = image;
+  const { top, bottom, left, right } = area;
+  const profile = new Float64Array(bottom - top);
+
+  for (let y = top; y < bottom; y += 1) {
+    let sum = 0;
+
+    for (let x = left; x <= right; x += 1) {
+      sum += luminance[y * width + x] || 0;
+    }
+
+    profile[y - top] = sum / (right - left + 1);
+  }
+
+  const darkest = Math.min(...profile);
+  const swing = Math.max(...profile) - darkest;
+
+  if (swing < MIN_PROFILE_SWING) {
+    return [];
+  }
+
+  const threshold = darkest + swing / 2;
+  const centers: number[] = [];
+  let runStart = -1;
+
+  for (let index = 0; index <= profile.length; index += 1) {
+    const isDark = index < profile.length && (profile[index] || 0) < threshold;
+
+    if (isDark && runStart < 0) {
+      runStart = index;
+    }
+
+    if (!isDark && runStart >= 0) {
+      centers.push((runStart + index - 1) / 2);
+      runStart = -1;
+    }
+  }
+
+  return centers.slice(1).map((center, index) => {
+    return center - (centers[index] || 0);
+  });
+};
+
+describe('createSyntheticSheet: дрейф шага и схождение линий', () => {
+  it('без долей дрейфа и схождения рисует прежний растр до пикселя', () => {
+    const digests = RASTER_FIXTURES.map(({ name, params }) => {
+      return `${name} ${hashLuminance(createSyntheticSheet(params).luminance)}`;
+    });
+
+    expect(digests).toEqual(
+      RASTER_FIXTURES.map(({ name, digest }) => {
+        return `${name} ${digest}`;
+      })
+    );
+  });
+
+  it('растит шаг от верхней крайней линии к нижней на заданную долю', () => {
+    const [topLine, bottomLine] = computeEdgeLines(DRIFT_SHEET);
+    const topStep = measureLocalStep(DRIFT_SHEET, topLine, 210);
+    const bottomStep = measureLocalStep(DRIFT_SHEET, bottomLine, 210);
+
+    expect(bottomStep / topStep).toBeCloseTo(1 + DRIFT_SHARE, 4);
+  });
+
+  it('держит дрейф одинаковым по всей ширине кадра', () => {
+    const [topLine, bottomLine] = computeEdgeLines(DRIFT_SHEET);
+    const atLeft =
+      measureLocalStep(DRIFT_SHEET, bottomLine, 0) /
+      measureLocalStep(DRIFT_SHEET, topLine, 0);
+    const atRight =
+      measureLocalStep(DRIFT_SHEET, bottomLine, 419) /
+      measureLocalStep(DRIFT_SHEET, topLine, 419);
+
+    expect(atRight).toBeCloseTo(atLeft, 6);
+  });
+
+  it('сводит линии по ширине кадра на заданную долю', () => {
+    const gapAtLeft = measureLocalStep(CONVERGENCE_SHEET, 10, 0);
+    const gapAtRight = measureLocalStep(CONVERGENCE_SHEET, 10, 420);
+
+    expect(gapAtRight / gapAtLeft).toBeCloseTo(1 - CONVERGENCE_SHARE, 6);
+  });
+
+  it('рисует линии с дрейфом и схождением там, где их ждёт эталон', () => {
+    const params: SyntheticSheetParams = {
+      ...DRIFT_SHEET,
+      lineConvergence: CONVERGENCE_SHARE,
+    };
+    const image = createSyntheticSheet(params);
+
+    for (const [index, x] of [
+      [2, 30],
+      [11, 210],
+      [20, 400],
+    ]) {
+      const lineY = computeSyntheticLineY(params, index || 0, x || 0);
+      const localStep = measureLocalStep(params, index || 0, x || 0);
+
+      expect(readInk(image, x || 0, Math.round(lineY))).toBeGreaterThan(0.3);
+      expect(readInk(image, x || 0, Math.round(lineY + localStep / 2))).toBeLessThan(
+        0.05
+      );
+    }
+  });
+});
+
+describe('createSyntheticSheet: лист, различимый через одну линию', () => {
+  it('удваивает период разлиновки внутри прямоугольника', () => {
+    const image = createSyntheticSheet(HALVED_SHEET);
+
+    expect(
+      new Set(measureRowGaps(image, { top: 0, bottom: 400, left: 0, right: 239 }))
+    ).toEqual(new Set([20]));
+    expect(
+      new Set(measureRowGaps(image, { top: 0, bottom: 400, left: 240, right: 479 }))
+    ).toEqual(new Set([40]));
+  });
+
+  it('гасит внутри прямоугольника линии нечётного номера, не трогая чётные', () => {
+    const image = createSyntheticSheet(HALVED_SHEET);
+    const { clear, halved } = HALVED_COLUMNS;
+    const evenY = Math.round(computeSyntheticLineY(HALVED_SHEET, 4, halved));
+    const oddY = Math.round(computeSyntheticLineY(HALVED_SHEET, 5, halved));
+
+    expect(readInk(image, halved, evenY)).toBeGreaterThan(0.3);
+    expect(readInk(image, halved, oddY)).toBeLessThan(0.05);
+    expect(readInk(image, clear, oddY)).toBeGreaterThan(0.3);
+  });
+});
+
+/**
+ * Шаг, который на кадре 480×400 сошёл бы за настоящую разлиновку: ловушка
+ * обязана спорить с разлиновкой на равных, иначе её отсекал бы не разбор
+ * периода по высоте кадра, а неправдоподобность самого периода.
+ */
+const TRAP_STEP = 20;
+
+/**
+ * Глубина штриха ловушки — не ниже глубины линии разлиновки: иначе ловушку
+ * отсекла бы сила сигнала, и проверка ничего не сказала бы о разборе по
+ * высоте.
+ */
+const TRAP_DARKNESS = 0.5;
+
+/**
+ * Чистый лист с полосой печатного текста посередине кадра. Период у текста
+ * настоящий, но живёт он только в своей полосе.
+ */
+const TEXT_TRAP_SHEET: SyntheticSheetParams = {
+  width: 480,
+  height: 400,
+  kind: 'blank',
+  noise: 0.02,
+  seed: 5,
+  textBand: {
+    top: 140,
+    bottom: 260,
+    left: 60,
+    right: 420,
+    step: TRAP_STEP,
+    strokeHeight: 11,
+    pitch: 9,
+    strokeWidth: 3,
+    darkness: TRAP_DARKNESS,
+  },
+};
+
+/**
+ * Лист, у которого линии занимают лишь верхнюю половину кадра: нижнее поле во
+ * всю вторую половину оставляет там чистую бумагу.
+ */
+const HALF_RULED_SHEET: SyntheticSheetParams = {
+  width: 480,
+  height: 400,
+  step: TRAP_STEP,
+  phase: 10,
+  margins: { top: 0, right: 0, bottom: 200, left: 0 },
+  noise: 0.02,
+  seed: 9,
+};
+
+/**
+ * Полоса кадра с текстом — по ней читается период самой ловушки.
+ */
+const TEXT_BAND_AREA: ProbeArea = { top: 140, bottom: 260, left: 60, right: 420 };
+
+/**
+ * Период тёмных строк в каждой из полос, на которые режется кадр по высоте:
+ * медиана расстояний между соседними строками, ноль — периодичности в полосе
+ * нет. Настоящая разлиновка даёт период во всех полосах и ряд, монотонный по
+ * высоте; локальный источник периодичности — нет.
+ *
+ * @param image — кадр
+ * @param count — число полос
+ * @returns период в каждой полосе сверху вниз
+ */
+const measureBandPeriods = (image: SheetImageData, count: number): number[] => {
+  const periods: number[] = [];
+
+  for (let band = 0; band < count; band += 1) {
+    const gaps = measureRowGaps(image, {
+      top: Math.round((image.height * band) / count),
+      bottom: Math.round((image.height * (band + 1)) / count),
+      left: 0,
+      right: image.width - 1,
+    });
+    const sorted = [...gaps].sort((first, second) => {
+      return first - second;
+    });
+
+    periods.push(sorted[Math.floor(sorted.length / 2)] || 0);
+  }
+
+  return periods;
+};
+
+/**
+ * Самые глубокие чернила в прямоугольнике кадра.
+ *
+ * @param image — кадр
+ * @param area — прямоугольник кадра
+ * @returns глубина от 0 до 1
+ */
+const measureDeepestInk = (image: SheetImageData, area: ProbeArea): number => {
+  const { top, bottom, left, right } = area;
+  let deepest = 0;
+
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      deepest = Math.max(deepest, readInk(image, x, y));
+    }
+  }
+
+  return deepest;
+};
+
+describe('createSyntheticSheet: ловушки для поиска периода', () => {
+  it('полоса текста даёт период только в своей полосе кадра', () => {
+    const image = createSyntheticSheet(TEXT_TRAP_SHEET);
+
+    expect(new Set(measureRowGaps(image, TEXT_BAND_AREA))).toEqual(new Set([TRAP_STEP]));
+    expect(measureBandPeriods(image, 4)).toEqual([0, TRAP_STEP, TRAP_STEP, 0]);
+  });
+
+  it('полоса текста не бледнее линий разлиновки', () => {
+    const image = createSyntheticSheet(TEXT_TRAP_SHEET);
+
+    expect(measureDeepestInk(image, TEXT_BAND_AREA)).toBeGreaterThanOrEqual(
+      LINE_DARKNESS
+    );
+  });
+
+  it('половина кадра без линий оставляет период только в другой половине', () => {
+    const image = createSyntheticSheet(HALF_RULED_SHEET);
+
+    expect(
+      new Set(measureRowGaps(image, { top: 0, bottom: 200, left: 0, right: 479 }))
+    ).toEqual(new Set([TRAP_STEP]));
+    expect(measureRowGaps(image, { top: 200, bottom: 400, left: 0, right: 479 })).toEqual(
+      []
+    );
+    expect(measureBandPeriods(image, 4)).toEqual([TRAP_STEP, TRAP_STEP, 0, 0]);
+  });
+
+  it('линии разлиновки во весь кадр дают период во всех полосах', () => {
+    const image = createSyntheticSheet({
+      ...HALF_RULED_SHEET,
+      margins: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+
+    expect(measureBandPeriods(image, 4)).toEqual([
+      TRAP_STEP,
+      TRAP_STEP,
+      TRAP_STEP,
+      TRAP_STEP,
+    ]);
+  });
+});
