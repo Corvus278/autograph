@@ -739,3 +739,77 @@ describe('detectRulingPerspective: шаг меняется сильнее гар
     expect(detection.step).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Ширина полосы за правым полем, занятой посторонней гребёнкой: четверть кадра
+ * — больше крайней из пяти полос подгонки, когда те режутся по всей ширине
+ * вырезки.
+ */
+const JUNK_WIDTH = WIDTH / 4;
+
+/**
+ * Во сколько раз шаг посторонней гребёнки крупнее шага разлиновки. Витки
+ * пружины идут своим шагом, и трасса ведёт их как линии: за десяток линий узлы
+ * уходят от гребёнки листа на целый шаг.
+ */
+const JUNK_STEP_RATIO = 1.2;
+
+/**
+ * Рисует за правым полем чужую гребёнку: столбцы правее поля берутся из
+ * области с линиями, растянутой по высоте. Бумага, толщина и контраст линий там
+ * те же, что у листа, — отличается только шаг, как у пружины блокнота рядом с
+ * разлиновкой.
+ *
+ * @param params — описание листа, у которого линии кончаются на правом поле
+ * @returns растр листа с чужой гребёнкой за полем
+ */
+const createSpringSheet = (params: PerspectiveSheet): SheetImageData => {
+  const image = createSyntheticSheet(params);
+  const luminance = Float32Array.from(image.luminance);
+  const from = WIDTH - JUNK_WIDTH;
+
+  for (let x = from; x < WIDTH; x += 1) {
+    for (let y = 0; y < HEIGHT; y += 1) {
+      const source = Math.round(HEIGHT / 2 + (y - HEIGHT / 2) / JUNK_STEP_RATIO);
+
+      luminance[y * WIDTH + x] = image.luminance[source * WIDTH + x - JUNK_WIDTH] || 0;
+    }
+  }
+
+  return { ...image, luminance };
+};
+
+describe('detectRulingPerspective: полосы режутся по области с линиями', () => {
+  /**
+   * Лист с дрейфом, у которого за правым полем идёт чужая гребёнка. Полоса по
+   * всей ширине вырезки легла бы на неё целиком, и её узлы — не единичные, а
+   * целой полосой — увели бы невязку подгонки за порог: бюджет выбросов снимает
+   * отдельные узлы, а не полосу.
+   */
+  const params: PerspectiveSheet = {
+    ...BASE_SHEET,
+    margins: { top: MARGIN, right: JUNK_WIDTH, bottom: MARGIN, left: 0 },
+    rulingPerspective: DRIFT_8,
+  };
+
+  const detectSpring = (): RulingPerspectiveDetection => {
+    const { step, phase, angle, margins } = params;
+
+    return detectRulingPerspective(
+      createSpringSheet(params),
+      { step, firstLinePhase: phase, skewAngle: angle, margins, ...WITHOUT_SEED },
+      WHOLE_FRAME
+    );
+  };
+
+  it('чужая гребёнка за правым полем: линии восстановлены', () => {
+    const detection = detectSpring();
+
+    expect(detection.perspective).not.toBeNull();
+    expect(measureRestoreError(detection, params)).toBeLessThan(LINE_TOLERANCE);
+  });
+
+  it('чужая гребёнка за правым полем: узлы взяты только с области с линиями', () => {
+    expect(detectSpring().foundNodeShare).toBe(1);
+  });
+});

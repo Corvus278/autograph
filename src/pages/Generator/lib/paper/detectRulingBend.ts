@@ -1,3 +1,4 @@
+import { cropSheetColumns } from './cropSheetColumns';
 import type { RulingBend, SheetImageData, SheetRuling } from './paper.types';
 import {
   buildStripProfiles,
@@ -198,27 +199,6 @@ type NodeGrid = {
 };
 
 const EMPTY_DETECTION: RulingBendDetection = { bend: null, foundNodeShare: 0 };
-
-/**
- * Вырезает из изображения столбцы области: полосы режутся только по ней, и за
- * областью узлов нет.
- */
-const cropColumns = (
-  image: SheetImageData,
-  from: number,
-  width: number
-): SheetImageData => {
-  const { width: imageWidth, height, luminance } = image;
-  const cropped = new Float32Array(width * height);
-
-  for (let y = 0; y < height; y += 1) {
-    const start = y * imageWidth + from;
-
-    cropped.set(luminance.subarray(start, start + width), y * width);
-  }
-
-  return { width, height, luminance: cropped };
-};
 
 /**
  * Наименьшая разница плеч провала в пикселях — расстояний от вершины до краёв
@@ -677,7 +657,7 @@ export const detectRulingBend = (
     Math.max(MIN_STRIPS, Math.round(cropWidth / (STRIP_STEPS * step)))
   );
   const strips = buildStripProfiles(
-    cropColumns(image, cropLeft, cropWidth),
+    cropSheetColumns(image, cropLeft, cropWidth),
     'horizontal',
     skewAngle,
     Math.abs(skewAngle),

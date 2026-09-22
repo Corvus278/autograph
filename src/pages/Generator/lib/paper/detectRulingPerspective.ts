@@ -1,3 +1,4 @@
+import { cropSheetColumns } from './cropSheetColumns';
 import type {
   PerspectiveBaseRuling,
   PerspectiveFrame,
@@ -720,13 +721,22 @@ export const detectRulingPerspective = (
 ): RulingPerspectiveDetection => {
   const { step, firstLinePhase, skewAngle, margins } = ruling;
   const { width, height } = image;
+  /**
+   * Полосы режутся по области с линиями, а не по всей ширине вырезки: за
+   * полями лежат пружина блокнота, переплёт и стол. Их витки и тени трасса
+   * ведёт как линии, и целая такая полоса уводит невязку подгонки за порог —
+   * бюджет выбросов в единичные узлы её не снимает, а лист при этом описывается
+   * перспективой.
+   */
+  const cropLeft = Math.max(0, Math.ceil(margins.left));
+  const cropWidth = Math.min(width, Math.floor(width - margins.right)) - cropLeft;
 
-  if (step <= 0 || width < STRIP_COUNT) {
+  if (step <= 0 || cropWidth < STRIP_COUNT) {
     return toEmptyDetection(ruling);
   }
 
   const strips = buildStripProfiles(
-    image,
+    cropSheetColumns(image, cropLeft, cropWidth),
     'horizontal',
     skewAngle,
     Math.abs(skewAngle),
@@ -745,9 +755,10 @@ export const detectRulingPerspective = (
   const reach = step * TRACE_SEARCH_SHARE;
   /**
    * Координата линии `line` ровной гребёнки в бинах профиля: бины отсчитаны от
-   * `origin`, а координата вдоль линий — от верха вырезки.
+   * `origin` и от левого края области с линиями, а координата вдоль линий — от
+   * верха и левого края вырезки.
    */
-  const lineOffset = firstLinePhase - origin;
+  const lineOffset = firstLinePhase + cropLeft * toTangent(skewAngle) - origin;
   const firstLine = Math.max(
     Math.ceil((margins.top - firstLinePhase) / step),
     Math.ceil((1 + reach - lineOffset) / step)
@@ -764,15 +775,16 @@ export const detectRulingPerspective = (
 
   const tangent = toTangent(skewAngle);
   const columns = Array.from({ length: STRIP_COUNT }, (_item, strip) => {
-    return ((strip + 0.5) * width) / STRIP_COUNT;
+    return cropLeft + ((strip + 0.5) * cropWidth) / STRIP_COUNT;
   });
 
   /**
    * Строка линии в кадре вырезки: профиль полосы схлопнут вдоль наклона, и его
-   * бин — координата вдоль линий, которую центр полосы возвращает в кадр.
+   * бин — координата вдоль линий, отсчитанная от левого края области с
+   * линиями, которую центр полосы возвращает в кадр.
    */
   const toLineY = (position: number, column: number): number => {
-    return position + origin + column * tangent;
+    return position + origin + (column - cropLeft) * tangent;
   };
 
   const traced = traceRulingLines(detrended, {

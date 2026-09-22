@@ -713,3 +713,44 @@ describe('detectRuling: полосовая ступень', () => {
     expect(detection.bandSteps).toStrictEqual([]);
   });
 });
+
+/**
+ * Наклон, которым выпрямлена копия: у листа он нарисован нулевым, и свип полос
+ * нашёл бы его сам. Заданный наклон отличается от нарисованного настолько, что
+ * подмену видно по одному числу.
+ */
+const RECTIFIED_SKEW_ANGLE = 0.8;
+
+/**
+ * Порог уверенности, при котором глобальный профиль не берёт лист и с заданным
+ * наклоном: схлопнутый вдоль чужого угла профиль автокоррелирует не хуже
+ * своего, и штатного подъёма порога мало.
+ */
+const GIVEN_SKEW_BANDED_THRESHOLD = 0.95;
+
+describe('detectRuling: заданный наклон', () => {
+  /**
+   * Наклон выпрямленной копии известен по построению, и ступень его не
+   * переопределяет: отдай она наружу свой свип, вызывающая сторона получила бы
+   * поля и линию поля в координате вдоль линий, которой у копии нет, и
+   * отбросила бы весь проход.
+   */
+  it('полосовая ступень отдаёт наружу заданный наклон, а не свой свип', () => {
+    const detection = detectRuling(createSyntheticSheet(DRIFT_SHEET), {
+      confidenceThreshold: GIVEN_SKEW_BANDED_THRESHOLD,
+      skewAngle: RECTIFIED_SKEW_ANGLE,
+    });
+
+    expect(detection.bandSteps.length).toBeGreaterThan(0);
+    expect(detection.skewAngle).toBe(RECTIFIED_SKEW_ANGLE);
+  });
+
+  it('глобальный профиль отдаёт наружу заданный наклон', () => {
+    const detection = detectRuling(createSyntheticSheet(DRIFT_SHEET), {
+      skewAngle: RECTIFIED_SKEW_ANGLE,
+    });
+
+    expect(detection.bandSteps).toStrictEqual([]);
+    expect(detection.skewAngle).toBe(RECTIFIED_SKEW_ANGLE);
+  });
+});

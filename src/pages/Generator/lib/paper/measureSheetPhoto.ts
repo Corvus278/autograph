@@ -20,6 +20,7 @@ import type {
   PaperMargins,
   RulingBend,
   RulingProjection,
+  SheetFrame,
   SheetImageData,
   SheetOutline,
   SheetPoint,
@@ -588,31 +589,65 @@ const withEdgeMargins = (
 };
 
 /**
+ * Середина области с линиями по ширине кадра: там сходятся обе гребёнки листа,
+ * потому что обе подогнаны по одним и тем же линиям, а их узлы лежат внутри
+ * полей. Ненайденное поле оставляет край кадра, и середина съезжает к середине
+ * кадра — ровно туда, где сидит масса узлов и в этом случае.
+ *
+ * @param margins — поля разлиновки в кадре
+ * @param frameWidth — ширина кадра
+ * @returns столбец середины области в пикселях кадра
+ */
+const toRuledMiddle = (margins: PaperMargins, frameWidth: number): number => {
+  return (margins.left + (frameWidth - margins.right)) / 2;
+};
+
+/**
  * Верхнее и нижнее поле второго прохода, упёршегося в край выпрямленной копии,
  * берутся у ровного прохода: копия режется по вырезке, и за её краем второй
  * проход линий не видит, а ровный уже проверил край по снимку. Поле ставится
  * на ближайшую линию перспективной гребёнки: у ровного прохода линия стоит по
  * своей гребёнке, и строка встала бы мимо линий.
  *
+ * Садится оно на линию в середине области с линиями, а не у левого края кадра,
+ * куда поле отсчитано. Обе гребёнки описывают одни и те же линии и сходятся
+ * там, где лежат их узлы, а к краю расходятся на разницу наклонов во всё
+ * плечо: у листа с волной у верха это треть шага, и округление к ближайшей
+ * линии у самого края берёт соседнюю — текст начинается со второй линии листа.
+ * Поэтому поле переносится в середину области по гребёнке ровного прохода, там
+ * садится на линию перспективной и возвращается к левому краю уже по ней.
+ *
  * @param source — разлиновка второго прохода в кадре
  * @param flat — разлиновка ровного прохода в кадре
  * @param projection — наклон и перспектива второго прохода в кадре
- * @param frameHeight — высота кадра
+ * @param frame — кадр фотографии
  * @returns разлиновка с унаследованными полями
  */
 const inheritEdgeMargins = (
   source: SheetRulingSource,
   flat: SheetRulingSource,
   projection: RulingProjection,
-  frameHeight: number
+  frame: SheetFrame
 ): SheetRulingSource => {
   const margins = source.margins || { top: 0, right: 0, bottom: 0, left: 0 };
   const flatTop = flat.margins?.top || 0;
   const flatBottom = flat.margins?.bottom || 0;
   const { step, firstLinePhase } = source;
+  const flatProjection: RulingProjection = {
+    skewAngle: flat.skewAngle,
+    perspective: flat.perspective || null,
+  };
+  const middle = toRuledMiddle(margins, frame.width);
 
   const snapToLine = (y: number): number => {
-    const line = Math.round((lineCoordinateAt(projection, 0, y) - firstLinePhase) / step);
+    const height = lineHeightAt(
+      flatProjection,
+      middle,
+      lineCoordinateAt(flatProjection, 0, y)
+    );
+    const line = Math.round(
+      (lineCoordinateAt(projection, middle, height) - firstLinePhase) / step
+    );
 
     return lineHeightAt(projection, 0, firstLinePhase + line * step);
   };
@@ -624,7 +659,7 @@ const inheritEdgeMargins = (
       top: margins.top || (flatTop && snapToLine(flatTop)),
       bottom:
         margins.bottom ||
-        (flatBottom && frameHeight - snapToLine(frameHeight - flatBottom)),
+        (flatBottom && frame.height - snapToLine(frame.height - flatBottom)),
     },
   };
 };
@@ -774,7 +809,7 @@ const measureRuling = (
       toFrameSource(second, rectified.image.width, transfer),
       flatSource,
       transfer.projection,
-      image.height
+      image
     ),
     detection: second,
     report,
