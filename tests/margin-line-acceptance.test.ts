@@ -635,11 +635,12 @@ describe('приёмка issue #9: впервые найденная черта 
 
   it('сетка сузилась только со стороны черты и на те же два с лишним шага', () => {
     const area = findBendArea(requireBend(detectBentSheet().bend));
-    const bare = findBendArea(requireBend(detectBentSheet(true).bend));
+    const bareBend = requireBend(detectBentSheet(true).bend);
+    const bare = findBendArea(bareBend);
     const { step, margins } = BENT_MARGIN_LINE_SHEET;
 
     expect(Math.abs(bare.from - margins.left)).toBeLessThanOrEqual(
-      requireBend(detectBentSheet(true).bend).columnSpacing
+      bareBend.columnSpacing
     );
     expect(area.to).toBeCloseTo(bare.to, 9);
     expect((area.from - bare.from) / step).toBeGreaterThan(MIN_NARROWING_STEPS);

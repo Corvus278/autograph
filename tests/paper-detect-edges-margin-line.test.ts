@@ -479,7 +479,11 @@ describe('findBandedMarginLine: барьер меряется полосами �
     const drifting = pollCalibrationSheet(DRIFTING_MARGIN_LINE_SHEET);
     const absent = pollCalibrationSheet(ABSENT_MARGIN_LINE_SHEET);
 
-    expect(drifting.peerDepth).toBeCloseTo(absent.peerDepth, 10);
+    /**
+     * Знаменатель отношения — глубина соседей: при одной мере он одинаков на
+     * обоих листах, и отношение глубины к отношению его восстанавливает.
+     */
+    expect(drifting.depth / drifting.ratio).toBeCloseTo(absent.depth / absent.ratio, 10);
   });
 });
 
@@ -549,8 +553,8 @@ const STRAIGHT_RIGHT_TILTED_EXACT_X = 329.86982352348195;
 
 /**
  * Сколько раз строились полосы опроса. Опознаются по числу полос на кадр: их
- * больше одной на шаг разлиновки, тогда как трассировочные идут по полторы
- * полосы на шаг, а полосы области с линиями — восемь на кадр.
+ * больше одной на шаг разлиновки, тогда как трассировочные идут по полтора
+ * шага на полосу, а полосы области с линиями — восемь на кадр.
  *
  * @param height — высота кадра
  * @param step — шаг разлиновки

@@ -1,6 +1,5 @@
 export type {
   MarginLineReport,
-  MarginLineStage,
   MarginLineThreshold,
   RulingDetectionOptions,
 } from './detectRuling';

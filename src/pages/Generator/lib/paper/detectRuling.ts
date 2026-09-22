@@ -268,8 +268,9 @@ export type MarginLineStage = 'profile' | 'banded' | 'none';
  */
 export type MarginLineReport = {
   /**
-   * Доля полос, в которых трасса нашла принятого кандидата. `0` — полосовой
-   * опрос не звался или кандидатов не нашлось.
+   * Доля полос, в которых трасса нашла самого глубокого кандидата, — и тогда,
+   * когда барьер его отверг: барьер решает только, есть ли линия поля. `0` —
+   * полосовой опрос не звался или кандидатов не нашлось.
    */
   coverage: number;
 
@@ -719,7 +720,7 @@ const findMarginLine = (
     return null;
   }
 
-  const background = computeMovingMedian(values, Math.max(3, Math.round(step)));
+  const background = computeMovingMedian(values, toBackgroundWindow(step));
   const depth = new Float64Array(size);
 
   for (let index = 0; index < size; index += 1) {
@@ -758,10 +759,9 @@ const findMarginLine = (
   }
 
   const sigma = NORMAL_MAD_FACTOR * computeMedian(deviations);
-  const threshold = Math.max(
-    MARGIN_LINE_DEPTH_RATIO * computeQuantile(middlePeaks, MARGIN_LINE_PEER_QUANTILE),
-    MARGIN_LINE_SIGMA_FACTOR * sigma,
-    MARGIN_LINE_MIN_DEPTH
+  const { value: threshold } = toMarginLineBarrier(
+    computeQuantile(middlePeaks, MARGIN_LINE_PEER_QUANTILE),
+    sigma
   );
   const leftDepth = leftIndex < 0 ? 0 : depth[leftIndex] || 0;
   const rightDepth = rightIndex < 0 ? 0 : depth[rightIndex] || 0;
@@ -974,8 +974,9 @@ const measureStripDepth = (values: Float64Array, bin: number, window: number): n
 };
 
 /**
- * Ширина окна фона полосового опроса в бинах: одна мера и для глубин, и для
- * зоны у края полосы, где они не определены.
+ * Ширина окна фона в бинах профиля столбцов — шаг разлиновки: одна мера для
+ * профиля во всю высоту, для глубин полос и для зоны у края полосы, где они
+ * не определены.
  *
  * @param step — шаг разлиновки в пикселях
  * @returns ширина окна в бинах
@@ -1055,7 +1056,7 @@ const toStripDepths = (strips: ShearedProfile[], step: number): MeasuredStrip[] 
  * @returns полосы с мерой глубины по требованию
  */
 const toTracedStripDepths = (strips: ShearedProfile[], step: number): StripDepths[] => {
-  const window = Math.max(3, Math.round(step));
+  const window = toBackgroundWindow(step);
 
   return strips.map((strip) => {
     const { values } = strip;
@@ -1353,11 +1354,6 @@ export type BandedMarginLine = {
   line: MarginLine | null;
 
   /**
-   * Глубина соседних вертикалей средней трети, снятая той же полосовой мерой.
-   */
-  peerDepth: number;
-
-  /**
    * Отношение глубины кандидата к глубине соседей. Ноль — соседей не нашлось,
    * и кандидата держит не барьер по ним.
    */
@@ -1373,7 +1369,6 @@ const NO_BANDED_MARGIN_LINE: BandedMarginLine = {
   coverage: 0,
   depth: 0,
   line: null,
-  peerDepth: 0,
   ratio: 0,
   threshold: 'minimum',
 };
@@ -1660,7 +1655,6 @@ const pollMarginLineSide = (
     coverage: best?.coverage || 0,
     depth,
     line: best && depth >= value ? { x: best.x, side } : null,
-    peerDepth,
     ratio: peerDepth > 0 ? depth / peerDepth : 0,
     threshold,
   };
