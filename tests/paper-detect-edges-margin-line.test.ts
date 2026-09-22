@@ -482,6 +482,61 @@ describe('findBandedMarginLine: барьер меряется полосами �
 });
 
 /**
+ * Доля высоты кадра сверху, где за краем листа уже обложка: край контура
+ * наклонён относительно настоящего края листа, и в верхней части кадра в
+ * вырезку попадает полоса тёмной обложки, а ниже — нет.
+ */
+const COVER_HEIGHT_SHARE = 0.45;
+
+/**
+ * Ширина полосы обложки у правого края кадра в пикселях — меньше полушага:
+ * обрыв бумаги стоит ближе полуокна фона к краю полосы.
+ */
+const COVER_WIDTH = 6;
+
+/**
+ * Яркость тёмной обложки за краем листа.
+ */
+const COVER_LUMINANCE = 0.37;
+
+/**
+ * Лист без черты, у которого в верхней части кадра последние столбцы — уже
+ * обложка за краем листа. Растр собирается здесь, а не в хелпере: краевой
+ * лист не складывается из готовых полей листа калибровки.
+ *
+ * @param sheet — лист калибровки без черты
+ * @returns растр листа с обрывом бумаги у правого края
+ */
+const createCoverEdgeSheet = (sheet: SyntheticCalibrationSheet): SheetImageData => {
+  const image = createSyntheticSheet(sheet);
+  const luminance = Float32Array.from(image.luminance);
+  const coverRows = Math.round(sheet.height * COVER_HEIGHT_SHARE);
+
+  for (let y = 0; y < coverRows; y += 1) {
+    for (let x = sheet.width - COVER_WIDTH; x < sheet.width; x += 1) {
+      luminance[y * sheet.width + x] = COVER_LUMINANCE;
+    }
+  }
+
+  return { ...image, luminance };
+};
+
+describe('findBandedMarginLine: край листа у края полосы', () => {
+  it('не принимает обрыв бумаги в пределах полуокна фона от края за черту', () => {
+    const sheet = ABSENT_MARGIN_LINE_SHEET;
+    const strips = buildStripProfiles(
+      createCoverEdgeSheet(sheet),
+      'vertical',
+      0,
+      0,
+      toBandCount(sheet)
+    );
+
+    expect(findBandedMarginLine(strips, sheet.step, sheet.width).line).toBeNull();
+  });
+});
+
+/**
  * `marginLineX` прямой черты на базе прогона — до последнего знака, а не с
  * допуском: полосовая ступень обязана оставить лист с прямой чертой нетронутым
  * побитово, и допуск в пиксель пропустил бы подмену числа другой ступенью.

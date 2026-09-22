@@ -974,6 +974,36 @@ const measureStripDepth = (values: Float64Array, bin: number, window: number): n
 };
 
 /**
+ * Ширина окна фона полосового опроса в бинах: одна мера и для глубин, и для
+ * зоны у края полосы, где они не определены.
+ *
+ * @param step — шаг разлиновки в пикселях
+ * @returns ширина окна в бинах
+ */
+const toBackgroundWindow = (step: number): number => {
+  return Math.max(3, Math.round(step));
+};
+
+/**
+ * Стоит ли положение не ближе полуокна фона к обоим краям полосы.
+ *
+ * Ближе полуокна глубина не определена: окно скользящей медианы обрезано
+ * краем полосы и почти целиком лежит по одну сторону от бина. Если там обрыв
+ * бумаги — край вырезки, за которым уже тёмная обложка или стол, — медиана
+ * берёт уровень бумаги, и ступень «бумага → обложка» читается провалом, хотя
+ * по другую сторону от него бумаги нет. Такой кандидат — край листа, а не
+ * черта: настоящая линия поля стоит от края полосы на несколько шагов.
+ *
+ * @param bin — положение в бинах полосы
+ * @param size — число бинов полосы
+ * @param halfWindow — полуширина окна фона в бинах
+ * @returns `true` — глубина в этом положении мерилась полным окном
+ */
+const isInsideMeasuredBins = (bin: number, size: number, halfWindow: number): boolean => {
+  return bin >= halfWindow && size - 1 - bin >= halfWindow;
+};
+
+/**
  * Глубины провалов во всех бинах полосы разом.
  *
  * @param strip — профиль столбцов одной полосы
@@ -1000,7 +1030,7 @@ const measureStripDepths = (strip: ShearedProfile, window: number): Float64Array
  * @returns полосы вместе с глубинами всех своих бинов
  */
 const toStripDepths = (strips: ShearedProfile[], step: number): MeasuredStrip[] => {
-  const window = Math.max(3, Math.round(step));
+  const window = toBackgroundWindow(step);
 
   return strips.map((strip) => {
     const depths = measureStripDepths(strip, window);
@@ -1592,11 +1622,16 @@ const pollMarginLineSide = (
     }),
     reach
   );
+  const halfWindow = toBackgroundWindow(step) / 2;
   const best = candidates.reduce<BandedCandidate | null>((leader, candidate) => {
     const scored = traceBandedCandidate(bands, candidate.position, step, isLeft);
     const isDeeper = scored !== null && (leader === null || scored.depth > leader.depth);
 
-    return isDeeper && scored.coverage >= MARGIN_LINE_BAND_COVERAGE ? scored : leader;
+    return isDeeper &&
+      scored.coverage >= MARGIN_LINE_BAND_COVERAGE &&
+      isInsideMeasuredBins(scored.x - origin, size, halfWindow)
+      ? scored
+      : leader;
   }, null);
   const peerDepths = peers.reduce<number[]>((depths, peer) => {
     const scored = traceBandedCandidate(bands, peer.position, step, isLeft);
