@@ -1,4 +1,4 @@
-export type { RulingBandedStage, RulingDetectionOptions } from './detectRuling';
+export type { RulingDetectionOptions } from './detectRuling';
 export { detectRuling } from './detectRuling';
 export { measureBendDeviation } from './detectRulingBend';
 export { detectSheetOutline } from './detectSheetOutline';
