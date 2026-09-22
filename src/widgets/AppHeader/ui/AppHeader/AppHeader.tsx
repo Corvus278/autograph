@@ -25,10 +25,13 @@ export const AppHeader: FC<AppHeaderProps> = (props) => {
          * Версия — подпись рядом с названием, а не часть ссылки: в имя ссылки
          * она добавила бы читалке номер, который никуда не ведёт. Пустая
          * версия (dev-сервер, тесты) не рисуется вовсе.
+         *
+         * Пометка `beta` держится, пока мажор нулевой: основной функционал не
+         * доделан, и пользователь должен видеть это рядом с номером.
          */}
         {APP_VERSION ? (
           <span data-testid="app-version" className="text-xs text-fg-muted tabular-nums">
-            v{APP_VERSION}
+            v{APP_VERSION} beta
           </span>
         ) : null}
       </div>
