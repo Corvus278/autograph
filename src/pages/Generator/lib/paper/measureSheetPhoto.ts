@@ -1,6 +1,8 @@
 import {
   type DetectedRuling,
   detectRuling,
+  type MarginLineReport,
+  NO_MARGIN_LINE_REPORT,
   RULED_SPAN_LEVEL,
   type RuledEdges,
 } from './detectRuling';
@@ -137,6 +139,11 @@ type RulingMeasurement = {
    * Числа полосовой ступени прохода по кадру; `null` — полосы не считались.
    */
   banded: SheetPhotoBandedReport | null;
+
+  /**
+   * Отчёт поиска линии поля того прохода, который за ней ходил.
+   */
+  marginLine: MarginLineReport;
 };
 
 /**
@@ -680,6 +687,32 @@ const toBandedReport = ({
 };
 
 /**
+ * Отчёт линии поля того прохода, который за ней ходил.
+ *
+ * Проход по выпрямленной копии ищет линию только у стороны, найденной ровным
+ * проходом: на снимке, где ровный проход кандидата отверг, стороны нет, и копия
+ * за ним не идёт вовсе. Числа отказа лежат тогда только у ровного прохода — а
+ * это и есть снимок, ради которого отчёт заведён: по нему калибруется барьер
+ * фантома, и «полос не было» вместо отношения глубин оставило бы калибровку
+ * слепой.
+ *
+ * Опросили оба — числа берутся у прохода, чья разлиновка ушла наружу: рядом с
+ * его же `marginLineX` отношение ровного прохода говорило бы о другом замере.
+ *
+ * @param outer — проход, чья разлиновка ушла наружу
+ * @param flat — ровный проход по кадру
+ * @returns отчёт линии поля
+ */
+const toMarginLineReport = (
+  outer: MarginLineReport,
+  flat: MarginLineReport
+): MarginLineReport => {
+  const hasNothingToTell = outer.stage === 'none' && outer.threshold === null;
+
+  return hasNothingToTell ? flat : outer;
+};
+
+/**
  * Разлиновка вырезки: ровный проход, перспектива и, если она есть, второй
  * проход по выпрямленной копии.
  *
@@ -707,6 +740,7 @@ const measureRuling = (
       detection: detected,
       report: MISSING_REPORT,
       banded,
+      marginLine: detected.marginLineReport,
     };
   }
 
@@ -736,7 +770,13 @@ const measureRuling = (
   };
 
   if (!perspective.perspective) {
-    return { source: flatSource, detection: flat, report, banded };
+    return {
+      source: flatSource,
+      detection: flat,
+      report,
+      banded,
+      marginLine: flat.marginLineReport,
+    };
   }
 
   /**
@@ -781,6 +821,7 @@ const measureRuling = (
       detection: flat,
       report: { ...report, isRectifiedRulingMissing: true },
       banded,
+      marginLine: flat.marginLineReport,
     };
   }
 
@@ -799,6 +840,7 @@ const measureRuling = (
     detection: second,
     report,
     banded,
+    marginLine: toMarginLineReport(second.marginLineReport, flat.marginLineReport),
   };
 };
 
@@ -840,11 +882,16 @@ export const measureSheetPhoto = (
         bendFoundNodeShare: 0,
         perspective: MISSING_REPORT,
         banded: null,
+        marginLine: NO_MARGIN_LINE_REPORT,
       },
     };
   }
 
-  const { source, detection, report, banded } = measureRuling(image, crop, outline);
+  const { source, detection, report, banded, marginLine } = measureRuling(
+    image,
+    crop,
+    outline
+  );
 
   return {
     source: { ...source, outline },
@@ -858,6 +905,7 @@ export const measureSheetPhoto = (
       bendFoundNodeShare: detection.bendFoundNodeShare,
       perspective: report,
       banded,
+      marginLine,
     },
   };
 };

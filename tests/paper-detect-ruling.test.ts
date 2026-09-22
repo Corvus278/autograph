@@ -6,7 +6,11 @@ import type { BandedPeriod } from '@pages/Generator/lib/paper/measureBandedPerio
 import { measureBandedPeriod } from '@pages/Generator/lib/paper/measureBandedPeriod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSyntheticSheet } from './helpers/synthetic-sheet';
+import {
+  ABSENT_MARGIN_LINE_SHEET,
+  createSyntheticSheet,
+  DRIFTING_MARGIN_LINE_SHEET,
+} from './helpers/synthetic-sheet';
 
 /**
  * Полосовая ступень подменяется собой же под счётчиком: проверять «полосы не
@@ -787,5 +791,68 @@ describe('detectRuling: заданный наклон', () => {
 
     expect(detection.bandSteps).toStrictEqual([]);
     expect(detection.skewAngle).toBe(RECTIFIED_SKEW_ANGLE);
+  });
+});
+
+/**
+ * Числа, по которым калибруется барьер линии поля: ступень, охват полос,
+ * отношение глубины кандидата к глубине соседей и имя связавшего порога.
+ *
+ * Читаются они из результата детектора, а не из полосового опроса напрямую:
+ * калибровать надо то же число, которое решает судьбу линии на живом снимке,
+ * а отдельный вызов опроса меряет свой лист своими полосами.
+ */
+describe('detectRuling: отчёт линии поля', () => {
+  it('прямую черту нашёл профиль, и полосы не звались', () => {
+    const { marginLineReport } = detectRuling(createSyntheticSheet(LINED_SHEET));
+
+    expect(marginLineReport).toStrictEqual({
+      coverage: 0,
+      ratio: 0,
+      stage: 'profile',
+      threshold: null,
+    });
+  });
+
+  it('снесённую черту нашли полосы: охват и отношение идут в отчёт', () => {
+    const { marginLineReport } = detectRuling(
+      createSyntheticSheet(DRIFTING_MARGIN_LINE_SHEET),
+      { skewAngle: 0 }
+    );
+
+    expect(marginLineReport.stage).toBe('banded');
+    expect(marginLineReport.threshold).toBe('peers');
+    expect(marginLineReport.coverage).toBeGreaterThan(0.5);
+    expect(marginLineReport.ratio).toBeGreaterThan(1);
+  });
+
+  /**
+   * На листе без черты важно не то, что линия не завелась, а **чем** связан
+   * кандидат: подкрутка множителя на снимке, где его держит сигма-этаж или
+   * наименьшая глубина, меняет число, которое здесь ничего не решает.
+   */
+  it('на листе без черты назван порог, связавший кандидата', () => {
+    const { marginLineReport } = detectRuling(
+      createSyntheticSheet(ABSENT_MARGIN_LINE_SHEET),
+      { skewAngle: 0 }
+    );
+
+    expect(marginLineReport.stage).toBe('none');
+    expect(marginLineReport.threshold).toBe('peers');
+    expect(marginLineReport.ratio).toBeGreaterThan(0);
+  });
+
+  it('со снятой стороной полосы не звались, и порога в отчёте нет', () => {
+    const { marginLineReport } = detectRuling(
+      createSyntheticSheet(DRIFTING_MARGIN_LINE_SHEET),
+      { skewAngle: 0, marginLineSide: null }
+    );
+
+    expect(marginLineReport).toStrictEqual({
+      coverage: 0,
+      ratio: 0,
+      stage: 'none',
+      threshold: null,
+    });
   });
 });

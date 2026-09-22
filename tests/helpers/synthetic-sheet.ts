@@ -157,6 +157,27 @@ export type SyntheticArea = {
 };
 
 /**
+ * Вертикаль клетки, нарисованная глубже остальных: у тетради так выходит сгиб,
+ * край печати или дважды пропечатанная линия.
+ */
+export type SyntheticDeepColumn = {
+  /**
+   * Насколько вертикаль темнее бумаги, от 0 до 1. Берётся вместо
+   * `lineDarkness`, а не поверх неё: иначе глубина зависела бы от того, какой
+   * контраст у остальной клетки, и лист терял бы смысл опоры.
+   */
+  darkness: number;
+
+  /**
+   * Столбец поперёк разлиновки. Глубже рисуется ближайшая к нему вертикаль
+   * гребёнки, поэтому глубокая вертикаль всегда стоит ровно на фазе — иначе
+   * лист не отличал бы одиночную черту от линии клетки, а просто показывал
+   * вертикаль не на месте.
+   */
+  x: number;
+};
+
+/**
  * Сдвиги концов горизонтальных линий вправо от границ `margins`.
  */
 export type SyntheticLineEndsBend = {
@@ -447,6 +468,15 @@ export type SyntheticSheetParams = {
   marginLineBend?: SyntheticCurve;
 
   /**
+   * Снос линии поля по `x`: доля шага, на которую она уходит вправо от верхней
+   * границы области с линиями к нижней. Так черта поля получает собственный
+   * наклон, не равный наклону разлиновки, — как на тетради, где поле напечатано
+   * отдельным прогоном и к линиям не привязано. Складывается с
+   * `marginLineBend`. Точное положение — `computeSyntheticMarginLineX`.
+   */
+  marginLineDrift?: number;
+
+  /**
    * Изгиб концов горизонтальных линий. Точные концы —
    * `computeSyntheticLineEnds`.
    */
@@ -483,6 +513,19 @@ export type SyntheticSheetParams = {
    * наклона, к «через одну» отношения не имеющий.
    */
   everySecondLineArea?: SyntheticArea | null;
+
+  /**
+   * Прямоугольник, внутри которого от всех чернил остаётся доля `contrast`:
+   * блик, замазка или наклейка поверх листа. В отличие от `lowContrastArea`,
+   * гасит и линию поля: ради этого и заводится — линия под пятном обязана
+   * пропасть из полос целиком, а не побледнеть вместе с разлиновкой.
+   */
+  blotArea?: SyntheticArea | null;
+
+  /**
+   * Одна вертикаль клетки глубже остальных. Не задана — клетка ровная.
+   */
+  deepColumn?: SyntheticDeepColumn | null;
 
   /**
    * Полоса печатного текста поверх бумаги. Не задана — текста нет.
@@ -541,6 +584,37 @@ const DEGREES_TO_RADIANS = Math.PI / 180;
  */
 const computeNoShift = (): number => {
   return 0;
+};
+
+/**
+ * Снос линии поля в строке кадра: доля шага, набранная линейно от верхней
+ * границы области с линиями к нижней. Отсчёт по строкам кадра, а не вдоль
+ * разлиновки: черта со своим наклоном разлиновке не подчиняется, и её место в
+ * строке не зависит от того, какая линия эту строку пересекла.
+ *
+ * Нулевой снос отдаёт ровно ноль, не выражение: прибавление ноля растр не
+ * трогает, а деление на нулевую высоту области дало бы `NaN` там, где сноса
+ * нет вовсе.
+ *
+ * @param drift — снос по всей области в долях шага
+ * @param step — шаг разлиновки
+ * @param topEdge — верхняя граница области с линиями
+ * @param bottomEdge — нижняя граница области с линиями
+ * @param y — строка кадра
+ * @returns сдвиг линии поля вправо в пикселях
+ */
+const computeMarginLineDrift = (
+  drift: number,
+  step: number,
+  topEdge: number,
+  bottomEdge: number,
+  y: number
+): number => {
+  if (drift === 0) {
+    return 0;
+  }
+
+  return (drift * step * (y - topEdge)) / (bottomEdge - topEdge);
 };
 
 /**
@@ -645,6 +719,32 @@ const computeBentCombInk = (
   }
 
   return depthAt(closestCenter) * computeInk(closest, sigma);
+};
+
+/**
+ * Глубина вертикалей клетки, у которой одна линия темнее прочих. Глубина
+ * задана долей от `lineDarkness`, потому что отрисовка множит её на неё же;
+ * без разлиновки доля неопределима, и лист остаётся ровным.
+ *
+ * @param deepColumn — глубокая вертикаль
+ * @param lineDarkness — глубина остальных линий
+ * @param step — шаг разлиновки
+ * @returns глубина вертикали по её месту на гребёнке
+ */
+const createDeepColumnDepth = (
+  deepColumn: SyntheticDeepColumn,
+  lineDarkness: number,
+  step: number
+): SyntheticLineDepth => {
+  if (lineDarkness === 0) {
+    return computeFullDepth;
+  }
+
+  return (center: number): number => {
+    return Math.abs(center - deepColumn.x) < step / 2
+      ? deepColumn.darkness / lineDarkness
+      : 1;
+  };
 };
 
 const DEFAULT_SPIRAL_DARKNESS = 0.7;
@@ -1251,8 +1351,11 @@ export const createSyntheticSheet = (
     bend = null,
     columnBend = null,
     marginLineBend = computeNoShift,
+    marginLineDrift = 0,
     lineEndsBend = NO_LINE_ENDS_BEND,
     spiral = null,
+    blotArea = null,
+    deepColumn = null,
     outerRuling = null,
     lowContrastArea = null,
     everySecondLineArea = null,
@@ -1276,6 +1379,10 @@ export const createSyntheticSheet = (
     everySecondLineArea === null
       ? computeFullDepth
       : createHalvedDepth(everySecondLineArea, step, phase);
+  const columnDepthAt =
+    deepColumn === null
+      ? computeFullDepth
+      : createDeepColumnDepth(deepColumn, lineDarkness, step);
   const surfaceCornerRadius = surface === null ? 0 : surface.cornerRadius || 0;
   const surfaceGrain = surface === null ? 0 : surface.grain || 0;
   const surfaceVignette = surface === null ? 0 : surface.vignette || 0;
@@ -1286,7 +1393,12 @@ export const createSyntheticSheet = (
     const rowDarkness = lineDarkness * (1 - fade * Math.abs(heightShare));
     const rowLeftEdge = leftEdge + leftEndBend(y);
     const rowRightEdge = rightEdge + rightEndBend(y);
-    const rowMarginLineX = marginLineX === null ? null : marginLineX + marginLineBend(y);
+    const rowMarginLineX =
+      marginLineX === null
+        ? null
+        : marginLineX +
+          marginLineBend(y) +
+          computeMarginLineDrift(marginLineDrift, step, topEdge, bottomEdge, y);
 
     for (let x = 0; x < width; x += 1) {
       const alongLines = y - x * tangent;
@@ -1381,7 +1493,10 @@ export const createSyntheticSheet = (
                   phase,
                   sigma,
                   columnMargins.left,
-                  width - columnMargins.right
+                  width - columnMargins.right,
+                  Number.POSITIVE_INFINITY,
+                  0,
+                  columnDepthAt
                 )
               : computeBentCombInk(
                   acrossLines,
@@ -1394,7 +1509,8 @@ export const createSyntheticSheet = (
                   0,
                   (center) => {
                     return columnBend(center - y * tangent, y);
-                  }
+                  },
+                  columnDepthAt
                 );
 
           value -= lineDarkness * contrast * columnInk;
@@ -1428,6 +1544,12 @@ export const createSyntheticSheet = (
 
       if (spiral !== null) {
         value -= computeSpiralInk(spiral, x, y, sigma);
+      }
+
+      if (blotArea !== null && isOnPaper && isInsideArea(blotArea, x, y)) {
+        const paper = 1 - lighting * shade;
+
+        value = paper - (paper - value) * blotArea.contrast;
       }
 
       if (surfaceVignette !== 0) {
@@ -1520,13 +1642,31 @@ export const computeSyntheticMarginLineX = (
   params: SyntheticSheetParams,
   y: number
 ): number | null => {
-  const { angle = 0, marginLineX = null, marginLineBend = computeNoShift } = params;
+  const {
+    angle = 0,
+    height = DEFAULT_HEIGHT,
+    margins = DEFAULT_MARGINS,
+    marginLineBend = computeNoShift,
+    marginLineDrift = 0,
+    marginLineX = null,
+    step = DEFAULT_STEP,
+  } = params;
 
   if (marginLineX === null) {
     return null;
   }
 
-  return marginLineX + marginLineBend(y) - y * Math.tan(angle * DEGREES_TO_RADIANS);
+  const drift = computeMarginLineDrift(
+    marginLineDrift,
+    step,
+    margins.top,
+    height - margins.bottom,
+    y
+  );
+
+  return (
+    marginLineX + marginLineBend(y) + drift - y * Math.tan(angle * DEGREES_TO_RADIANS)
+  );
 };
 
 /**
@@ -1553,3 +1693,191 @@ export const computeSyntheticColumnX = (
 
   return straightX + columnBend(straightX, y);
 };
+
+/**
+ * Лист калибровки поиска линии поля: гребёнка и область с линиями заданы до
+ * числа, чтобы потребитель не повторял их литералами, а брал из самого листа.
+ */
+export type SyntheticCalibrationSheet = SyntheticSheetParams & {
+  /**
+   * Высота кадра.
+   */
+  height: number;
+
+  /**
+   * Границы области с линиями.
+   */
+  margins: PaperMargins;
+
+  /**
+   * Смещение линий по модулю шага.
+   */
+  phase: number;
+
+  /**
+   * Шаг разлиновки.
+   */
+  step: number;
+
+  /**
+   * Ширина кадра.
+   */
+  width: number;
+};
+
+/**
+ * Лист калибровки с чертой поля: её место и снос тоже заданы до числа.
+ */
+export type SyntheticMarginLineSheet = SyntheticCalibrationSheet & {
+  /**
+   * Снос черты по всей области в долях шага.
+   */
+  marginLineDrift: number;
+
+  /**
+   * Место черты у верхней границы области с линиями.
+   */
+  marginLineX: number;
+};
+
+/**
+ * Глубина черты поля у листов калибровки: вдвое больше глубины разлиновки.
+ * Отношение взято из живых снимков, где черта глубже децили соседних
+ * вертикалей в полтора — два с четвертью раза.
+ */
+const CALIBRATION_MARGIN_LINE_DARKNESS = 0.7;
+
+/**
+ * Лист калибровки с пятном: прямоугольник пятна задан до числа, чтобы
+ * потребитель знал, какие полосы обязаны потерять узел.
+ */
+export type SyntheticBlottedSheet = SyntheticCalibrationSheet & {
+  /**
+   * Пятно поверх листа.
+   */
+  blotArea: SyntheticArea;
+};
+
+/**
+ * Лист калибровки с глубокой вертикалью: её место и глубина заданы до числа.
+ */
+export type SyntheticDeepColumnSheet = SyntheticCalibrationSheet & {
+  /**
+   * Вертикаль, нарисованная глубже остальных.
+   */
+  deepColumn: SyntheticDeepColumn;
+};
+
+/**
+ * Общая основа листов калибровки: клетка, зерно, свет и контраст вертикалей у
+ * листа с чертой поля и у листа без неё обязаны совпадать до числа, иначе
+ * отрицательный класс отсекает сила сигнала, а не барьер глубины.
+ *
+ * Шаг крупный, а черта стоит между вертикалями: у измерения глубины вертикали
+ * остаётся полшага чистого фона с каждой стороны, и соседняя линия в окно не
+ * попадает.
+ */
+const CALIBRATION_SHEET_BASE: SyntheticCalibrationSheet = {
+  width: 600,
+  height: 800,
+  step: 40,
+  phase: 20,
+  kind: 'grid',
+  margins: { top: 60, right: 60, bottom: 60, left: 60 },
+  lineDarkness: 0.35,
+  marginLineDarkness: CALIBRATION_MARGIN_LINE_DARKNESS,
+  noise: 0.02,
+  lighting: 0.2,
+  seed: 23,
+};
+
+/**
+ * Лист с чертой поля, идущей под своим наклоном: за область с линиями она
+ * уходит вправо на полтора шага. Профиль столбцов во всю высоту такую черту
+ * размывает — на ней и проверяется полосовой поиск.
+ *
+ * Полтора шага — с запасом больше живого разброса: на снимках тетради, где
+ * поле напечатано отдельным прогоном, черта уходит на шаг с небольшим.
+ *
+ * Черта стоит в четверти шага от вертикали клетки в обоих концах области:
+ * попади её конец ровно на вертикаль, глубина в этом месте удвоилась бы, и
+ * замер мерил бы сумму двух линий.
+ */
+export const DRIFTING_MARGIN_LINE_SHEET: SyntheticMarginLineSheet = {
+  ...CALIBRATION_SHEET_BASE,
+  marginLineX: 110,
+  marginLineDrift: 1.5,
+};
+
+/**
+ * Отрицательный класс калибровки: тот же лист без черты поля. Вертикали клетки
+ * на нём одной глубины, поэтому кандидат в линию поля обязан упереться в
+ * барьер, а не в разницу контраста.
+ */
+export const ABSENT_MARGIN_LINE_SHEET: SyntheticCalibrationSheet = {
+  ...CALIBRATION_SHEET_BASE,
+  marginLineX: null,
+};
+
+/**
+ * Пятно поверх листа калибровки: четыре полосы подряд в середине области, по
+ * ширине — от черты со сносом до вертикали клетки на фазе, с запасом шире окна
+ * продолжения трассы с обеих сторон.
+ *
+ * Высота пятна — четыре полосы по полтора шага, отсчитанные от верхней границы
+ * области. С полосами детектора они не совпадают: он режет кадр на равные
+ * полосы от `y = 0`, и разбивок у него две. Трасса режет этот кадр на тринадцать
+ * полос по 61,54 px — пятно накрывает три из них целиком и в две соседние
+ * заходит краем. Полосовая ступень, охват которой пятно и сторожит, режет его
+ * на сорок полос по 20 px — пятно накрывает около двенадцати подряд. Важна не
+ * разбивка, а доля высоты: под пятном обязана скрыться такая её часть, чтобы
+ * профиль во всю высоту перестал брать барьер по соседям, — иначе лист-фантом
+ * ниже проверял бы не полосовую ступень, а всё ту же первую.
+ */
+const CALIBRATION_BLOT_AREA: SyntheticArea = {
+  left: 115,
+  top: 300,
+  right: 175,
+  bottom: 539,
+  contrast: 0.03,
+};
+
+/**
+ * Лист со снесённой чертой, пропавшей под пятном в четырёх полосах подряд.
+ *
+ * Пятно гасит и разлиновку: останься вертикали клетки видны, трасса в этих
+ * полосах перескочила бы на соседнюю вертикаль вместо того, чтобы потерять
+ * черту, и лист проверял бы не пропажу, а подмену.
+ */
+export const BLOTTED_MARGIN_LINE_SHEET: SyntheticMarginLineSheet & SyntheticBlottedSheet =
+  {
+    ...DRIFTING_MARGIN_LINE_SHEET,
+    blotArea: CALIBRATION_BLOT_AREA,
+  };
+
+/**
+ * Лист без черты поля, у которого одна вертикаль клетки глубже остальных
+ * ровно вдвое — как черта на листе со сносом. По глубине такой кандидат от
+ * черты неотличим, и связать его может только фаза гребёнки: вертикаль стоит
+ * на ней точно, а не рядом.
+ *
+ * Глубокая вертикаль стоит в крайней трети области, где и ищется линия поля,
+ * и в том же месте кадра, что черта листа со сносом: лист, где кандидат
+ * отсекался бы не фазой, а краем области поиска, опорой различителя не был бы.
+ */
+export const DEEP_COLUMN_SHEET: SyntheticDeepColumnSheet = {
+  ...ABSENT_MARGIN_LINE_SHEET,
+  deepColumn: { x: 140, darkness: CALIBRATION_MARGIN_LINE_DARKNESS },
+};
+
+/**
+ * Тот же фантом под тем же пятном, что и черта: в профиле во всю высоту он
+ * разбавлен пропажей и барьер по соседям не берёт, а по полосам, где виден,
+ * стоит вровень с чертой и по глубине, и по охвату. Отличить его от черты
+ * можно только фазой гребёнки — на этом листе и проверяется различитель.
+ */
+export const BLOTTED_DEEP_COLUMN_SHEET: SyntheticDeepColumnSheet & SyntheticBlottedSheet =
+  {
+    ...DEEP_COLUMN_SHEET,
+    blotArea: CALIBRATION_BLOT_AREA,
+  };

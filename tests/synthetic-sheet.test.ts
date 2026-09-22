@@ -3,9 +3,13 @@ import type {
   SheetImageData,
   SheetOutline,
 } from '@pages/Generator/lib/paper';
+import { LINE_SEARCH_SHARE } from '@pages/Generator/lib/paper/traceRulingLines';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ABSENT_MARGIN_LINE_SHEET,
+  BLOTTED_DEEP_COLUMN_SHEET,
+  BLOTTED_MARGIN_LINE_SHEET,
   computeSyntheticColumnX,
   computeSyntheticLineEnds,
   computeSyntheticLineY,
@@ -13,6 +17,10 @@ import {
   computeSyntheticOutline,
   computeSyntheticPerspective,
   createSyntheticSheet,
+  DEEP_COLUMN_SHEET,
+  DRIFTING_MARGIN_LINE_SHEET,
+  type SyntheticCalibrationSheet,
+  type SyntheticMarginLineSheet,
   type SyntheticSheetParams,
 } from './helpers/synthetic-sheet';
 
@@ -674,23 +682,32 @@ type RasterFixture = {
  * Отпечатки сняты на базе прогона и вписаны литералами: пересчитай их новым
  * кодом — и проверка перестанет что-либо держать.
  */
+const TILTED_MARGIN_LINE_DIGEST = 'a32a9a4b';
+
+/**
+ * Лист с наклонной разлиновкой и линией поля без сноса. Вынесен из списка
+ * отпечатков: на нём же проверяется, что нулевой снос не двигает ни одного
+ * пикселя, а отпечаток для этого нужен снятый до появления сноса.
+ */
+const TILTED_MARGIN_LINE_SHEET: SyntheticSheetParams = {
+  width: 300,
+  height: 400,
+  step: 21.5,
+  phase: 7.25,
+  angle: 1.3,
+  margins: { top: 30, right: 20, bottom: 40, left: 55 },
+  marginLineX: 48,
+  noise: 0.03,
+  lighting: 0.25,
+  seed: 7,
+};
+
 const RASTER_FIXTURES: RasterFixture[] = [
   { digest: 'c342f07d', name: 'defaults', params: {} },
   {
-    digest: 'a32a9a4b',
+    digest: TILTED_MARGIN_LINE_DIGEST,
     name: 'linedTilted',
-    params: {
-      width: 300,
-      height: 400,
-      step: 21.5,
-      phase: 7.25,
-      angle: 1.3,
-      margins: { top: 30, right: 20, bottom: 40, left: 55 },
-      marginLineX: 48,
-      noise: 0.03,
-      lighting: 0.25,
-      seed: 7,
-    },
+    params: TILTED_MARGIN_LINE_SHEET,
   },
   {
     digest: '3fb6f6ea',
@@ -1158,5 +1175,504 @@ describe('createSyntheticSheet: ловушки для поиска период�
       TRAP_STEP,
       TRAP_STEP,
     ]);
+  });
+});
+
+/**
+ * Снос черты поля в долях шага: полтора шага размывают профиль столбцов во всю
+ * высоту до неразличимости, на таком листе и проверяется полосовой поиск.
+ */
+const MARGIN_LINE_DRIFT_SHARE = 1.5;
+
+const DRIFT_ONLY_STEP = 40;
+
+/**
+ * Лист без разлиновки с одной снесённой чертой поля: геометрия сноса меряется
+ * там, где в окно центроида не попадает ни одна чужая линия.
+ */
+const DRIFTING_MARGIN_LINE_ONLY_SHEET: SyntheticSheetParams = {
+  width: 600,
+  height: 800,
+  step: DRIFT_ONLY_STEP,
+  kind: 'blank',
+  margins: { top: 60, right: 60, bottom: 60, left: 60 },
+  marginLineX: 110,
+  marginLineDrift: MARGIN_LINE_DRIFT_SHARE,
+};
+
+/**
+ * Последний столбец кадра: черта ищется по всей ширине, а не около эталонного
+ * места.
+ */
+const DRIFT_SEARCH_END = 599;
+
+/**
+ * Строки, на которых меряется снос: верхняя и нижняя границы области с
+ * линиями, между ними снос набирается целиком.
+ */
+const DRIFT_TOP_ROW = 60;
+
+const DRIFT_BOTTOM_ROW = 740;
+
+/**
+ * Строки замера на листе калибровки: середины промежутков между
+ * горизонтальными линиями. На самой линии чернила складываются с чертой, и
+ * замер мерил бы сумму двух.
+ */
+const CALIBRATION_TOP_ROW = 80;
+
+const CALIBRATION_BOTTOM_ROW = 720;
+
+/**
+ * Столбец, правее которого черта со сносом не достаёт ни сама, ни точками
+ * фона: левее него глубины вертикалей двух листов сравнивать нельзя.
+ */
+const BEYOND_MARGIN_LINE_X = 220;
+
+/**
+ * Разброс глубин вертикалей на листе без черты: не больше четверти от самой
+ * глубокой. Больший разброс означал бы, что отрицательный класс отсекается
+ * разницей контраста, а не барьером глубины.
+ */
+const MAX_COLUMN_DEPTH_SPREAD = 0.25;
+
+/**
+ * Порог «чернила есть»: девять десятых глубины черты. Ниже порога — только
+ * неравномерный свет и зерно.
+ */
+const MARGIN_LINE_INK = 0.63;
+
+/**
+ * Порог «чернил нет»: свет и зерно листа калибровки в сумме дают меньше.
+ */
+const BLANK_INK = 0.2;
+
+/**
+ * Столбец черты поля в строке: сначала самый тёмный столбец в заданном отрезке,
+ * потом центроид вокруг него. Отрезок, а не эталонное место: окно, поставленное
+ * по эталону, само задавало бы ответ, и сноса, которого отрисовка не применила,
+ * тест бы не заметил.
+ *
+ * @param image — кадр
+ * @param y — строка
+ * @param from — начало отрезка поиска
+ * @param to — конец отрезка поиска
+ * @returns столбец центра черты
+ */
+const findMarginLineColumn = (
+  image: SheetImageData,
+  y: number,
+  from: number,
+  to: number
+): number => {
+  let darkest = from;
+
+  for (let x = from; x <= to; x += 1) {
+    if (readInk(image, x, y) > readInk(image, darkest, y)) {
+      darkest = x;
+    }
+  }
+
+  return measureRowCenter(image, y, darkest);
+};
+
+/**
+ * Средняя яркость каждого столбца по области с линиями. Среднее по строкам, а
+ * не одна строка: вертикаль видна в каждой строке одинаково, а зерно и
+ * горизонтальные линии усредняются.
+ *
+ * @param image — кадр
+ * @param fromY — первая строка области
+ * @param toY — последняя строка области
+ * @returns яркость по столбцам
+ */
+const measureColumnProfile = (
+  image: SheetImageData,
+  fromY: number,
+  toY: number
+): number[] => {
+  const profile: number[] = [];
+
+  for (let x = 0; x < image.width; x += 1) {
+    let sum = 0;
+
+    for (let y = fromY; y <= toY; y += 1) {
+      sum += readLuminance(image, x, y);
+    }
+
+    profile.push(sum / (toY - fromY + 1));
+  }
+
+  return profile;
+};
+
+/**
+ * Глубина вертикали в профиле: фон берётся в полушаге по обе стороны, где
+ * вертикалей нет. Два отсчёта, а не один: неравномерный свет по ширине кадра
+ * линеен, и симметричная пара его снимает.
+ *
+ * @param profile — яркость по столбцам
+ * @param center — столбец вертикали
+ * @param half — полушага
+ * @returns насколько вертикаль темнее фона
+ */
+const measureColumnDepth = (profile: number[], center: number, half: number): number => {
+  const background = ((profile[center - half] || 0) + (profile[center + half] || 0)) / 2;
+
+  return background - (profile[center] || 0);
+};
+
+/**
+ * Глубины вертикалей клетки, у которых и центр, и обе точки фона лежат внутри
+ * области с линиями.
+ *
+ * @param image — кадр
+ * @param sheet — лист калибровки
+ * @param fromX — левая граница отбора вертикалей
+ * @returns глубины по возрастанию столбца
+ */
+const measureColumnDepths = (
+  image: SheetImageData,
+  sheet: SyntheticCalibrationSheet,
+  fromX: number
+): number[] => {
+  const { height, margins, phase, step, width } = sheet;
+  const profile = measureColumnProfile(image, margins.top, height - margins.bottom);
+  const half = step / 2;
+  const depths: number[] = [];
+
+  for (
+    let center = phase + Math.ceil((margins.left + half - phase) / step) * step;
+    center + half <= width - margins.right;
+    center += step
+  ) {
+    if (center >= fromX) {
+      depths.push(measureColumnDepth(profile, center, half));
+    }
+  }
+
+  return depths;
+};
+
+describe('createSyntheticSheet: снос линии поля', () => {
+  it('при нулевом сносе рисует прежний растр до пикселя', () => {
+    const image = createSyntheticSheet({
+      ...TILTED_MARGIN_LINE_SHEET,
+      marginLineDrift: 0,
+    });
+
+    expect(hashLuminance(image.luminance)).toBe(TILTED_MARGIN_LINE_DIGEST);
+  });
+
+  it('разводит столбец черты сверху и снизу области на заданное число пикселей', () => {
+    const image = createSyntheticSheet(DRIFTING_MARGIN_LINE_ONLY_SHEET);
+    const topX = findMarginLineColumn(image, DRIFT_TOP_ROW, 0, DRIFT_SEARCH_END);
+    const bottomX = findMarginLineColumn(image, DRIFT_BOTTOM_ROW, 0, DRIFT_SEARCH_END);
+
+    expect(bottomX - topX).toBeCloseTo(MARGIN_LINE_DRIFT_SHARE * DRIFT_ONLY_STEP, 2);
+  });
+
+  it('ведёт черту по эталону в каждой строке области', () => {
+    const image = createSyntheticSheet(DRIFTING_MARGIN_LINE_ONLY_SHEET);
+
+    [DRIFT_TOP_ROW, 400, DRIFT_BOTTOM_ROW].forEach((y) => {
+      const expectedX = computeSyntheticMarginLineX(DRIFTING_MARGIN_LINE_ONLY_SHEET, y);
+
+      expect(
+        Math.abs(findMarginLineColumn(image, y, 0, DRIFT_SEARCH_END) - (expectedX || 0))
+      ).toBeLessThan(CENTER_TOLERANCE);
+    });
+  });
+});
+
+describe('createSyntheticSheet: листы калибровки поиска линии поля', () => {
+  it('ведёт черту листа со сносом мимо её места у верхней границы', () => {
+    const image = createSyntheticSheet(DRIFTING_MARGIN_LINE_SHEET);
+    const { marginLineX } = DRIFTING_MARGIN_LINE_SHEET;
+
+    [CALIBRATION_TOP_ROW, CALIBRATION_BOTTOM_ROW].forEach((y) => {
+      const expectedX = computeSyntheticMarginLineX(DRIFTING_MARGIN_LINE_SHEET, y) || 0;
+
+      expect(readInk(image, Math.round(expectedX), y)).toBeGreaterThan(MARGIN_LINE_INK);
+    });
+    expect(readInk(image, marginLineX, CALIBRATION_BOTTOM_ROW)).toBeLessThan(BLANK_INK);
+  });
+
+  it('держит глубины вертикалей листа без черты в пределах четверти', () => {
+    const image = createSyntheticSheet(ABSENT_MARGIN_LINE_SHEET);
+    const depths = measureColumnDepths(image, ABSENT_MARGIN_LINE_SHEET, 0);
+    const deepest = Math.max(...depths);
+
+    expect(depths.length).toBeGreaterThan(5);
+    expect(Math.min(...depths)).toBeGreaterThan(BLANK_INK);
+    expect((deepest - Math.min(...depths)) / deepest).toBeLessThan(
+      MAX_COLUMN_DEPTH_SPREAD
+    );
+  });
+
+  it('не отличается от листа с чертой ни зерном, ни контрастом вертикалей', () => {
+    const absent = createSyntheticSheet(ABSENT_MARGIN_LINE_SHEET);
+    const drifting = createSyntheticSheet(DRIFTING_MARGIN_LINE_SHEET);
+
+    expect(computeSyntheticMarginLineX(ABSENT_MARGIN_LINE_SHEET, 400)).toBeNull();
+    expect(
+      measureColumnDepths(drifting, DRIFTING_MARGIN_LINE_SHEET, BEYOND_MARGIN_LINE_X)
+    ).toEqual(
+      measureColumnDepths(absent, ABSENT_MARGIN_LINE_SHEET, BEYOND_MARGIN_LINE_X)
+    );
+  });
+});
+
+/**
+ * Высота полосы трассировки в шагах — та же, по которой детектор ведёт
+ * вертикальную границу. Литералом: константа детектора не вынесена в его
+ * публичное API, а полосы обязаны совпасть, иначе пропажа черты пришлась бы на
+ * половины полос.
+ */
+const TRACE_BAND_STEPS = 1.5;
+
+/**
+ * Первая и следующая за последней полоса, накрытая пятном.
+ */
+const BLOTTED_BAND_FROM = 4;
+
+const BLOTTED_BAND_TO = 8;
+
+/**
+ * Доля типичной глубины, ниже которой черта под пятном обязана пропасть.
+ */
+const BLOTTED_DEPTH_SHARE = 0.1;
+
+/**
+ * Насколько глубина ловушки вправе разойтись с глубиной черты. Не ноль: центр
+ * черты дробный, и отсчёт в целом столбце берёт у гауссианы чуть меньше пика.
+ */
+const DEPTH_MATCH_SHARE = 0.1;
+
+/**
+ * Во сколько раз кандидат обязан быть глубже соседей, чтобы нынешний барьер
+ * его пропустил. Лист-ловушка барьер обязан проходить: иначе различителю фазы
+ * на нём нечего разбирать — кандидата свяжет глубина.
+ */
+const TRAP_DEPTH_RATIO = 1.5;
+
+/**
+ * Вертикаль клетки в стороне от пятна и от черты: по ней меряется глубина
+ * соседей той же полосовой мерой, что и у кандидата.
+ */
+const PEER_COLUMN_X = 300;
+
+/**
+ * Столбец черты или вертикали на строке кадра.
+ */
+type SyntheticColumnAt = (y: number) => number;
+
+/**
+ * Глубина тёмной вертикали в строке: фон — полушага по обе стороны.
+ *
+ * @param image — кадр
+ * @param x — столбец вертикали
+ * @param y — строка
+ * @param half — полушага, целое число столбцов
+ * @returns насколько вертикаль темнее фона
+ */
+const measureRowDepth = (
+  image: SheetImageData,
+  x: number,
+  y: number,
+  half: number
+): number => {
+  const background =
+    (readLuminance(image, x - half, y) + readLuminance(image, x + half, y)) / 2;
+
+  return background - readLuminance(image, x, y);
+};
+
+/**
+ * Глубина вертикали по полосам области с линиями. Столбец берётся на каждой
+ * строке заново, поэтому снос черты в полосе не размывает её глубину — так же
+ * её меряет и трасса.
+ *
+ * @param image — кадр
+ * @param sheet — лист калибровки
+ * @param columnAt — столбец вертикали на строке
+ * @returns глубины по полосам сверху вниз
+ */
+const measureBandDepths = (
+  image: SheetImageData,
+  sheet: SyntheticCalibrationSheet,
+  columnAt: SyntheticColumnAt
+): number[] => {
+  const { height, margins, step } = sheet;
+  const bandHeight = Math.round(TRACE_BAND_STEPS * step);
+  const half = Math.round(step / 2);
+  const depths: number[] = [];
+
+  for (
+    let top = margins.top;
+    top + bandHeight <= height - margins.bottom;
+    top += bandHeight
+  ) {
+    let sum = 0;
+
+    for (let y = top; y < top + bandHeight; y += 1) {
+      sum += measureRowDepth(image, Math.round(columnAt(y)), y, half);
+    }
+
+    depths.push(sum / bandHeight);
+  }
+
+  return depths;
+};
+
+/**
+ * Середина набора. Медиана, а не среднее и не наибольшее: там, где черта
+ * проходит по вертикали клетки, глубина в полосе складывается из двух линий, и
+ * одна такая полоса увела бы типичную глубину.
+ *
+ * @param values — набор
+ * @returns серединное значение
+ */
+const computeMedian = (values: number[]): number => {
+  const sorted = [...values].sort((first, second) => {
+    return first - second;
+  });
+
+  return sorted[Math.floor(sorted.length / 2)] || 0;
+};
+
+/**
+ * Столбец черты листа на строке кадра.
+ *
+ * @param sheet — лист с чертой
+ * @returns столбец черты на строке
+ */
+const createMarginLineColumnAt = (sheet: SyntheticMarginLineSheet): SyntheticColumnAt => {
+  return (y: number): number => {
+    return computeSyntheticMarginLineX(sheet, y) || 0;
+  };
+};
+
+describe('createSyntheticSheet: черта под пятном', () => {
+  it('гасит черту в четырёх полосах подряд ниже десятой доли типичной', () => {
+    const image = createSyntheticSheet(BLOTTED_MARGIN_LINE_SHEET);
+    const depths = measureBandDepths(
+      image,
+      BLOTTED_MARGIN_LINE_SHEET,
+      createMarginLineColumnAt(BLOTTED_MARGIN_LINE_SHEET)
+    );
+    const blotted = depths.slice(BLOTTED_BAND_FROM, BLOTTED_BAND_TO);
+    const typical = computeMedian([
+      ...depths.slice(0, BLOTTED_BAND_FROM),
+      ...depths.slice(BLOTTED_BAND_TO),
+    ]);
+
+    expect(blotted).toHaveLength(BLOTTED_BAND_TO - BLOTTED_BAND_FROM);
+    expect(typical).toBeGreaterThan(MARGIN_LINE_INK);
+    expect(Math.max(...blotted)).toBeLessThan(typical * BLOTTED_DEPTH_SHARE);
+  });
+
+  it('накрывает черту шире окна продолжения трассы с обеих сторон', () => {
+    const { blotArea, step } = BLOTTED_MARGIN_LINE_SHEET;
+    const columnAt = createMarginLineColumnAt(BLOTTED_MARGIN_LINE_SHEET);
+    const reach = step * LINE_SEARCH_SHARE;
+
+    [blotArea.top, blotArea.bottom].forEach((y) => {
+      expect(columnAt(y) - blotArea.left).toBeGreaterThan(reach);
+      expect(blotArea.right - columnAt(y)).toBeGreaterThan(reach);
+    });
+  });
+});
+
+describe('createSyntheticSheet: глубокая вертикаль на фазе гребёнки', () => {
+  it('ставит самую глубокую вертикаль ближе шестой доли шага к фазе', () => {
+    const image = createSyntheticSheet(DEEP_COLUMN_SHEET);
+    const { height, margins, phase, step, width } = DEEP_COLUMN_SHEET;
+    const profile = measureColumnProfile(image, margins.top, height - margins.bottom);
+    const half = Math.round(step / 2);
+    let deepest = margins.left + half;
+
+    for (let x = margins.left + half; x <= width - margins.right - half; x += 1) {
+      if (
+        measureColumnDepth(profile, x, half) > measureColumnDepth(profile, deepest, half)
+      ) {
+        deepest = x;
+      }
+    }
+
+    const offset = deepest - phase - Math.round((deepest - phase) / step) * step;
+
+    expect(deepest).toBe(DEEP_COLUMN_SHEET.deepColumn.x);
+    expect(Math.abs(offset)).toBeLessThan(step * LINE_SEARCH_SHARE);
+  });
+
+  it('поднимает глубокую вертикаль выше барьера по соседям', () => {
+    const image = createSyntheticSheet(DEEP_COLUMN_SHEET);
+    const depths = measureColumnDepths(image, DEEP_COLUMN_SHEET, 0);
+    const deepest = Math.max(...depths);
+    const peers = depths.filter((depth) => {
+      return depth < deepest;
+    });
+
+    expect(deepest / Math.max(...peers)).toBeGreaterThan(TRAP_DEPTH_RATIO);
+  });
+
+  it('не отличается от листа без черты ни зерном, ни контрастом соседей', () => {
+    const deep = createSyntheticSheet(DEEP_COLUMN_SHEET);
+    const absent = createSyntheticSheet(ABSENT_MARGIN_LINE_SHEET);
+
+    expect(computeSyntheticMarginLineX(DEEP_COLUMN_SHEET, 400)).toBeNull();
+    expect(measureColumnDepths(deep, DEEP_COLUMN_SHEET, BEYOND_MARGIN_LINE_X)).toEqual(
+      measureColumnDepths(absent, ABSENT_MARGIN_LINE_SHEET, BEYOND_MARGIN_LINE_X)
+    );
+  });
+
+  it('прячет фантом под пятном от профиля во всю высоту, оставляя его в полосах', () => {
+    const { deepColumn } = BLOTTED_DEEP_COLUMN_SHEET;
+    const image = createSyntheticSheet(BLOTTED_DEEP_COLUMN_SHEET);
+    const profileDepths = measureColumnDepths(image, BLOTTED_DEEP_COLUMN_SHEET, 0);
+    const trapProfile = Math.max(...profileDepths);
+    const peerProfile = Math.max(
+      ...profileDepths.filter((depth) => {
+        return depth < trapProfile;
+      })
+    );
+    const trapBands = measureBandDepths(image, BLOTTED_DEEP_COLUMN_SHEET, () => {
+      return deepColumn.x;
+    });
+    const peerBands = measureBandDepths(image, BLOTTED_DEEP_COLUMN_SHEET, () => {
+      return PEER_COLUMN_X;
+    });
+    const visible = [
+      ...trapBands.slice(0, BLOTTED_BAND_FROM),
+      ...trapBands.slice(BLOTTED_BAND_TO),
+    ];
+
+    expect(trapProfile / peerProfile).toBeLessThan(TRAP_DEPTH_RATIO);
+    expect(computeMedian(visible) / computeMedian(peerBands)).toBeGreaterThan(
+      TRAP_DEPTH_RATIO
+    );
+  });
+
+  it('держит глубину ловушки вровень с глубиной черты', () => {
+    const { deepColumn } = DEEP_COLUMN_SHEET;
+    const trap = computeMedian(
+      measureBandDepths(
+        createSyntheticSheet(DEEP_COLUMN_SHEET),
+        DEEP_COLUMN_SHEET,
+        () => {
+          return deepColumn.x;
+        }
+      )
+    );
+    const marginLine = computeMedian(
+      measureBandDepths(
+        createSyntheticSheet(DRIFTING_MARGIN_LINE_SHEET),
+        DRIFTING_MARGIN_LINE_SHEET,
+        createMarginLineColumnAt(DRIFTING_MARGIN_LINE_SHEET)
+      )
+    );
+
+    expect(Math.abs(trap - marginLine) / marginLine).toBeLessThan(DEPTH_MATCH_SHARE);
   });
 });

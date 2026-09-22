@@ -186,9 +186,52 @@ const MARGIN_LINE_SIGMA_FACTOR = 6;
 const MARGIN_LINE_MIN_DEPTH = 0.03;
 
 /**
+ * Высота полосы полосового опроса линии поля в шагах разлиновки. Вдвое ниже
+ * полосы трассировки: профиль полосы усредняет столбцы по всей её высоте, и
+ * черта, уходящая в сторону, размазывается в нём тем сильнее, чем полоса выше.
+ * На синтетическом листе со сносом в полтора шага полоса в полтора шага
+ * оставляет от глубины черты 0,373 при глубине соседних вертикалей 0,349 —
+ * отношение 1,07, барьер не берётся вовсе; полоса в половину шага оставляет
+ * 0,63, то есть отношение 1,80. Ниже половины прибавка уже вырождается: у
+ * четверти шага отношение 1,84.
+ */
+export const MARGIN_LINE_BAND_STEPS = 0.5;
+
+/**
+ * Наименьшая доля полос, в которых трасса обязана найти кандидата, чтобы его
+ * медианная глубина что-то значила. Случайная вертикаль, живущая в двух
+ * полосах из двадцати, и пересечение черты с вертикалью клетки, дающее один
+ * глубокий узел и ни одного продолжения, медиану берут по одному-двум узлам —
+ * и обходят по глубине черту, найденную во всех полосах. Пятая доля: черта,
+ * пропавшая под пятном в трети полос, ещё проходит, а узел-одиночка — нет.
+ */
+const MARGIN_LINE_BAND_COVERAGE = 0.2;
+
+/**
+ * Множитель, которым медиана отклонений переводится в оценку разброса: у
+ * нормального распределения медиана модуля отклонения меньше сигмы во столько
+ * же раз. Медиана, а не сам разброс: линии профиля — выбросы, и они раздули бы
+ * оценку, от которой сами же и отсчитываются.
+ */
+const NORMAL_MAD_FACTOR = 1.4826;
+
+/**
  * Край кадра, у которого стоит вертикальная линия поля.
  */
 export type MarginLineSide = 'left' | 'right';
+
+/**
+ * Порог, из которого сложился барьер линии поля, — тот, что связал кандидата.
+ *
+ * Барьер берётся наибольшим из трёх, и калибровать его вслепую нельзя: подкрутка
+ * множителя на снимке, где кандидата держал сигма-этаж или наименьшая глубина,
+ * меняет не то число.
+ *
+ * - `peers` — глубина соседних вертикалей, умноженная на `MARGIN_LINE_DEPTH_RATIO`;
+ * - `sigma` — разброс профиля, умноженный на `MARGIN_LINE_SIGMA_FACTOR`;
+ * - `minimum` — этаж `MARGIN_LINE_MIN_DEPTH`.
+ */
+export type MarginLineThreshold = 'peers' | 'sigma' | 'minimum';
 
 /**
  * Что сделала полосовая ступень замера периода на этом проходе.
@@ -203,6 +246,61 @@ export type MarginLineSide = 'left' | 'right';
  * - `measured` — шаг пришёл от полос, их числа лежат в `bandSteps`.
  */
 export type RulingBandedStage = 'skipped' | 'rejected' | 'measured';
+
+/**
+ * Ступень, которой найдена линия поля.
+ *
+ * - `profile` — профиль столбцов во всю высоту кадра; до полос дело не дошло;
+ * - `banded` — полосовой опрос: во всю высоту черта размазалась;
+ * - `none` — линии поля в разлиновке нет.
+ */
+export type MarginLineStage = 'profile' | 'banded' | 'none';
+
+/**
+ * Числа, по которым решилась судьба линии поля: ступень и оценки полосового
+ * опроса.
+ *
+ * Отчёт нужен калибровке барьера: она обязана крутить тот множитель, который
+ * на снимке и связал кандидата, а из одного `marginLineX` не видно ни ступени,
+ * ни порога. Запуск полосового опроса несётся именем порога, а не пустотой
+ * чисел: у незапущенного опроса и у опроса, не нашедшего ни одного кандидата,
+ * охват и отношение одинаково нулевые.
+ */
+export type MarginLineReport = {
+  /**
+   * Доля полос, в которых трасса нашла самого глубокого кандидата, — и тогда,
+   * когда барьер его отверг: барьер решает только, есть ли линия поля. `0` —
+   * полосовой опрос не звался или кандидатов не нашлось.
+   */
+  coverage: number;
+
+  /**
+   * Отношение глубины кандидата к глубине соседних вертикалей, снятых той же
+   * полосовой мерой. `0` — опрос не звался либо соседей не нашлось.
+   */
+  ratio: number;
+
+  /**
+   * Ступень, давшая линию поля.
+   */
+  stage: MarginLineStage;
+
+  /**
+   * Порог, связавший кандидата полосового опроса. `null` — опрос не звался:
+   * линию отдал профиль во всю высоту либо её не искали вовсе.
+   */
+  threshold: MarginLineThreshold | null;
+};
+
+/**
+ * Линии поля нет, и полосовой опрос за ней не ходил.
+ */
+export const NO_MARGIN_LINE_REPORT: MarginLineReport = {
+  coverage: 0,
+  ratio: 0,
+  stage: 'none',
+  threshold: null,
+};
 
 /**
  * Разлиновка вместе со стороной, у которой нашлась линия поля.
@@ -256,6 +354,15 @@ export type DetectedRuling = RulingDetection & {
    * измерения, а не характеристика листа, и в формат хранения не попадают.
    */
   bandedStage: RulingBandedStage;
+
+  /**
+   * Ступень поиска линии поля и числа полосового опроса.
+   *
+   * Поле живёт в `DetectedRuling`, а не в `RulingDetection`: это отчёт о том,
+   * как измерение пришло к своему числу, а не характеристика листа, и в
+   * формат хранения оно не попадает.
+   */
+  marginLineReport: MarginLineReport;
 
   /**
    * Шаги полос кадра, поперёк линий, сверху вниз, в пикселях изображения.
@@ -401,6 +508,7 @@ const toMissingDetection = (
     coreMargins: NO_MARGINS,
     ruledEdges: NO_RULED_EDGES,
     bandedStage,
+    marginLineReport: NO_MARGIN_LINE_REPORT,
     bandSteps: [],
     convergenceSeed: 0,
     convergenceOrigin: 0,
@@ -612,7 +720,7 @@ const findMarginLine = (
     return null;
   }
 
-  const background = computeMovingMedian(values, Math.max(3, Math.round(step)));
+  const background = computeMovingMedian(values, toBackgroundWindow(step));
   const depth = new Float64Array(size);
 
   for (let index = 0; index < size; index += 1) {
@@ -650,11 +758,10 @@ const findMarginLine = (
     middlePeaks.push(depth[index] || 0);
   }
 
-  const sigma = 1.4826 * computeMedian(deviations);
-  const threshold = Math.max(
-    MARGIN_LINE_DEPTH_RATIO * computeQuantile(middlePeaks, MARGIN_LINE_PEER_QUANTILE),
-    MARGIN_LINE_SIGMA_FACTOR * sigma,
-    MARGIN_LINE_MIN_DEPTH
+  const sigma = NORMAL_MAD_FACTOR * computeMedian(deviations);
+  const { value: threshold } = toMarginLineBarrier(
+    computeQuantile(middlePeaks, MARGIN_LINE_PEER_QUANTILE),
+    sigma
   );
   const leftDepth = leftIndex < 0 ? 0 : depth[leftIndex] || 0;
   const rightDepth = rightIndex < 0 ? 0 : depth[rightIndex] || 0;
@@ -811,10 +918,48 @@ const traceCombDepths = (
 };
 
 /**
- * Глубина провала в бине профиля полосы: насколько бин темнее скользящей
- * медианы окном в шаг. Медиана, а не среднее: узкий провал линии её не
- * сдвигает, а горизонталь, пересекающая полосу, меняется по столбцам
- * медленнее окна и уходит в фон.
+ * Профиль полосы вместе с мерой глубины провала в её бинах.
+ *
+ * Мера спрятана за функцией, потому что её потребителям нужны разные доли
+ * полосы: полосовому опросу — все бины разом, трассе линии — только окна
+ * вокруг предсказаний, сотые доли полосы. Проход по всей полосе ради трассы
+ * стоил бы дороже самой трассы, а счёт медианы заново в каждом бине опроса —
+ * дороже прохода. Числа у обеих мер одни: скользящая медиана в бине — та же
+ * медиана того же окна.
+ */
+type StripDepths = {
+  /**
+   * Глубина провала в бине полосы: насколько бин темнее скользящей медианы
+   * окном в шаг. Бин за пределами полосы — ноль.
+   */
+  depthAt: (bin: number) => number;
+
+  /**
+   * Профиль столбцов полосы.
+   */
+  strip: ShearedProfile;
+};
+
+/**
+ * Полоса, у которой глубины всех бинов уже сняты: полосовому опросу нужен
+ * весь ряд разом — и на пики, и на разброс.
+ */
+type MeasuredStrip = StripDepths & {
+  /**
+   * Глубина провала в каждом бине полосы.
+   */
+  depths: Float64Array;
+};
+
+/**
+ * Глубина провала в одном бине: насколько он темнее медианы окна вокруг себя.
+ * Медиана, а не среднее: узкий провал линии её не сдвигает, а горизонталь,
+ * пересекающая полосу, меняется по столбцам медленнее окна и уходит в фон.
+ *
+ * @param values — профиль столбцов одной полосы
+ * @param bin — бин полосы
+ * @param window — ширина окна фона в бинах
+ * @returns глубина провала в бине
  */
 const measureStripDepth = (values: Float64Array, bin: number, window: number): number => {
   const half = Math.max(1, Math.floor(window / 2));
@@ -826,6 +971,114 @@ const measureStripDepth = (values: Float64Array, bin: number, window: number): n
   }
 
   return computeMedian(slice) - (values[bin] || 0);
+};
+
+/**
+ * Ширина окна фона в бинах профиля столбцов — шаг разлиновки: одна мера для
+ * профиля во всю высоту, для глубин полос и для зоны у края полосы, где они
+ * не определены.
+ *
+ * @param step — шаг разлиновки в пикселях
+ * @returns ширина окна в бинах
+ */
+const toBackgroundWindow = (step: number): number => {
+  return Math.max(3, Math.round(step));
+};
+
+/**
+ * Стоит ли положение не ближе полуокна фона к обоим краям полосы.
+ *
+ * Ближе полуокна глубина не определена: окно скользящей медианы обрезано
+ * краем полосы и почти целиком лежит по одну сторону от бина. Если там обрыв
+ * бумаги — край вырезки, за которым уже тёмная обложка или стол, — медиана
+ * берёт уровень бумаги, и ступень «бумага → обложка» читается провалом, хотя
+ * по другую сторону от него бумаги нет. Такой кандидат — край листа, а не
+ * черта: настоящая линия поля стоит от края полосы на несколько шагов.
+ *
+ * @param bin — положение в бинах полосы
+ * @param size — число бинов полосы
+ * @param halfWindow — полуширина окна фона в бинах
+ * @returns `true` — глубина в этом положении мерилась полным окном
+ */
+const isInsideMeasuredBins = (bin: number, size: number, halfWindow: number): boolean => {
+  return bin >= halfWindow && size - 1 - bin >= halfWindow;
+};
+
+/**
+ * Глубины провалов во всех бинах полосы разом.
+ *
+ * @param strip — профиль столбцов одной полосы
+ * @param window — ширина окна фона в бинах
+ * @returns глубина провала в каждом бине полосы
+ */
+const measureStripDepths = (strip: ShearedProfile, window: number): Float64Array => {
+  const { values } = strip;
+  const background = computeMovingMedian(values, window);
+  const depths = new Float64Array(values.length);
+
+  for (let bin = 0; bin < values.length; bin += 1) {
+    depths[bin] = (background[bin] || 0) - (values[bin] || 0);
+  }
+
+  return depths;
+};
+
+/**
+ * Снимает глубины со всех полос разом — мера для полосового опроса.
+ *
+ * @param strips — профили столбцов по полосам
+ * @param step — шаг разлиновки в пикселях
+ * @returns полосы вместе с глубинами всех своих бинов
+ */
+const toStripDepths = (strips: ShearedProfile[], step: number): MeasuredStrip[] => {
+  const window = toBackgroundWindow(step);
+
+  return strips.map((strip) => {
+    const depths = measureStripDepths(strip, window);
+
+    return {
+      depthAt: (bin: number): number => {
+        return depths[bin] || 0;
+      },
+      depths,
+      strip,
+    };
+  });
+};
+
+/**
+ * Полосы с мерой глубины по требованию: бин считается при первом обращении и
+ * запоминается. Мера для трассы — она опрашивает окна вокруг предсказаний, и
+ * снятая наперёд полоса целиком ушла бы в мусор почти вся.
+ *
+ * @param strips — профили столбцов по полосам
+ * @param step — шаг разлиновки в пикселях
+ * @returns полосы с мерой глубины по требованию
+ */
+const toTracedStripDepths = (strips: ShearedProfile[], step: number): StripDepths[] => {
+  const window = toBackgroundWindow(step);
+
+  return strips.map((strip) => {
+    const { values } = strip;
+    const depths = new Float64Array(values.length);
+    const isMeasured = new Uint8Array(values.length);
+
+    return {
+      depthAt: (bin: number): number => {
+        if (bin < 0 || bin >= values.length) {
+          return 0;
+        }
+
+        if (!isMeasured[bin]) {
+          depths[bin] = measureStripDepth(values, bin, window);
+          isMeasured[bin] = 1;
+        }
+
+        return depths[bin] || 0;
+      },
+      strip,
+    };
+  });
 };
 
 /**
@@ -847,26 +1100,25 @@ type TraceNode = {
  * Самый глубокий провал в окне вокруг предсказанного положения линии,
  * уточнённый по соседним бинам.
  *
- * @param strip — профиль столбцов одной полосы
+ * @param band — полоса вместе с глубинами своих бинов
  * @param center — предсказанное положение линии в пикселях фотографии
  * @param reach — полуширина окна в пикселях
- * @param window — ширина окна фона в бинах
  * @returns положение и глубина провала; `null` — в окне нет ничего темнее фона
  */
 const findStripDip = (
-  strip: ShearedProfile,
+  band: StripDepths,
   center: number,
-  reach: number,
-  window: number
+  reach: number
 ): TraceNode | null => {
-  const { values, origin } = strip;
+  const { depthAt, strip } = band;
+  const { origin, values } = strip;
   const from = Math.max(1, Math.round(center - reach) - origin);
   const to = Math.min(values.length - 2, Math.round(center + reach) - origin);
   let peak = -1;
   let depth = 0;
 
   for (let bin = from; bin <= to; bin += 1) {
-    const binDepth = measureStripDepth(values, bin, window);
+    const binDepth = depthAt(bin);
 
     if (binDepth > depth) {
       peak = bin;
@@ -878,11 +1130,7 @@ const findStripDip = (
     return null;
   }
 
-  const offset = refinePeakOffset(
-    measureStripDepth(values, peak - 1, window),
-    depth,
-    measureStripDepth(values, peak + 1, window)
-  );
+  const offset = refinePeakOffset(depthAt(peak - 1), depth, depthAt(peak + 1));
 
   return { position: origin + peak + offset, depth };
 };
@@ -895,6 +1143,63 @@ const findStripDip = (
  * стартового не голосует, и трасса идёт дальше от последнего узла: у спирали
  * и края листа линии может не быть, а на клетке в окно попадают обычные
  * вертикали.
+ *
+ * @param bands — полосы с глубинами своих бинов, сверху вниз
+ * @param center — положение линии по профилю во всю высоту
+ * @param step — шаг разлиновки в пикселях
+ * @param minDepth — наименьшая глубина стартового узла
+ * @returns узел линии в каждой полосе сверху вниз; `null` на месте полосы, где
+ *   линия не нашлась, и во всех полосах — когда нет стартового узла
+ */
+const traceVerticalNodes = (
+  bands: StripDepths[],
+  center: number,
+  step: number,
+  minDepth: number
+): (TraceNode | null)[] => {
+  const starts = bands.map((band) => {
+    return findStripDip(band, center, step * TRACE_START_SHARE);
+  });
+  const startIndex = starts.reduce((best, node, index) => {
+    return node && node.depth > (starts[best]?.depth || 0) ? index : best;
+  }, 0);
+  const start = starts[startIndex];
+  const nodes = bands.map((): TraceNode | null => {
+    return null;
+  });
+
+  if (!start || start.depth < minDepth) {
+    return nodes;
+  }
+
+  const reach = step * LINE_SEARCH_SHARE;
+  const threshold = start.depth * TRACE_DEPTH_SHARE;
+
+  nodes[startIndex] = start;
+
+  for (const direction of [-1, 1]) {
+    let previous = start.position;
+
+    for (
+      let index = startIndex + direction;
+      index >= 0 && index < bands.length;
+      index += direction
+    ) {
+      const band = bands[index];
+      const node = band ? findStripDip(band, previous, reach) : null;
+
+      if (node && node.depth >= threshold) {
+        nodes[index] = node;
+        previous = node.position;
+      }
+    }
+  }
+
+  return nodes;
+};
+
+/**
+ * Положения вертикальной линии по полосам: та же трасса, только без глубин.
  *
  * @param strips — профили столбцов по полосам, сверху вниз
  * @param center — положение линии по профилю во всю высоту
@@ -909,48 +1214,14 @@ const traceVerticalLine = (
   step: number,
   minDepth: number
 ): number[] => {
-  const window = Math.max(3, Math.round(step));
-  const starts = strips.map((strip) => {
-    return findStripDip(strip, center, step * TRACE_START_SHARE, window);
-  });
-  const startIndex = starts.reduce((best, node, index) => {
-    return node && node.depth > (starts[best]?.depth || 0) ? index : best;
-  }, 0);
-  const start = starts[startIndex];
-
-  if (!start || start.depth < minDepth) {
-    return [];
-  }
-
-  const reach = step * LINE_SEARCH_SHARE;
-  const threshold = start.depth * TRACE_DEPTH_SHARE;
-  const positions = strips.map((): number | null => {
-    return null;
-  });
-
-  positions[startIndex] = start.position;
-
-  for (const direction of [-1, 1]) {
-    let previous = start.position;
-
-    for (
-      let index = startIndex + direction;
-      index >= 0 && index < strips.length;
-      index += direction
-    ) {
-      const strip = strips[index];
-      const node = strip ? findStripDip(strip, previous, reach, window) : null;
-
-      if (node && node.depth >= threshold) {
-        positions[index] = node.position;
-        previous = node.position;
-      }
-    }
-  }
-
-  return positions.reduce<number[]>((found, position) => {
-    if (position !== null) {
-      found.push(position);
+  return traceVerticalNodes(
+    toTracedStripDepths(strips, step),
+    center,
+    step,
+    minDepth
+  ).reduce<number[]>((found, node) => {
+    if (node) {
+      found.push(node.position);
     }
 
     return found;
@@ -1054,6 +1325,399 @@ const refineMarginLine = (
       throw new Error(`Неизвестная сторона линии поля: ${side}`);
     }
   }
+};
+
+/**
+ * Итог полосового опроса линии поля: сам кандидат и числа, по которым его
+ * приняли или отвергли.
+ *
+ * Числа идут наружу вместе с кандидатом, а не остаются внутри: барьер
+ * складывается из трёх порогов, и без имени связавшего порога и отношения
+ * глубин калибровка крутила бы число, которое на снимке ничего не решает.
+ */
+export type BandedMarginLine = {
+  /**
+   * Доля полос, в которых трасса нашла кандидата.
+   */
+  coverage: number;
+
+  /**
+   * Глубина кандидата — медиана по полосам, где трасса его нашла. Ноль —
+   * кандидатов не нашлось вовсе.
+   */
+  depth: number;
+
+  /**
+   * Кандидат в том же виде, в каком линию поля отдаёт профиль во всю высоту;
+   * `null` — барьер не взят или кандидатов нет.
+   */
+  line: MarginLine | null;
+
+  /**
+   * Отношение глубины кандидата к глубине соседей. Ноль — соседей не нашлось,
+   * и кандидата держит не барьер по ним.
+   */
+  ratio: number;
+
+  /**
+   * Порог, из которого сложился барьер.
+   */
+  threshold: MarginLineThreshold;
+};
+
+const NO_BANDED_MARGIN_LINE: BandedMarginLine = {
+  coverage: 0,
+  depth: 0,
+  line: null,
+  ratio: 0,
+  threshold: 'minimum',
+};
+
+/**
+ * Пики глубины полосы внутри зоны бинов.
+ *
+ * Пик мельче `MARGIN_LINE_MIN_DEPTH` в список не попадает: барьер никогда не
+ * бывает ниже этого этажа, а прослеживать зерно бумаги по всем полосам дорого.
+ *
+ * @param depths — глубины провалов полосы
+ * @param origin — координата нулевого бина в пикселях фотографии
+ * @param from — первый бин зоны
+ * @param to — последний бин зоны
+ * @returns пики зоны с уточнённым по соседним бинам положением
+ */
+const collectStripPeaks = (
+  depths: Float64Array,
+  origin: number,
+  from: number,
+  to: number
+): TraceNode[] => {
+  const peaks: TraceNode[] = [];
+  const last = Math.min(depths.length - 2, to);
+
+  for (let bin = Math.max(1, from); bin <= last; bin += 1) {
+    const depth = depths[bin] || 0;
+
+    if (!isDepthPeak(depths, bin) || depth < MARGIN_LINE_MIN_DEPTH) {
+      continue;
+    }
+
+    const offset = refinePeakOffset(depths[bin - 1] || 0, depth, depths[bin + 1] || 0);
+
+    peaks.push({ position: origin + bin + offset, depth });
+  }
+
+  return peaks;
+};
+
+/**
+ * Пики соседних полос, слитые по месту: одна и та же линия даёт пик в каждой
+ * полосе, и без слияния она прослеживалась бы трижды. Из пиков, стоящих ближе
+ * окна трассы друг к другу, остаётся глубочайший — трасса всё равно свела бы
+ * их в одну линию.
+ *
+ * @param peaks — пики нескольких полос
+ * @param reach — полуширина окна трассы в пикселях
+ * @returns пики без повторов, от глубокого к мелкому
+ */
+const mergeStripPeaks = (peaks: TraceNode[], reach: number): TraceNode[] => {
+  const sorted = [...peaks].sort((first, second) => {
+    return second.depth - first.depth;
+  });
+
+  return sorted.reduce<TraceNode[]>((kept, peak) => {
+    const isSeparate = kept.every((other) => {
+      return Math.abs(other.position - peak.position) > reach;
+    });
+
+    if (isSeparate) {
+      kept.push(peak);
+    }
+
+    return kept;
+  }, []);
+};
+
+/**
+ * Кандидат в линию поля, оценённый по своей трассе.
+ */
+type BandedCandidate = {
+  /**
+   * Доля полос, где трасса нашла кандидата.
+   */
+  coverage: number;
+
+  /**
+   * Медиана глубины по полосам, где трасса его нашла.
+   */
+  depth: number;
+
+  /**
+   * Самое внутреннее положение по трассе.
+   */
+  x: number;
+};
+
+/**
+ * Узлы трассы, разобранные по величинам: глубины — для оценки кандидата,
+ * положения — для выбора самого внутреннего из них.
+ */
+type TracedNodes = {
+  /**
+   * Глубины узлов по порядку найденных полос.
+   */
+  depths: number[];
+
+  /**
+   * Положения узлов по порядку найденных полос.
+   */
+  positions: number[];
+};
+
+/**
+ * Ведёт кандидата трассой по всем полосам и оценивает его медианой глубины и
+ * долей полос, где трасса его нашла.
+ *
+ * Медиана по трассе, а не среднее по полосам: линия под пятном, под текстом
+ * или у края области пропадает в отдельных полосах, и среднее с нулями
+ * повторило бы размывание профиля во всю высоту — то самое, ради снятия
+ * которого полосовой опрос и заводится.
+ *
+ * @param bands — полосы с глубинами своих бинов, сверху вниз
+ * @param center — положение кандидата в своей полосе
+ * @param step — шаг разлиновки в пикселях
+ * @param isLeftBorder — кандидат стоит слева от области письма
+ * @returns оценка кандидата; `null` — трасса его не нашла ни в одной полосе
+ */
+const traceBandedCandidate = (
+  bands: StripDepths[],
+  center: number,
+  step: number,
+  isLeftBorder: boolean
+): BandedCandidate | null => {
+  const nodes = traceVerticalNodes(bands, center, step, MARGIN_LINE_MIN_DEPTH);
+  const { depths, positions } = nodes.reduce<TracedNodes>(
+    (found, node) => {
+      if (node) {
+        found.depths.push(node.depth);
+        found.positions.push(node.position);
+      }
+
+      return found;
+    },
+    { depths: [], positions: [] }
+  );
+  const innermost = bands.length === 0 ? null : pickInnermost(positions, isLeftBorder);
+
+  if (innermost === null) {
+    return null;
+  }
+
+  return {
+    coverage: positions.length / bands.length,
+    depth: computeMedian(depths),
+    x: innermost,
+  };
+};
+
+/**
+ * Барьер глубины, с которого кандидат принимается за линию поля.
+ */
+type MarginLineBarrier = {
+  /**
+   * Порог, из которого сложился барьер.
+   */
+  threshold: MarginLineThreshold;
+
+  /**
+   * Глубина, с которой кандидат принимается.
+   */
+  value: number;
+};
+
+/**
+ * Складывает барьер глубины линии поля из трёх порогов.
+ *
+ * @param peerDepth — глубина соседних вертикалей
+ * @param sigma — разброс глубин полосы
+ * @returns барьер и имя связавшего порога
+ */
+const toMarginLineBarrier = (peerDepth: number, sigma: number): MarginLineBarrier => {
+  const peers = MARGIN_LINE_DEPTH_RATIO * peerDepth;
+  const spread = MARGIN_LINE_SIGMA_FACTOR * sigma;
+  const value = Math.max(peers, spread, MARGIN_LINE_MIN_DEPTH);
+
+  switch (value) {
+    case peers: {
+      return { threshold: 'peers', value };
+    }
+
+    case spread: {
+      return { threshold: 'sigma', value };
+    }
+
+    default: {
+      return { threshold: 'minimum', value };
+    }
+  }
+};
+
+/**
+ * Опрашивает полосы у одного края кадра.
+ *
+ * Кандидаты берутся из самой глубокой полосы и двух соседних с ней: список из
+ * одной полосы задавало бы пятно или строка текста, а список со всех полос
+ * разом стоил бы трассы каждому зерну бумаги. Соседи — те же пики средней
+ * трети тех же полос: барьер и кандидат обязаны меряться одной мерой, иначе их
+ * отношение сравнивает полосу с профилем во всю высоту и ничего не отделяет.
+ *
+ * @param bands — полосы в `MARGIN_LINE_BAND_STEPS` шага внутри области с
+ *   линиями вместе с глубинами своих бинов
+ * @param step — шаг разлиновки в пикселях
+ * @param width — ширина кадра в пикселях
+ * @param side — край, у которого идёт опрос
+ * @returns кандидат и числа, по которым он принят или отвергнут
+ */
+const pollMarginLineSide = (
+  bands: MeasuredStrip[],
+  step: number,
+  width: number,
+  side: MarginLineSide
+): BandedMarginLine => {
+  const first = bands[0]?.strip;
+  const size = first?.values.length || 0;
+  const origin = first?.origin || 0;
+  const leftEnd = Math.ceil(width * MARGIN_LINE_SEARCH_FRACTION) - origin;
+  const rightStart = Math.floor(width * (1 - MARGIN_LINE_SEARCH_FRACTION)) - origin;
+
+  if (size < 8 || leftEnd < 2 || rightStart > size - 2) {
+    return NO_BANDED_MARGIN_LINE;
+  }
+
+  const isLeft = side === 'left';
+  const searchFrom = isLeft ? 1 : rightStart + 1;
+  const searchTo = isLeft ? leftEnd - 1 : size - 2;
+  const zonePeaks = bands.map(({ depths }) => {
+    return collectStripPeaks(depths, origin, searchFrom, searchTo);
+  });
+  const zoneDepths = zonePeaks.map((peaks) => {
+    return peaks.reduce((deepestPeak, peak) => {
+      return Math.max(deepestPeak, peak.depth);
+    }, 0);
+  });
+  const deepest = zoneDepths.reduce((best, depth, index) => {
+    return depth > (zoneDepths[best] || 0) ? index : best;
+  }, 0);
+  const from = Math.max(0, deepest - 1);
+  const to = Math.min(bands.length, deepest + 2);
+  const reach = toLineReach(step);
+  const candidates = mergeStripPeaks(zonePeaks.slice(from, to).flat(), reach);
+  const peers = mergeStripPeaks(
+    bands.slice(from, to).flatMap(({ depths }) => {
+      return collectStripPeaks(depths, origin, leftEnd, rightStart);
+    }),
+    reach
+  );
+  const halfWindow = toBackgroundWindow(step) / 2;
+  const best = candidates.reduce<BandedCandidate | null>((leader, candidate) => {
+    const scored = traceBandedCandidate(bands, candidate.position, step, isLeft);
+    const isDeeper = scored !== null && (leader === null || scored.depth > leader.depth);
+
+    return isDeeper &&
+      scored.coverage >= MARGIN_LINE_BAND_COVERAGE &&
+      isInsideMeasuredBins(scored.x - origin, size, halfWindow)
+      ? scored
+      : leader;
+  }, null);
+  const peerDepths = peers.reduce<number[]>((depths, peer) => {
+    const scored = traceBandedCandidate(bands, peer.position, step, isLeft);
+
+    if (scored) {
+      depths.push(scored.depth);
+    }
+
+    return depths;
+  }, []);
+  const deviations = bands.slice(from, to).reduce<number[]>((values, { depths }) => {
+    for (let bin = 1; bin < size - 1; bin += 1) {
+      values.push(Math.abs(depths[bin] || 0));
+    }
+
+    return values;
+  }, []);
+  const peerDepth = computeQuantile(peerDepths, MARGIN_LINE_PEER_QUANTILE);
+  const { threshold, value } = toMarginLineBarrier(
+    peerDepth,
+    NORMAL_MAD_FACTOR * computeMedian(deviations)
+  );
+  const depth = best?.depth || 0;
+
+  return {
+    coverage: best?.coverage || 0,
+    depth,
+    line: best && depth >= value ? { x: best.x, side } : null,
+    ratio: peerDepth > 0 ? depth / peerDepth : 0,
+    threshold,
+  };
+};
+
+/**
+ * Ступень, которой досталась линия поля.
+ *
+ * @param profileLine — кандидат профиля во всю высоту; `null` — профиль черту
+ *   не нашёл
+ * @param marginLine — линия поля разлиновки; `null` — её нет
+ * @returns имя ступени
+ */
+const toMarginLineStage = (
+  profileLine: MarginLine | null,
+  marginLine: MarginLine | null
+): MarginLineStage => {
+  if (marginLine === null) {
+    return 'none';
+  }
+
+  return profileLine === null ? 'banded' : 'profile';
+};
+
+/**
+ * Ищет линию поля полосовым опросом — там, где профиль во всю высоту её
+ * размазал: на листе, снятом под углом или с изгибом бумаги, черта поля идёт
+ * под своим наклоном и в профиле, усреднённом по всей высоте кадра, тонет
+ * среди вертикалей клетки.
+ *
+ * Мера глубины здесь идёт вдоль самой линии: кандидат прослеживается по
+ * полосам и оценивается медианой глубины своих узлов, а не провалом в столбце
+ * кадра. Полосы поэтому и вдвое ниже трассировочных (`MARGIN_LINE_BAND_STEPS`):
+ * в высокой полосе черта, уходящая в сторону, размазывается по столбцам, и её
+ * глубина падает до глубины обычной вертикали.
+ *
+ * @param strips — профили столбцов по полосам в `MARGIN_LINE_BAND_STEPS` шага
+ *   внутри области с линиями
+ * @param step — шаг разлиновки в пикселях
+ * @param width — ширина кадра в пикселях
+ * @param side — край, которым ограничен поиск; не задан — оба
+ * @returns кандидат и числа, по которым он принят или отвергнут
+ */
+export const findBandedMarginLine = (
+  strips: ShearedProfile[],
+  step: number,
+  width: number,
+  side?: MarginLineSide
+): BandedMarginLine => {
+  /**
+   * Глубины снимаются один раз на обе стороны: полоса у них общая, а
+   * скользящая медиана по ней — самая дорогая часть опроса.
+   */
+  const bands = toStripDepths(strips, step);
+
+  if (side !== undefined) {
+    return pollMarginLineSide(bands, step, width, side);
+  }
+
+  const left = pollMarginLineSide(bands, step, width, 'left');
+  const right = pollMarginLineSide(bands, step, width, 'right');
+
+  return left.depth >= right.depth ? left : right;
 };
 
 /**
@@ -1776,13 +2440,63 @@ export const detectRuling = (
     closeProfileGaps(columnResponse.values, Math.round(period.step)),
     RULING_REGION_LEVEL
   );
+
+  /**
+   * Полосы опроса строятся лишь тогда, когда профиль во всю высоту линию не
+   * нашёл: на листе с прямой чертой и на листе без черты вовсе лишнего прохода
+   * по пикселям не случается.
+   *
+   * Область с линиями режется у середины кадра, а не у самого кандидата:
+   * кандидата до опроса ещё нет, а сдвиг среза на `lineX * tangent` внутри
+   * трети поиска не дотягивает и до одной полосы. Зато кандидат и соседи
+   * меряются по одним и тем же полосам — иначе их отношение сравнивало бы
+   * разные меры.
+   */
+  const selectPollStrips = (): ShearedProfile[] => {
+    const strips = buildStripProfiles(
+      image,
+      'vertical',
+      skewAngle,
+      guardAngle,
+      Math.max(
+        MIN_TRACE_STRIPS,
+        Math.round(image.height / (MARGIN_LINE_BAND_STEPS * period.step))
+      )
+    );
+    const [from, to] = toSpanStripRange(
+      strips.length,
+      image.height,
+      ruledSpan,
+      tangent,
+      image.width / 2
+    );
+
+    return strips.slice(from, to);
+  };
+
   const meanMarginLine =
     options.marginLineSide === null
       ? null
       : findMarginLine(columns, period.step, image.width, options.marginLineSide);
+  /**
+   * Полосовая ступень — вторая и только вторая: профиль во всю высоту отдаёт
+   * своё число сам, и на листе, где он линию нашёл, полосы ничего не решают.
+   * Гейт `marginLineSide` держит обе ступени разом: проход по выпрямленной
+   * копии не заводит линию, которой не нашёл проход по кадру.
+   */
+  const banded =
+    meanMarginLine === null && options.marginLineSide !== null
+      ? findBandedMarginLine(
+          selectPollStrips(),
+          period.step,
+          image.width,
+          options.marginLineSide
+        )
+      : null;
+  const foundMarginLine = meanMarginLine || (banded && banded.line);
   const marginLine =
-    meanMarginLine &&
-    refineMarginLine(meanMarginLine, selectTraceStrips(meanMarginLine.x), period.step);
+    foundMarginLine &&
+    refineMarginLine(foundMarginLine, selectTraceStrips(foundMarginLine.x), period.step);
   /**
    * Сторона, где разлиновка дошла до края профиля, — не найденное поле, а
    * ноль. Профиль начинается не с края кадра, а с защитной полосы, и край
@@ -1854,6 +2568,12 @@ export const detectRuling = (
     },
     ruledEdges,
     bandedStage,
+    marginLineReport: {
+      coverage: banded?.coverage || 0,
+      ratio: banded?.ratio || 0,
+      stage: toMarginLineStage(meanMarginLine, marginLine),
+      threshold: banded && banded.threshold,
+    },
     bandSteps,
     convergenceSeed,
     convergenceOrigin,

@@ -4,6 +4,8 @@ import { extname } from 'node:path';
 import type { Page } from 'playwright';
 
 import type {
+  MarginLineReport,
+  MarginLineThreshold,
   PaperMargins,
   SheetFrame,
   SheetImageData,
@@ -296,6 +298,75 @@ const describeBanded = (banded: SheetPhotoBandedReport | null): string => {
 };
 
 /**
+ * Имя порога, связавшего кандидата полосового опроса линии поля.
+ *
+ * @param threshold — порог барьера; `null` — опроса не было
+ * @returns имя порога для строки отчёта
+ */
+const describeMarginLineThreshold = (threshold: MarginLineThreshold | null): string => {
+  switch (threshold) {
+    case 'peers': {
+      return 'соседи';
+    }
+
+    case 'sigma': {
+      return 'сигма';
+    }
+
+    case 'minimum': {
+      return 'минимум';
+    }
+
+    case null: {
+      return 'нет';
+    }
+
+    default: {
+      throw new Error(`Unknown margin line threshold: ${threshold}`);
+    }
+  }
+};
+
+/**
+ * Ступень, которой досталась линия поля, и числа полосового опроса: охват
+ * полос, отношение глубины кандидата к глубине соседей и имя связавшего
+ * порога. Барьер складывается из трёх порогов, и без его имени калибровка
+ * крутила бы множитель, который на снимке ничего не решает.
+ *
+ * Отказ опроса печатается отдельно от его незапуска: линии поля нет в обоих
+ * случаях, а причина разная — кандидат не взял барьер или за ним не ходили.
+ *
+ * @param report — отчёт поиска линии поля
+ * @returns скобочная часть строки линии поля
+ */
+const describeMarginLineStage = ({
+  coverage,
+  ratio,
+  stage,
+  threshold,
+}: MarginLineReport): string => {
+  const numbers = `охват ${(coverage * 100).toFixed(0)} %, отношение ${ratio.toFixed(2)}, барьер ${describeMarginLineThreshold(threshold)}`;
+
+  switch (stage) {
+    case 'profile': {
+      return 'профиль';
+    }
+
+    case 'banded': {
+      return `полосы: ${numbers}`;
+    }
+
+    case 'none': {
+      return threshold === null ? 'полосы не звались' : `полосы отвергли: ${numbers}`;
+    }
+
+    default: {
+      throw new Error(`Unknown margin line stage: ${stage}`);
+    }
+  }
+};
+
+/**
  * Перспектива: шаг у крайних линий области и дрейф шага сверху вниз. Без
  * перспективы — расхождение гребёнок в долях шага: по нему видно, насколько
  * лист был далёк от порога.
@@ -379,7 +450,7 @@ export const describeSheetReport = ({
     `угол ${skewAngle.toFixed(2)}°`,
     describePerspective(ruling, measurement),
     `поля сверху/справа/снизу/слева ${marginsText}`,
-    `линия поля ${marginLineText}`,
+    `линия поля ${marginLineText} (${describeMarginLineStage(diagnostics.marginLine)})`,
     describeBend(ruling, diagnostics.bendFoundNodeShare),
     `свет ${lighting.isUsable ? 'пригоден' : 'непригоден'} (контраст ${lighting.contrast.toFixed(3)})`,
     `время ${Math.round(elapsedMs)} мс`,
