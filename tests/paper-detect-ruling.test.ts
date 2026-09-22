@@ -2,9 +2,24 @@ import { deriveGeometry, MARGIN_LINE_GAP_SHARE } from '@pages/Generator/lib/cali
 import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
 import { buildSheetRuling } from '@pages/Generator/lib/paper';
 import { detectRuling } from '@pages/Generator/lib/paper/detectRuling';
-import { describe, expect, it } from 'vitest';
+import { measureBandedPeriod } from '@pages/Generator/lib/paper/measureBandedPeriod';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSyntheticSheet } from './helpers/synthetic-sheet';
+
+/**
+ * Полосовая ступень подменяется собой же под счётчиком: проверять «полосы не
+ * вызывались» временем нельзя — оно шумит, а заглушкой нельзя, потому что тот
+ * же счётчик нужен и там, где ступень обязана отработать по-настоящему.
+ */
+vi.mock('@pages/Generator/lib/paper/measureBandedPeriod', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('@pages/Generator/lib/paper/measureBandedPeriod')
+    >();
+
+  return { ...actual, measureBandedPeriod: vi.fn(actual.measureBandedPeriod) };
+});
 
 /**
  * Допуск на шаг и поля в пикселях. Шаг усредняется по всей высоте кадра,
@@ -520,5 +535,181 @@ describe('detectRuling на листе без разлиновки', () => {
 
     expect(detection.isDetected).toBe(false);
     expect(detection.confidence).toBe(0);
+  });
+});
+
+/**
+ * Числа ровных листов, снятые на базе прогона `d7a3243` — до того, как в
+ * детекторе появилась полосовая ступень. Литералы, а не пересчёт новым кодом:
+ * эталон, посчитанный тем же кодом, который он сторожит, совпадёт с ним всегда.
+ */
+const LINED_BASELINE = {
+  kind: 'lined',
+  step: 23.491316066964366,
+  firstLinePhase: 8.093027738644842,
+  skewAngle: -0.000013770580182592695,
+  confidence: 0.9139974135923932,
+  bendFoundNodeShare: 1,
+  marginLineX: 96,
+  marginLineSide: 'left',
+  margins: {
+    top: 78.56697593953794,
+    right: 39.69826321339287,
+    bottom: 82.08065092206783,
+    left: 64.69826321339288,
+  },
+};
+
+const GRID_BASELINE = {
+  kind: 'grid',
+  step: 28.0362392628461,
+  firstLinePhase: 27.67337387261424,
+  skewAngle: 0,
+  confidence: 0.9277021290843693,
+  bendFoundNodeShare: 1,
+  marginLineX: null,
+  marginLineSide: null,
+  margins: {
+    top: 55.70961313546034,
+    right: 61.71860616468335,
+    bottom: 55.71055865900206,
+    left: 61.71860616468338,
+  },
+};
+
+/**
+ * Числа разлиновки, которые сторожит эталон ровного листа.
+ *
+ * @param detection — измеренная разлиновка
+ * @returns числа для сверки с эталоном
+ */
+const toBaselineNumbers = (detection: ReturnType<typeof detectRuling>) => {
+  const { kind, step, firstLinePhase, skewAngle, confidence } = detection;
+
+  return {
+    kind,
+    step,
+    firstLinePhase,
+    skewAngle,
+    confidence,
+    bendFoundNodeShare: detection.bendFoundNodeShare,
+    marginLineX: detection.marginLineX,
+    marginLineSide: detection.marginLineSide,
+    margins: detection.margins,
+  };
+};
+
+/**
+ * Лист с дрейфом шага на четверть по высоте кадра — та же четверть, что
+ * гарантирована спекой. Кадр вдвое выше листов остальных проверок: на
+ * полутысяче пикселей полос выходит три, а тут шесть — по ним видно и сам ряд
+ * шагов, и его наклон.
+ */
+const DRIFT_SHEET = {
+  width: 420,
+  height: 1120,
+  step: 24,
+  phase: 12,
+  stepDrift: 0.25,
+};
+
+/**
+ * Порог уверенности, при котором глобальный профиль этого листа считается
+ * невзятым.
+ *
+ * Синтетика рисует линии чище фотографии: профиль по всему кадру берёт дрейф в
+ * четверть с уверенностью 0,67, тогда как на живых снимках предмета приёмки он
+ * даёт 0,000…0,326 при пороге 0,35. Порог поднимается настройкой, потому что
+ * проверяется здесь не сила профиля, а то, что при невзятом пороге в дело
+ * вступают полосы и разлиновка всё равно находится.
+ */
+const BANDED_STAGE_THRESHOLD = 0.8;
+
+/**
+ * Уверенность глобального профиля на листе с дрейфом: ниже поднятого порога,
+ * выше штатного.
+ */
+const DRIFT_SHEET_CONFIDENCE = 0.6699176129653133;
+
+/**
+ * Число полос, на которые режется кадр листа с дрейфом, и середина его области
+ * с линиями: линии идут во весь кадр, поэтому начало отсчёта — середина высоты.
+ */
+const DRIFT_SHEET_BANDS = 6;
+
+const DRIFT_SHEET_ORIGIN = 560;
+
+/**
+ * Допустимое расхождение найденного шага с шагом в середине области с линиями,
+ * в долях шага. Число из спеки: «не больше чем на два процента».
+ */
+const DRIFT_STEP_TOLERANCE = 0.02;
+
+describe('detectRuling: полосовая ступень', () => {
+  beforeEach(() => {
+    vi.mocked(measureBandedPeriod).mockClear();
+  });
+
+  it('не зовёт полосы на листе в линейку и держит прежние числа до бита', () => {
+    const detection = detectRuling(createSyntheticSheet(LINED_SHEET));
+
+    expect(vi.mocked(measureBandedPeriod)).not.toHaveBeenCalled();
+    expect(toBaselineNumbers(detection)).toStrictEqual(LINED_BASELINE);
+    expect(detection.bandSteps).toStrictEqual([]);
+    expect(detection.convergenceSeed).toBe(0);
+    expect(detection.convergenceOrigin).toBe(0);
+  });
+
+  it('не зовёт полосы на листе в клетку и держит прежние числа до бита', () => {
+    const detection = detectRuling(createSyntheticSheet(GRID_SHEET));
+
+    expect(vi.mocked(measureBandedPeriod)).not.toHaveBeenCalled();
+    expect(toBaselineNumbers(detection)).toStrictEqual(GRID_BASELINE);
+    expect(detection.bandSteps).toStrictEqual([]);
+    expect(detection.convergenceSeed).toBe(0);
+    expect(detection.convergenceOrigin).toBe(0);
+  });
+
+  it('находит шаг листа с дрейфом, когда профиль по кадру порога не берёт', () => {
+    const detection = detectRuling(createSyntheticSheet(DRIFT_SHEET), {
+      confidenceThreshold: BANDED_STAGE_THRESHOLD,
+    });
+
+    expect(detection.confidence).toBe(DRIFT_SHEET_CONFIDENCE);
+    expect(vi.mocked(measureBandedPeriod)).toHaveBeenCalledTimes(1);
+    expect(detection.isDetected).toBe(true);
+    expect(Math.abs(detection.step - DRIFT_SHEET.step)).toBeLessThanOrEqual(
+      DRIFT_STEP_TOLERANCE * DRIFT_SHEET.step
+    );
+  });
+
+  it('отдаёт шаги полос и засев схождения от начала отсчёта полос', () => {
+    const { bandSteps, convergenceSeed, convergenceOrigin } = detectRuling(
+      createSyntheticSheet(DRIFT_SHEET),
+      { confidenceThreshold: BANDED_STAGE_THRESHOLD }
+    );
+
+    expect(bandSteps).toHaveLength(DRIFT_SHEET_BANDS);
+    expect(convergenceOrigin).toBe(DRIFT_SHEET_ORIGIN);
+
+    for (const [index, step] of bandSteps.entries()) {
+      expect(step).toBeGreaterThan(bandSteps[index - 1] || 0);
+    }
+
+    /**
+     * Засев — прирост шага на пиксель: четверть на весь кадр даёт около двух
+     * десятитысячных, и знак у него тот же, что у роста шага книзу.
+     */
+    expect(convergenceSeed).toBeGreaterThan(0);
+    expect(convergenceSeed * DRIFT_SHEET.height).toBeGreaterThan(0.15);
+    expect(convergenceSeed * DRIFT_SHEET.height).toBeLessThan(0.35);
+  });
+
+  it('оставляет тот же лист глобальному профилю при штатном пороге', () => {
+    const detection = detectRuling(createSyntheticSheet(DRIFT_SHEET));
+
+    expect(vi.mocked(measureBandedPeriod)).not.toHaveBeenCalled();
+    expect(detection.isDetected).toBe(true);
+    expect(detection.bandSteps).toStrictEqual([]);
   });
 });

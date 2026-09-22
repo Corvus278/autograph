@@ -1,6 +1,7 @@
 import { detectRulingBend, type RulingBendRegion } from './detectRulingBend';
 import { detectSkewAngle, MAX_SKEW_ANGLE, SKEW_ANGLE_STEP } from './detectSkewAngle';
 import { ANALYSIS_IMAGE_SIZE } from './downsampleSheetImage';
+import { measureBandedPeriod } from './measureBandedPeriod';
 import type { PaperMargins, RulingDetection, SheetImageData } from './paper.types';
 import { measureProfilePeriod, type ProfilePeriod } from './profilePeriod';
 import {
@@ -232,6 +233,34 @@ export type DetectedRuling = RulingDetection & {
    * краем вырезки.
    */
   ruledEdges: RuledEdges;
+
+  /**
+   * Шаги полос кадра, поперёк линий, сверху вниз, в пикселях изображения.
+   * Пусто — шаг взят глобальным профилем и полосы не считались.
+   *
+   * Поле живёт в `DetectedRuling`, а не в `RulingDetection`: полосы — ступень
+   * измерения, а не характеристика листа, и в формат хранения не попадают.
+   */
+  bandSteps: number[];
+
+  /**
+   * Засев схождения `k` из `step(u) = step·(1 + k·(u − convergenceOrigin))`,
+   * 1/px: во сколько раз на пиксель координаты вдоль линий растёт шаг. `0` —
+   * полосы не считались либо шаг по кадру не меняется.
+   */
+  convergenceSeed: number;
+
+  /**
+   * Начало отсчёта координаты вдоль линий, от которого взяты `step` и
+   * `convergenceSeed`, в пикселях изображения: середина области с линиями в
+   * столбце `x = 0`.
+   *
+   * Идёт наружу вместе с засевом, потому что потребитель отсчитывает свою
+   * координату от середины кадра: перенос `step(u)` с чужим началом ошибается
+   * на `k·Δ`, а `Δ` у листа с линиями в части кадра — не ноль. `0` при пустых
+   * `bandSteps`.
+   */
+  convergenceOrigin: number;
 };
 
 /**
@@ -325,6 +354,9 @@ const toMissingDetection = (confidence: number, skewAngle: number): DetectedRuli
     confidence,
     coreMargins: NO_MARGINS,
     ruledEdges: NO_RULED_EDGES,
+    bandSteps: [],
+    convergenceSeed: 0,
+    convergenceOrigin: 0,
   };
 };
 
@@ -1423,6 +1455,130 @@ const toBendRegion = (
 };
 
 /**
+ * Настройки замера периода разлиновки: те же, что у поиска разлиновки, но уже
+ * с подставленными значениями по умолчанию.
+ */
+type RulingPeriodOptions = Required<
+  Pick<
+    RulingDetectionOptions,
+    | 'minStep'
+    | 'maxStepFraction'
+    | 'confidenceThreshold'
+    | 'maxAngle'
+    | 'angleStep'
+    | 'maxAnalysisSize'
+  >
+>;
+
+/**
+ * Период разлиновки вместе с наклоном, на котором он измерен, и числами
+ * полосовой ступени.
+ */
+type RulingPeriodStage = {
+  /**
+   * Период найден. `false` — обе ступени отказали.
+   */
+  isDetected: boolean;
+
+  /**
+   * Наклон в градусах, на котором измерены шаг и фаза.
+   */
+  skewAngle: number;
+
+  /**
+   * Шаг, фаза и уверенность. Уверенность всегда от глобального профиля: по ней
+   * и видно, какая из ступеней дала шаг.
+   */
+  period: ProfilePeriod;
+
+  /**
+   * Шаги полос кадра сверху вниз; пусто — период взят глобальным профилем.
+   */
+  bandSteps: number[];
+
+  /**
+   * Засев схождения полосовой ступени, 1/px.
+   */
+  convergenceSeed: number;
+
+  /**
+   * Начало отсчёта координаты вдоль линий для шага и засева.
+   */
+  convergenceOrigin: number;
+};
+
+/**
+ * Меряет период разлиновки двумя ступенями. Первая — профиль яркости по всему
+ * кадру: пока он берёт порог уверенности, вторая не считается вовсе, и числа
+ * ровного листа остаются прежними до бита.
+ *
+ * Вторая ступень — полосы поперёк линий (`measureBandedPeriod`). Она нужна
+ * листу, у которого равномерной гребёнки на весь кадр не существует: шаг по
+ * кадру плывёт, общий профиль размывается и порога не берёт, а внутри полосы
+ * дрейфу накопиться негде.
+ *
+ * Наклон полосовая ступень приносит свой: фаза отсчитана в координате вдоль
+ * линий, и с чужим углом она указывает мимо линий. Поэтому шаг, фаза и наклон
+ * уходят наружу одной тройкой, даже если наклон был задан настройками.
+ *
+ * @param image — полутоновая выжимка фотографии листа
+ * @param skewAngle — наклон в градусах для глобального профиля
+ * @param options — настройки замера
+ * @returns период вместе с наклоном, на котором он измерен, и числами полос
+ */
+const measureRulingPeriod = (
+  image: SheetImageData,
+  skewAngle: number,
+  options: RulingPeriodOptions
+): RulingPeriodStage => {
+  const {
+    minStep,
+    maxStepFraction,
+    confidenceThreshold,
+    maxAngle,
+    angleStep,
+    maxAnalysisSize,
+  } = options;
+  const rows = buildShearedProfile(image, 'horizontal', skewAngle, Math.abs(skewAngle));
+  const maxStep = rows.values.length * maxStepFraction;
+  const period = measureProfilePeriod(rows, minStep, maxStep);
+  const flat: RulingPeriodStage = {
+    isDetected: period.step > 0 && period.confidence >= confidenceThreshold,
+    skewAngle,
+    period,
+    bandSteps: [],
+    convergenceSeed: 0,
+    convergenceOrigin: 0,
+  };
+
+  if (flat.isDetected) {
+    return flat;
+  }
+
+  const banded = measureBandedPeriod(image, {
+    minStep,
+    maxStep,
+    confidenceThreshold,
+    maxAngle,
+    angleStep,
+    maxAnalysisSize,
+  });
+
+  if (banded.step <= 0) {
+    return flat;
+  }
+
+  return {
+    isDetected: true,
+    skewAngle: banded.skewAngle,
+    period: { step: banded.step, phase: banded.phase, confidence: period.confidence },
+    bandSteps: banded.bandSteps,
+    convergenceSeed: banded.convergence,
+    convergenceOrigin: banded.origin,
+  };
+};
+
+/**
  * Измеряет разлиновку на фотографии листа: шаг — автокорреляцией профиля
  * яркости, снятого вдоль наклонных линий, фазу и поля — по тому же профилю,
  * вид разлиновки — повторным измерением поперёк.
@@ -1430,6 +1586,12 @@ const toBendRegion = (
  * Все длины — в пикселях переданного изображения: анализ идёт по нему, а не по
  * уменьшенной копии, поэтому шаг не нужно домножать на масштаб. Уменьшенная
  * копия используется только для свипа наклона, где масштаб роли не играет.
+ *
+ * Шаг ищется двумя ступенями (`measureRulingPeriod`): профилем по всему кадру,
+ * а когда тот не берёт порог уверенности — полосами поперёк линий. Уверенность
+ * в итоге всегда от профиля по кадру, поэтому у листа, шаг которого нашли
+ * полосы, она ниже порога: разлиновка найдена, а ступень видна по непустым
+ * `bandSteps`.
  *
  * Неудача не означает брак фотографии: `isDetected: false` включает ручной
  * ввод разлиновки, сама фотография остаётся годной.
@@ -1454,19 +1616,23 @@ export const detectRuling = (
    * Нулевой наклон — валидное измерение, а не «значения нет»: `||` погнал бы
    * ровный лист на повторный свип.
    */
-  const skewAngle =
+  const sweptAngle =
     options.skewAngle ?? detectSkewAngle(image, { maxAngle, angleStep, maxAnalysisSize });
-  const guardAngle = Math.abs(skewAngle);
-  const rows = buildShearedProfile(image, 'horizontal', skewAngle, guardAngle);
-  const period = measureProfilePeriod(
-    rows,
+  const stage = measureRulingPeriod(image, sweptAngle, {
     minStep,
-    rows.values.length * maxStepFraction
-  );
+    maxStepFraction,
+    confidenceThreshold,
+    maxAngle,
+    angleStep,
+    maxAnalysisSize,
+  });
+  const { period, bandSteps, convergenceSeed, convergenceOrigin, skewAngle } = stage;
 
-  if (period.step <= 0 || period.confidence < confidenceThreshold) {
+  if (!stage.isDetected) {
     return toMissingDetection(period.confidence, skewAngle);
   }
+
+  const guardAngle = Math.abs(skewAngle);
 
   const { columns, response: columnResponse } = buildColumnProfiles(
     image,
@@ -1618,5 +1784,8 @@ export const detectRuling = (
       bottom: ruledCore && !ruledCore.isAtProfileEnd ? image.height - ruledCore.last : 0,
     },
     ruledEdges,
+    bandSteps,
+    convergenceSeed,
+    convergenceOrigin,
   };
 };

@@ -57,8 +57,9 @@ const TABLE_OUTLINE: SheetOutline = {
 
 /**
  * Стол темнее бумаги и с крупным зерном: по всему кадру его ступени и шум
- * забивают разлиновку, и детектор, которому достался кадр целиком, шага не
- * находит.
+ * сбивают измерение. Шаг полосовая ступень детектора там ещё находит, а вид
+ * разлиновки и боковые поля уже уезжают — мерить лист можно только по вырезке
+ * внутри контура.
  */
 const TABLE_SURFACE = {
   outline: TABLE_OUTLINE,
@@ -417,8 +418,25 @@ const measure = (params: SyntheticSheetParams): SheetPhotoMeasurement => {
 };
 
 describe('measureSheetPhoto: лист на столе', () => {
-  it('по всему кадру детектор шага не находит — отрицательный контроль', () => {
-    expect(detectRuling(createSyntheticSheet(GRID_SHEET)).isDetected).toBe(false);
+  it('по всему кадру числа уезжают от чисел вырезки — отрицательный контроль', () => {
+    const frame = detectRuling(createSyntheticSheet(GRID_SHEET));
+    const { crop, detection } = detectInCrop(
+      GRID_SHEET,
+      computeSyntheticOutline(GRID_SHEET)
+    );
+    const expected = toFrameMargins(detection, crop);
+
+    /**
+     * Шаг по кадру целиком находится — его берёт полосовая ступень детектора,
+     * которой ступени и зерно стола не мешают. Вырезка нужна не ради шага:
+     * столбцы стола не дают опознать клетку, а боковая граница области с
+     * линиями садится на край стола, а не на край бумаги, и поле уезжает
+     * больше чем на треть шага.
+     */
+    expect(frame.isDetected).toBe(true);
+    expect(detection.kind).toBe('grid');
+    expect(frame.kind).not.toBe(detection.kind);
+    expect(Math.abs(frame.margins.left - expected.left)).toBeGreaterThan(GRID_STEP / 3);
   });
 
   it('шаг — как у прогона по вырезке, поля — переведённые поля вырезки', () => {

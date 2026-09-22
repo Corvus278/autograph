@@ -491,6 +491,91 @@ describe('measureBandedPeriod: ловушки без разлиновки', () =
   });
 });
 
+/**
+ * Лист, у которого шаг даёт пять полос разбивки: высота 560 при шаге 15
+ * оставляет в полосе семь с половиной шагов.
+ *
+ * Пять, а не четыре: медиана контраста считается по полосам с найденным
+ * периодом, и при двух вылинявших полосах из четырёх она уехала бы к ним самим
+ * — вместе с порогом, который от неё отсчитывается. Из пяти двух слабых
+ * медиана не замечает, и порог остаётся отсчитанным от здоровых полос.
+ */
+const FADED_EDGE_SHEET: SyntheticSheetParams = {
+  width: 420,
+  height: 560,
+  step: 15,
+  phase: 7.5,
+};
+
+const FADED_EDGE_BANDS = 5;
+
+/**
+ * Доля контраста, оставшаяся у линий в крайних полосах: столько держат
+ * слабейшие полосы худшего снимка предмета приёмки — у листа, снятого под
+ * углом, верх и низ почти без линий.
+ *
+ * Число выбрано у самого потолка `MIN_BAND_CONTRAST_SHARE`: при пороге 0,14 и
+ * выше крайние полосы гребёнку уже не держат, охват падает до трёх пятых, и
+ * замер отдаёт нулевой шаг. Так проверка сторожит порог сверху — снизу его
+ * держат ловушки, у которых пустые полосы дают 0,004 от медианы.
+ */
+const FADED_CONTRAST_SHARE = 0.13;
+
+/**
+ * Гасит контраст линий в полосе кадра: яркости сводятся к средней по полосе, и
+ * от прежнего отклонения остаётся доля `share`.
+ *
+ * Сжатие живёт в тесте, а не в хелпере синтетики: хелпер описывает лист, а
+ * здесь нужна ровно та мера, которой меряет само правило охвата, — отношение
+ * контраста полосы к контрасту здоровых полос.
+ *
+ * @param image — кадр, который правится на месте
+ * @param top — первая строка полосы
+ * @param bottom — строка, на которой полоса кончается, не включительно
+ * @param share — доля контраста, которая остаётся
+ */
+const fadeBand = (
+  image: SheetImageData,
+  top: number,
+  bottom: number,
+  share: number
+): void => {
+  const { width, luminance } = image;
+  const from = top * width;
+  const to = bottom * width;
+  let sum = 0;
+
+  for (let index = from; index < to; index += 1) {
+    sum += luminance[index] || 0;
+  }
+
+  const mean = sum / (to - from);
+
+  for (let index = from; index < to; index += 1) {
+    luminance[index] = mean + ((luminance[index] || 0) - mean) * share;
+  }
+};
+
+describe('measureBandedPeriod: потолок доли контраста', () => {
+  it('держит шаг листа, у которого крайние полосы вылиняли', () => {
+    const image = createSyntheticSheet(FADED_EDGE_SHEET);
+    const { height } = image;
+    const bandHeight = height / FADED_EDGE_BANDS;
+    const reference = measureStepReference(image, 0, height, height / 2);
+
+    fadeBand(image, 0, bandHeight, FADED_CONTRAST_SHARE);
+    fadeBand(image, height - bandHeight, height, FADED_CONTRAST_SHARE);
+
+    const { step, bandSteps } = measureBandedPeriod(image, PROBE_OPTIONS);
+
+    expect(bandSteps).toHaveLength(FADED_EDGE_BANDS);
+    expect(step).toBeGreaterThan(0);
+    expect(Math.abs(step - reference.step)).toBeLessThanOrEqual(
+      STEP_TOLERANCE * reference.step
+    );
+  });
+});
+
 describe('measureBandedPeriod: повторяемость', () => {
   it('отдаёт по одной выжимке те же числа до бита', () => {
     const image = createSyntheticSheet(DRIFT_SHEET);

@@ -434,8 +434,6 @@ describe('импорт фотографии листа', () => {
     const image = createSyntheticSheet(TABLE_PHOTO);
     const { step = 0 } = TABLE_PHOTO;
 
-    expect(detectRuling(image).isDetected).toBe(false);
-
     decodeSheetImage.mockResolvedValue(image);
 
     render(<SheetDialogHarness />);
