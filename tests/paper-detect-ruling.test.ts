@@ -2,6 +2,7 @@ import { deriveGeometry, MARGIN_LINE_GAP_SHARE } from '@pages/Generator/lib/cali
 import { FALLBACK_FONT_METRICS } from '@pages/Generator/lib/measure/measureFontMetrics';
 import { buildSheetRuling } from '@pages/Generator/lib/paper';
 import { detectRuling } from '@pages/Generator/lib/paper/detectRuling';
+import type { BandedPeriod } from '@pages/Generator/lib/paper/measureBandedPeriod';
 import { measureBandedPeriod } from '@pages/Generator/lib/paper/measureBandedPeriod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -645,6 +646,18 @@ const DRIFT_SHEET_ORIGIN = 560;
  */
 const DRIFT_STEP_TOLERANCE = 0.02;
 
+/**
+ * Отказ полосовой ступени: шага нет, чисел нет.
+ */
+const REJECTED_BANDED_PERIOD: BandedPeriod = {
+  step: 0,
+  phase: 0,
+  skewAngle: 0,
+  convergence: 0,
+  origin: 0,
+  bandSteps: [],
+};
+
 describe('detectRuling: полосовая ступень', () => {
   beforeEach(() => {
     vi.mocked(measureBandedPeriod).mockClear();
@@ -655,6 +668,7 @@ describe('detectRuling: полосовая ступень', () => {
 
     expect(vi.mocked(measureBandedPeriod)).not.toHaveBeenCalled();
     expect(toBaselineNumbers(detection)).toStrictEqual(LINED_BASELINE);
+    expect(detection.bandedStage).toBe('skipped');
     expect(detection.bandSteps).toStrictEqual([]);
     expect(detection.convergenceSeed).toBe(0);
     expect(detection.convergenceOrigin).toBe(0);
@@ -665,6 +679,7 @@ describe('detectRuling: полосовая ступень', () => {
 
     expect(vi.mocked(measureBandedPeriod)).not.toHaveBeenCalled();
     expect(toBaselineNumbers(detection)).toStrictEqual(GRID_BASELINE);
+    expect(detection.bandedStage).toBe('skipped');
     expect(detection.bandSteps).toStrictEqual([]);
     expect(detection.convergenceSeed).toBe(0);
     expect(detection.convergenceOrigin).toBe(0);
@@ -678,6 +693,7 @@ describe('detectRuling: полосовая ступень', () => {
     expect(detection.confidence).toBe(DRIFT_SHEET_CONFIDENCE);
     expect(vi.mocked(measureBandedPeriod)).toHaveBeenCalledTimes(1);
     expect(detection.isDetected).toBe(true);
+    expect(detection.bandedStage).toBe('measured');
     expect(Math.abs(detection.step - DRIFT_SHEET.step)).toBeLessThanOrEqual(
       DRIFT_STEP_TOLERANCE * DRIFT_SHEET.step
     );
@@ -710,6 +726,25 @@ describe('detectRuling: полосовая ступень', () => {
 
     expect(vi.mocked(measureBandedPeriod)).not.toHaveBeenCalled();
     expect(detection.isDetected).toBe(true);
+    expect(detection.bandedStage).toBe('skipped');
+    expect(detection.bandSteps).toStrictEqual([]);
+  });
+
+  /**
+   * Отказ ступени от её незапуска по шагам не отличить: пусты они и там, и
+   * там. Отчёт замера печатает эти случаи по-разному, и различает их поле, а
+   * не пустота массива.
+   */
+  it('полосы посчитались и шага не дали: ступень отказала', () => {
+    vi.mocked(measureBandedPeriod).mockReturnValueOnce(REJECTED_BANDED_PERIOD);
+
+    const detection = detectRuling(createSyntheticSheet(DRIFT_SHEET), {
+      confidenceThreshold: BANDED_STAGE_THRESHOLD,
+    });
+
+    expect(vi.mocked(measureBandedPeriod)).toHaveBeenCalledTimes(1);
+    expect(detection.isDetected).toBe(false);
+    expect(detection.bandedStage).toBe('rejected');
     expect(detection.bandSteps).toStrictEqual([]);
   });
 });

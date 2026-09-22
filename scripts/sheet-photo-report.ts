@@ -258,21 +258,41 @@ const describeOutline = (outline: SheetOutline | null, frame: SheetFrame): strin
  * Полосовая ступень замера периода: шаги согласившихся полос сверху вниз и их
  * дрейф. По ним сверяются пороги согласия полос и порог дрейфа перспективы,
  * поэтому числа печатаются как есть, а не пересчитываются из засева.
- * «Полосы не понадобились» — период взял профиль по всему кадру.
+ *
+ * Отказ ступени печатается отдельно от её незапуска: на снимке, ради разбора
+ * которого строка и заведена, шагов нет в обоих случаях, а причина разная —
+ * профиль по кадру взял порог или полосы не сошлись.
  */
 const describeBanded = (banded: SheetPhotoBandedReport | null): string => {
   if (!banded) {
-    return 'полосы не понадобились';
+    return 'полосы не считались: разлиновка не мерилась';
   }
 
-  const { steps, drift } = banded;
-  const stepsText = steps
-    .map((step) => {
-      return step.toFixed(2);
-    })
-    .join('/');
+  const { stage, steps, drift } = banded;
 
-  return `полосы: шаги ${stepsText} px, дрейф ${(drift * 100).toFixed(2)} %`;
+  switch (stage) {
+    case 'skipped': {
+      return 'полосы не понадобились';
+    }
+
+    case 'rejected': {
+      return 'полосы не сошлись';
+    }
+
+    case 'measured': {
+      const stepsText = steps
+        .map((step) => {
+          return step.toFixed(2);
+        })
+        .join('/');
+
+      return `полосы: шаги ${stepsText} px, дрейф ${(drift * 100).toFixed(2)} %`;
+    }
+
+    default: {
+      throw new Error(`Unknown banded stage: ${stage}`);
+    }
+  }
 };
 
 /**

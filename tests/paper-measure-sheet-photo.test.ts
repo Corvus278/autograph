@@ -949,6 +949,7 @@ const mockBandedPass = async (): Promise<BandedSeedOrigin> => {
 
     return {
       ...actual.detectRuling(image, options),
+      bandedStage: 'measured',
       bandSteps: BANDED_STEPS,
       convergenceSeed: BANDED_SEED,
       convergenceOrigin: seen.origin,
@@ -959,26 +960,26 @@ const mockBandedPass = async (): Promise<BandedSeedOrigin> => {
 };
 
 /**
- * Расхождение наклонов, при котором фаза второго прохода уезжает дальше
- * двадцатой шага: у вырезки шириной около семисот пикселей и шага 24 допуск —
- * пятая градуса.
+ * Подменяет первый проход детектора его же числами, у которых полосовая
+ * ступень отмечена отказавшей: шаг ей пришлось искать, и она его не дала.
  */
-const FOREIGN_SKEW_SHIFT = 1;
+const mockRejectedBandedPass = async (): Promise<void> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+
+  vi.mocked(detectRuling).mockImplementationOnce((image, options) => {
+    return { ...actual.detectRuling(image, options), bandedStage: 'rejected' };
+  });
+};
 
 /**
- * Расхождение наклонов внутри допуска — такое же, как у снимков тетради, где
- * полосовая ступень и подгонка перспективы расходятся на сотые градуса.
+ * Подменяет проход по выпрямленной копии проходом, шаг которого нашла
+ * полосовая ступень: первый проход идёт настоящим, у второго к его же числам
+ * добавляются шаги полос. На синтетическом листе профиль по кадру берёт порог
+ * с запасом, и до полос дело не доходит ни при каком дрейфе.
  */
-const PAIRED_SKEW_SHIFT = 0.01;
-
-/**
- * Подменяет наклон второго прохода: первый проход идёт настоящим, у прохода по
- * выпрямленной копии наклон сдвигается, как если бы его нашла ступень с другим
- * диапазоном свипа.
- *
- * @param shift — сдвиг наклона второго прохода в градусах
- */
-const mockRectifiedSkew = async (shift: number): Promise<void> => {
+const mockRectifiedBandedPass = async (): Promise<void> => {
   const actual = await vi.importActual<typeof DetectRulingModule>(
     '@pages/Generator/lib/paper/detectRuling'
   );
@@ -986,39 +987,54 @@ const mockRectifiedSkew = async (shift: number): Promise<void> => {
   vi.mocked(detectRuling)
     .mockImplementationOnce(actual.detectRuling)
     .mockImplementationOnce((image, options) => {
-      const detection = actual.detectRuling(image, options);
-
-      return { ...detection, skewAngle: detection.skewAngle + shift };
+      return {
+        ...actual.detectRuling(image, options),
+        bandedStage: 'measured',
+        bandSteps: BANDED_STEPS,
+      };
     });
 };
 
 describe('measureSheetPhoto: фаза и наклон второго прохода', () => {
-  it('наклон копии внутри допуска: числа второго прохода взяты', async () => {
-    await mockRectifiedSkew(PAIRED_SKEW_SHIFT);
+  /**
+   * Пару фазы и наклона держит сам детектор: заданный наклон он отдаёт наружу
+   * тем же числом, которым мерил шаг и фазу, а копия выпрямлена только от
+   * схождения и скос в ней сохранён. Отказ от прохода, шаг которого нашли
+   * полосы, стоил бы на живых снимках медианы промаха базовых линий
+   * 0,135…0,215 шага против 0,005…0,040.
+   */
+  it('шаг копии нашли полосы: числа второго прохода взяты', async () => {
+    await mockRectifiedBandedPass();
 
     const result = measure(LINED_DRIFT_SHEET);
 
     expect(result.diagnostics.perspective?.isRectifiedRulingMissing).toBe(false);
     expect(result.source.perspective).not.toBeNull();
   });
-
-  it('наклон копии чужой: числа второго прохода не берутся', async () => {
-    await mockRectifiedSkew(FOREIGN_SKEW_SHIFT);
-
-    const result = measure(LINED_DRIFT_SHEET);
-    const { detection } = detectInCrop(LINED_DRIFT_SHEET, result.outline);
-
-    expect(result.diagnostics.perspective?.isRectifiedRulingMissing).toBe(true);
-    expect(result.source.perspective).toBeNull();
-    expect(result.source.step).toBe(detection.step);
-    expect(result.source.skewAngle).toBe(detection.skewAngle);
-  });
 });
 
 describe('measureSheetPhoto: полосовая ступень', () => {
-  it('шаг взял профиль по кадру: полос в диагностике нет', () => {
-    expect(measure(LINED_DRIFT_SHEET).diagnostics.banded).toBeNull();
-    expect(measure(GRID_SHEET).diagnostics.banded).toBeNull();
+  it('шаг взял профиль по кадру: ступень не понадобилась', () => {
+    expect(measure(LINED_DRIFT_SHEET).diagnostics.banded).toStrictEqual({
+      stage: 'skipped',
+      steps: [],
+      drift: 0,
+    });
+    expect(measure(GRID_SHEET).diagnostics.banded?.stage).toBe('skipped');
+  });
+
+  /**
+   * Отказ ступени доезжает до диагностики своим состоянием: шаги у него и у
+   * незапущенной ступени одинаково пусты, а отчёт замера печатает разное.
+   */
+  it('полосы посчитались и шага не дали: отказ виден в диагностике', async () => {
+    await mockRejectedBandedPass();
+
+    expect(measure(LINED_DRIFT_SHEET).diagnostics.banded).toStrictEqual({
+      stage: 'rejected',
+      steps: [],
+      drift: 0,
+    });
   });
 
   it('шаг нашли полосы: их шаги и дрейф уходят в диагностику', async () => {
@@ -1026,6 +1042,7 @@ describe('measureSheetPhoto: полосовая ступень', () => {
 
     const { banded } = measure(LINED_DRIFT_SHEET).diagnostics;
 
+    expect(banded?.stage).toBe('measured');
     expect(banded?.steps).toStrictEqual(BANDED_STEPS);
     expect(banded?.drift).toBeCloseTo(BANDED_DRIFT, 12);
   });

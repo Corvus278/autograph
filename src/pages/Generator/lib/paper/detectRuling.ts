@@ -198,6 +198,20 @@ export type MarginLineSide = 'left' | 'right';
  * `paper.types.ts`: `RulingDetection` ведёт владелец public API, к нему заявка
  * на `marginLineSide`.
  */
+/**
+ * Что сделала полосовая ступень замера периода на этом проходе.
+ *
+ * Факт её запуска несётся отдельно от результата: по пустым `bandSteps` они не
+ * различаются, а отчёту замера нужно сказать, почему шагов нет — ступень не
+ * понадобилась или не сошлась.
+ *
+ * - `skipped` — профиль по всему кадру взял порог уверенности, и до полос дело
+ *   не дошло;
+ * - `rejected` — полосы посчитались и шага не дали;
+ * - `measured` — шаг пришёл от полос, их числа лежат в `bandSteps`.
+ */
+export type RulingBandedStage = 'skipped' | 'rejected' | 'measured';
+
 export type DetectedRuling = RulingDetection & {
   /**
    * Край, у которого стоит линия поля. `null` — линии поля нет.
@@ -235,18 +249,23 @@ export type DetectedRuling = RulingDetection & {
   ruledEdges: RuledEdges;
 
   /**
-   * Шаги полос кадра, поперёк линий, сверху вниз, в пикселях изображения.
-   * Пусто — шаг взят глобальным профилем и полосы не считались.
+   * Что сделала полосовая ступень: не понадобилась, отказала или дала шаг.
    *
    * Поле живёт в `DetectedRuling`, а не в `RulingDetection`: полосы — ступень
    * измерения, а не характеристика листа, и в формат хранения не попадают.
+   */
+  bandedStage: RulingBandedStage;
+
+  /**
+   * Шаги полос кадра, поперёк линий, сверху вниз, в пикселях изображения.
+   * Пусто у любой ступени, кроме `measured`.
    */
   bandSteps: number[];
 
   /**
    * Засев схождения `k` из `step(u) = step·(1 + k·(u − convergenceOrigin))`,
    * 1/px: во сколько раз на пиксель координаты вдоль линий растёт шаг. `0` —
-   * полосы не считались либо шаг по кадру не меняется.
+   * шаг пришёл не от полос либо шаг по кадру не меняется.
    */
   convergenceSeed: number;
 
@@ -257,8 +276,8 @@ export type DetectedRuling = RulingDetection & {
    *
    * Идёт наружу вместе с засевом, потому что потребитель отсчитывает свою
    * координату от середины кадра: перенос `step(u)` с чужим началом ошибается
-   * на `k·Δ`, а `Δ` у листа с линиями в части кадра — не ноль. `0` при пустых
-   * `bandSteps`.
+   * на `k·Δ`, а `Δ` у листа с линиями в части кадра — не ноль. `0` у любой
+   * ступени, кроме `measured`.
    */
   convergenceOrigin: number;
 };
@@ -360,7 +379,11 @@ export type RulingDetectionOptions = {
   marginLineSide?: MarginLineSide | null;
 };
 
-const toMissingDetection = (confidence: number, skewAngle: number): DetectedRuling => {
+const toMissingDetection = (
+  confidence: number,
+  skewAngle: number,
+  bandedStage: RulingBandedStage
+): DetectedRuling => {
   return {
     isDetected: false,
     skewAngle,
@@ -376,6 +399,7 @@ const toMissingDetection = (confidence: number, skewAngle: number): DetectedRuli
     confidence,
     coreMargins: NO_MARGINS,
     ruledEdges: NO_RULED_EDGES,
+    bandedStage,
     bandSteps: [],
     convergenceSeed: 0,
     convergenceOrigin: 0,
@@ -1521,7 +1545,12 @@ type RulingPeriodStage = {
   period: ProfilePeriod;
 
   /**
-   * Шаги полос кадра сверху вниз; пусто — период взят глобальным профилем.
+   * Что сделала полосовая ступень: не понадобилась, отказала или дала шаг.
+   */
+  bandedStage: RulingBandedStage;
+
+  /**
+   * Шаги полос кадра сверху вниз; пусто у любой ступени, кроме `measured`.
    */
   bandSteps: number[];
 
@@ -1584,6 +1613,7 @@ const measureRulingPeriod = (
     isDetected: period.step > 0 && period.confidence >= confidenceThreshold,
     skewAngle,
     period,
+    bandedStage: 'skipped',
     bandSteps: [],
     convergenceSeed: 0,
     convergenceOrigin: 0,
@@ -1603,13 +1633,14 @@ const measureRulingPeriod = (
   });
 
   if (banded.step <= 0) {
-    return flat;
+    return { ...flat, bandedStage: 'rejected' };
   }
 
   return {
     isDetected: true,
     skewAngle: options.skewAngle ?? banded.skewAngle,
     period: { step: banded.step, phase: banded.phase, confidence: period.confidence },
+    bandedStage: 'measured',
     bandSteps: banded.bandSteps,
     convergenceSeed: banded.convergence,
     convergenceOrigin: banded.origin,
@@ -1665,10 +1696,17 @@ export const detectRuling = (
     maxAnalysisSize,
     ...(options.skewAngle === undefined ? {} : { skewAngle: options.skewAngle }),
   });
-  const { period, bandSteps, convergenceSeed, convergenceOrigin, skewAngle } = stage;
+  const {
+    period,
+    bandedStage,
+    bandSteps,
+    convergenceSeed,
+    convergenceOrigin,
+    skewAngle,
+  } = stage;
 
   if (!stage.isDetected) {
-    return toMissingDetection(period.confidence, skewAngle);
+    return toMissingDetection(period.confidence, skewAngle, bandedStage);
   }
 
   const guardAngle = Math.abs(skewAngle);
@@ -1826,6 +1864,7 @@ export const detectRuling = (
       bottom: ruledCore && !ruledCore.isAtProfileEnd ? image.height - ruledCore.last : 0,
     },
     ruledEdges,
+    bandedStage,
     bandSteps,
     convergenceSeed,
     convergenceOrigin,
