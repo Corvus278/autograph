@@ -1,4 +1,5 @@
 import type {
+  MarginLineSide,
   PaperMargins,
   RulingKind,
   RulingPerspective,
@@ -175,6 +176,42 @@ export type SyntheticDeepColumn = {
    * вертикаль не на месте.
    */
   x: number;
+};
+
+/**
+ * Вертикаль вне гребёнки клетки: сгиб, край печати или след линейки между
+ * линиями клетки. Лежит на бумаге и потому сходится вместе с клеткой.
+ */
+export type SyntheticStrayColumn = {
+  /**
+   * Место поперёк разлиновки на середине высоты кадра — там же, где
+   * отсчитываются вертикали клетки при схождении.
+   */
+  x: number;
+
+  /**
+   * Насколько вертикаль темнее бумаги, от 0 до 1.
+   */
+  darkness: number;
+};
+
+/**
+ * Схождение вертикалей клетки: лист снят с завалом назад, и промежуток между
+ * вертикалями растёт от верха кадра к низу. Строго по столбцу кадра идёт
+ * только вертикаль у столбца схождения, остальные наклонены тем сильнее, чем
+ * дальше от него.
+ */
+export type SyntheticColumnConvergence = {
+  /**
+   * Столбец кадра, где вертикаль клетки идёт строго вертикально.
+   */
+  x: number;
+
+  /**
+   * Доля, на которую промежуток между вертикалями у нижнего края кадра больше,
+   * чем у верхнего. Отрицательная — промежуток растёт кверху.
+   */
+  share: number;
 };
 
 /**
@@ -563,6 +600,27 @@ export type SyntheticSheetParams = {
    * её мерить.
    */
   lineConvergence?: number;
+
+  /**
+   * Схождение вертикалей клетки. Не задано — вертикали параллельны. Столбцы
+   * профиля детектор сдвигает на один наклон на всю высоту, поэтому в профиле
+   * во всю высоту вертикаль у столбца схождения остаётся резкой, а дальние
+   * размываются, — глубина клетки по ширине кадра становится неоднородной.
+   * Точное положение вертикали — `computeSyntheticColumnX`.
+   */
+  columnConvergence?: SyntheticColumnConvergence | null;
+
+  /**
+   * Вертикаль вне гребёнки клетки. Рисуется только на листе в клетку, в той же
+   * области по высоте, что и вертикали клетки. Не задана — её нет.
+   */
+  strayColumn?: SyntheticStrayColumn | null;
+
+  /**
+   * Доля яркости, которую бумага теряет от левого края кадра к правому:
+   * градиент света по ширине. Отрицательная — темнеет левый край.
+   */
+  widthLighting?: number;
 };
 
 const DEFAULT_WIDTH = 420;
@@ -1185,6 +1243,42 @@ const computeVignetteScale = (
 };
 
 /**
+ * Растяжение промежутков между вертикалями клетки на строке кадра. На середине
+ * высоты кадра оно равно единице, поэтому место вертикали на гребёнке — её
+ * столбец на середине высоты, а отношение растяжений у нижнего и верхнего
+ * краёв кадра — ровно `1 + share`.
+ *
+ * @param share — доля прироста промежутка от верхнего края кадра к нижнему
+ * @param height — высота кадра
+ * @param y — строка кадра
+ * @returns множитель промежутков на этой строке
+ */
+const computeColumnScale = (share: number, height: number, y: number): number => {
+  return 1 + ((2 * share) / (height * (2 + share))) * (y - height / 2);
+};
+
+/**
+ * Потеря яркости бумаги от градиента света по ширине.
+ *
+ * @param widthLighting — доля яркости, теряемая от левого края к правому;
+ *   отрицательная — от правого к левому
+ * @param x — столбец кадра
+ * @param width — ширина кадра
+ * @returns на сколько бумага в этом столбце темнее самого светлого края
+ */
+const computeWidthLightingLoss = (
+  widthLighting: number,
+  x: number,
+  width: number
+): number => {
+  if (widthLighting >= 0) {
+    return (widthLighting * x) / width;
+  }
+
+  return -widthLighting * (1 - x / width);
+};
+
+/**
  * Эталонный контур листа в форме модели. Без поверхности — весь кадр: лист
  * снят обрезанным по краям.
  *
@@ -1361,6 +1455,9 @@ export const createSyntheticSheet = (
     everySecondLineArea = null,
     textBand = null,
     surface = null,
+    columnConvergence = null,
+    strayColumn = null,
+    widthLighting = 0,
   } = params;
   const { left: leftEndBend = computeNoShift, right: rightEndBend = computeNoShift } =
     lineEndsBend;
@@ -1399,6 +1496,16 @@ export const createSyntheticSheet = (
         : marginLineX +
           marginLineBend(y) +
           computeMarginLineDrift(marginLineDrift, step, topEdge, bottomEdge, y);
+    /**
+     * Схождение пересчитывает столбец в место на гребёнке, а сигму — в ту же
+     * меру: расстояние до вертикали меряется в пикселях строки, и ширина линии
+     * от растяжения промежутков не меняется.
+     */
+    const columnScale =
+      columnConvergence === null
+        ? 1
+        : computeColumnScale(columnConvergence.share, height, y);
+    const columnSigma = sigma / columnScale;
 
     for (let x = 0; x < width; x += 1) {
       const alongLines = y - x * tangent;
@@ -1418,7 +1525,16 @@ export const createSyntheticSheet = (
           ? computeSurfaceBrightness(surface, edges, x, y)
           : null;
       const isOnPaper = surfaceValue === null;
-      let value = surfaceValue === null ? 1 - lighting * shade : surfaceValue;
+      /**
+       * Потеря от градиента по ширине вычитается только там, где она задана:
+       * вычитание нуля растр не трогает, но ветка держит прежний лист без
+       * лишнего вызова на каждый пиксель.
+       */
+      const paper =
+        widthLighting === 0
+          ? 1 - lighting * shade
+          : 1 - lighting * shade - computeWidthLightingLoss(widthLighting, x, width);
+      let value = surfaceValue === null ? paper : surfaceValue;
 
       if (kind !== 'blank' && isOnPaper) {
         const isAcrossInside = acrossLines >= rowLeftEdge && acrossLines <= rowRightEdge;
@@ -1485,13 +1601,22 @@ export const createSyntheticSheet = (
         }
 
         if (kind === 'grid' && isAlongInside) {
+          /**
+           * Без схождения столбец берётся как есть, а не через деление на
+           * единицу: `xv + (a − xv) / 1` в плавающей точке не всегда равно `a`,
+           * и лист без схождения поменял бы растр.
+           */
+          const columnCoordinate =
+            columnConvergence === null
+              ? acrossLines
+              : columnConvergence.x + (acrossLines - columnConvergence.x) / columnScale;
           const columnInk =
             columnBend === null
               ? computeCombInk(
-                  acrossLines,
+                  columnCoordinate,
                   step,
                   phase,
-                  sigma,
+                  columnSigma,
                   columnMargins.left,
                   width - columnMargins.right,
                   Number.POSITIVE_INFINITY,
@@ -1499,21 +1624,28 @@ export const createSyntheticSheet = (
                   columnDepthAt
                 )
               : computeBentCombInk(
-                  acrossLines,
+                  columnCoordinate,
                   step,
                   phase,
-                  sigma,
+                  columnSigma,
                   columnMargins.left,
                   width - columnMargins.right,
                   Number.POSITIVE_INFINITY,
                   0,
                   (center) => {
-                    return columnBend(center - y * tangent, y);
+                    return columnBend(center - y * tangent, y) / columnScale;
                   },
                   columnDepthAt
                 );
 
           value -= lineDarkness * contrast * columnInk;
+
+          if (strayColumn !== null) {
+            value -=
+              strayColumn.darkness *
+              contrast *
+              computeInk(columnCoordinate - strayColumn.x, columnSigma);
+          }
         }
       }
 
@@ -1547,8 +1679,6 @@ export const createSyntheticSheet = (
       }
 
       if (blotArea !== null && isOnPaper && isInsideArea(blotArea, x, y)) {
-        const paper = 1 - lighting * shade;
-
         value = paper - (paper - value) * blotArea.contrast;
       }
 
@@ -1670,7 +1800,9 @@ export const computeSyntheticMarginLineX = (
 };
 
 /**
- * Эталонный центр вертикальной линии клетки на строке кадра.
+ * Эталонный центр вертикальной линии клетки на строке кадра. При схождении
+ * `phase + index * step` — место вертикали на середине высоты кадра; дробный
+ * номер даёт место между вертикалями — так ставится `strayColumn`.
  *
  * @param params — описание листа
  * @param index — номер вертикали на гребёнке: поперёк разлиновки она лежит на
@@ -1684,12 +1816,21 @@ export const computeSyntheticColumnX = (
   y: number
 ): number => {
   const {
+    height = DEFAULT_HEIGHT,
     step = DEFAULT_STEP,
     phase = 0,
     angle = 0,
     columnBend = computeNoShift,
+    columnConvergence = null,
   } = params;
-  const straightX = phase + index * step - y * Math.tan(angle * DEGREES_TO_RADIANS);
+  const center = phase + index * step;
+  const across =
+    columnConvergence === null
+      ? center
+      : columnConvergence.x +
+        (center - columnConvergence.x) *
+          computeColumnScale(columnConvergence.share, height, y);
+  const straightX = across - y * Math.tan(angle * DEGREES_TO_RADIANS);
 
   return straightX + columnBend(straightX, y);
 };
@@ -1881,3 +2022,356 @@ export const BLOTTED_DEEP_COLUMN_SHEET: SyntheticDeepColumnSheet & SyntheticBlot
     ...DEEP_COLUMN_SHEET,
     blotArea: CALIBRATION_BLOT_AREA,
   };
+
+/**
+ * Основа листов со схождением клетки. Свет по диагонали выключен, а линии
+ * светлее, чем у листов калибровки: вставная вертикаль в два с половиной раза
+ * глубже клетки на краю с градиентом света обязана остаться выше нуля яркости,
+ * иначе её отношение к соседям срезалось бы о пол. Черта вдвое глубже клетки,
+ * как у листов калибровки.
+ *
+ * Шаг и ширина дают тридцать вертикалей на кадр — столько же шагов, сколько
+ * на ширине `IMG_1813`, — а фаза ставит вертикаль в 0,15 шага за началом
+ * правой трети поиска, как фантом на этом снимке.
+ */
+const CONVERGING_SHEET_BASE: SyntheticCalibrationSheet = {
+  width: 900,
+  height: 1200,
+  step: 30,
+  phase: 4.5,
+  kind: 'grid',
+  margins: { top: 60, right: 45, bottom: 60, left: 45 },
+  lineDarkness: 0.25,
+  marginLineDarkness: 0.5,
+  noise: 0.02,
+  seed: 23,
+};
+
+/**
+ * Лист со схождением клетки: столбец схождения задан до числа.
+ */
+export type SyntheticConvergingGridSheet = SyntheticMarginLineSheet & {
+  /**
+   * Схождение вертикалей клетки.
+   */
+  columnConvergence: SyntheticColumnConvergence;
+};
+
+/**
+ * Причина фантома `IMG_1813`, воспроизведённая без вставной вертикали: черта
+ * со сносом в полтора шага у левой стороны, ровная клетка у правой и
+ * схождение клетки.
+ *
+ * Столбец схождения стоит на вертикали в шаге до начала правой трети: самая
+ * резкая вертикаль профиля во всю высоту попадает в среднюю треть, а соседняя
+ * с ней, почти такая же резкая, — в правую. Дальние вертикали средней трети
+ * размыты, и дециль её пиков соседям правой трети уже не ровня. Черту же
+ * профиль во всю высоту размывает сносом, и отдать линию ей он не может.
+ *
+ * Доля схождения — пятая часть: промежуток между вертикалями у нижнего края
+ * кадра на пятую часть больше, чем у верхнего.
+ */
+export const CONVERGING_GRID_SHEET: SyntheticConvergingGridSheet = {
+  ...CONVERGING_SHEET_BASE,
+  marginLineX: 132,
+  marginLineDrift: 1.5,
+  columnConvergence: { x: 574.5, share: 0.2 },
+};
+
+/**
+ * Доля ширины кадра, которую занимает крайняя треть поиска линии поля, — та
+ * же, что у детектора. Литералом, а не импортом: исходник её не экспортирует,
+ * а генератор ставит вставную вертикаль относительно границы трети, как её
+ * видит детектор на момент генерации.
+ */
+const HELD_OUT_SEARCH_SHARE = 1 / 3;
+
+/**
+ * Место черты у верхней границы области с линиями: в четверти шага внутрь от
+ * вертикали клетки, чтобы при нулевом сносе черта не сливалась с вертикалью.
+ */
+const HELD_OUT_MARGIN_LINE_X: Record<MarginLineSide, number> = {
+  left: 132,
+  right: 777,
+};
+
+/**
+ * Пятно гасит чернила почти целиком, как у листов калибровки.
+ */
+const HELD_OUT_BLOT_CONTRAST = 0.03;
+
+/**
+ * Вставная ложная вертикаль листа удержанной выборки.
+ */
+export type HeldOutFalseColumn = {
+  /**
+   * Сторона, в крайней трети которой стоит вертикаль.
+   */
+  side: MarginLineSide;
+
+  /**
+   * Во сколько раз вертикаль глубже соседних вертикалей клетки. Ноль —
+   * вертикали нет.
+   */
+  ratio: number;
+
+  /**
+   * Отступ от границы трети поиска к краю листа в шагах: малый — «у границы
+   * трети», несколько шагов — «в глубине трети». Вертикаль ставится на
+   * ближайшее к краю листа место не ближе этого отступа.
+   */
+  offset: number;
+
+  /**
+   * На фазе клетки — вертикаль клетки, пропечатанная глубже. Вне фазы —
+   * отдельная линия ровно посередине между вертикалями клетки.
+   */
+  isOnPhase: boolean;
+};
+
+/**
+ * Пятно на черте: полоса по высоте области с линиями, доли от её верха.
+ */
+export type HeldOutBlot = {
+  /**
+   * Верх пятна, доля высоты области с линиями.
+   */
+  top: number;
+
+  /**
+   * Низ пятна, доля высоты области с линиями.
+   */
+  bottom: number;
+};
+
+/**
+ * Параметры листа удержанной выборки «черта у одной стороны, ровная клетка у
+ * другой» по решению 5 `false-margin-line`. Все длины — в шагах и долях, чтобы
+ * параметры разыгрывались из seed без знания размеров кадра.
+ */
+export type HeldOutSheetParams = {
+  /**
+   * Сторона черты поля. `null` — черты нет.
+   */
+  marginLineSide: MarginLineSide | null;
+
+  /**
+   * Снос черты от верхней границы области с линиями к нижней, в шагах;
+   * положительный — внутрь листа.
+   */
+  marginLineDrift: number;
+
+  /**
+   * Доля, на которую промежуток между вертикалями клетки у нижнего края кадра
+   * больше, чем у верхнего. Ноль — вертикали параллельны.
+   */
+  convergence: number;
+
+  /**
+   * Столбец схождения клетки, доля ширины кадра.
+   */
+  vanishingShare: number;
+
+  /**
+   * Вставная ложная вертикаль. `null` или нулевое отношение — её нет.
+   */
+  falseColumn: HeldOutFalseColumn | null;
+
+  /**
+   * Доля яркости, теряемая бумагой от левого края к правому; отрицательная —
+   * от правого к левому. Отношение вставной вертикали держится до модуля 0,35:
+   * дальше она на тёмном краю упирается в ноль яркости.
+   */
+  widthLighting: number;
+
+  /**
+   * Пятно на черте. `null` — пятна нет; на листе без черты не рисуется.
+   */
+  blot: HeldOutBlot | null;
+
+  /**
+   * Seed зерна бумаги.
+   */
+  seed: number;
+};
+
+/**
+ * Полное описание листа удержанной выборки: то, что ушло в
+ * `createSyntheticSheet`.
+ */
+export type HeldOutSheetDescription = SyntheticCalibrationSheet & {
+  /**
+   * Место черты у верхней границы области с линиями; `null` — черты нет.
+   */
+  marginLineX: number | null;
+
+  /**
+   * Вставная вертикаль на фазе клетки.
+   */
+  deepColumn: SyntheticDeepColumn | null;
+
+  /**
+   * Вставная вертикаль вне фазы клетки.
+   */
+  strayColumn: SyntheticStrayColumn | null;
+};
+
+/**
+ * Лист удержанной выборки вместе с классом, известным по построению.
+ */
+export type HeldOutSheet = {
+  /**
+   * Описание листа.
+   */
+  params: HeldOutSheetDescription;
+
+  /**
+   * Растр листа.
+   */
+  image: SheetImageData;
+
+  /**
+   * Есть ли на листе черта поля.
+   */
+  hasMarginLine: boolean;
+
+  /**
+   * Сторона черты; `null` — черты нет.
+   */
+  marginLineSide: MarginLineSide | null;
+
+  /**
+   * Самое внутреннее положение черты по высоте области с линиями, столбец
+   * кадра; `null` — черты нет.
+   */
+  innermostX: number | null;
+
+  /**
+   * Место вставной вертикали на середине высоты кадра; `null` — её нет.
+   */
+  falseColumnX: number | null;
+};
+
+/**
+ * Место вставной вертикали: ближайшее к краю листа место на фазе клетки или
+ * посередине между вертикалями, не ближе заданного отступа от границы трети.
+ *
+ * @param falseColumn — вставная вертикаль
+ * @param sheet — основа листа
+ * @returns место вертикали поперёк разлиновки на середине высоты кадра
+ */
+const toFalseColumnX = (
+  falseColumn: HeldOutFalseColumn,
+  sheet: SyntheticCalibrationSheet
+): number => {
+  const { side, offset, isOnPhase } = falseColumn;
+  const { width, step, phase } = sheet;
+  const shift = isOnPhase ? 0 : 0.5;
+  const isLeft = side === 'left';
+  const target = isLeft
+    ? width * HELD_OUT_SEARCH_SHARE - offset * step
+    : width * (1 - HELD_OUT_SEARCH_SHARE) + offset * step;
+  const cycles = (target - phase) / step - shift;
+  const index = isLeft ? Math.floor(cycles) : Math.ceil(cycles);
+
+  return phase + (index + shift) * step;
+};
+
+/**
+ * Пятно поверх черты: полоса заданной высоты, по ширине — от черты с запасом
+ * в полшага с каждой стороны.
+ *
+ * @param blot — пятно в долях высоты области с линиями
+ * @param sheet — описание листа с чертой
+ * @returns прямоугольник пятна в пикселях кадра
+ */
+const toBlotArea = (blot: HeldOutBlot, sheet: HeldOutSheetDescription): SyntheticArea => {
+  const { height, margins, step } = sheet;
+  const span = height - margins.top - margins.bottom;
+  const top = margins.top + blot.top * span;
+  const bottom = margins.top + blot.bottom * span;
+  const upper = computeSyntheticMarginLineX(sheet, top) || 0;
+  const lower = computeSyntheticMarginLineX(sheet, bottom) || 0;
+
+  return {
+    left: Math.min(upper, lower) - step / 2,
+    top,
+    right: Math.max(upper, lower) + step / 2,
+    bottom,
+    contrast: HELD_OUT_BLOT_CONTRAST,
+  };
+};
+
+/**
+ * Самое внутреннее положение черты: снос линейный, поэтому оно на одном из
+ * концов области с линиями.
+ *
+ * @param sheet — описание листа с чертой
+ * @param side — сторона черты
+ * @returns столбец самого внутреннего положения
+ */
+const findInnermostX = (sheet: HeldOutSheetDescription, side: MarginLineSide): number => {
+  const { height, margins } = sheet;
+  const upper = computeSyntheticMarginLineX(sheet, margins.top) || 0;
+  const lower = computeSyntheticMarginLineX(sheet, height - margins.bottom) || 0;
+
+  return side === 'left' ? Math.max(upper, lower) : Math.min(upper, lower);
+};
+
+/**
+ * Рисует лист удержанной выборки и отдаёт его класс по построению. Параметры
+ * сами не разыгрываются: seed для них выбирает тот, кто вскрывает выборку.
+ *
+ * @param params — параметры листа
+ * @returns растр, описание и класс листа
+ */
+export const createHeldOutSheet = (params: HeldOutSheetParams): HeldOutSheet => {
+  const {
+    marginLineSide,
+    marginLineDrift,
+    convergence,
+    vanishingShare,
+    falseColumn,
+    widthLighting,
+    blot,
+    seed,
+  } = params;
+  const base = CONVERGING_SHEET_BASE;
+  const falseColumnX =
+    falseColumn === null || falseColumn.ratio === 0
+      ? null
+      : toFalseColumnX(falseColumn, base);
+  const falseDarkness =
+    falseColumn === null ? 0 : falseColumn.ratio * (base.lineDarkness || 0);
+  const isOnPhase = falseColumn !== null && falseColumn.isOnPhase;
+  const description: HeldOutSheetDescription = {
+    ...base,
+    seed,
+    widthLighting,
+    marginLineX: marginLineSide === null ? null : HELD_OUT_MARGIN_LINE_X[marginLineSide],
+    marginLineDrift: marginLineSide === 'right' ? -marginLineDrift : marginLineDrift,
+    columnConvergence:
+      convergence === 0 ? null : { x: vanishingShare * base.width, share: convergence },
+    deepColumn:
+      falseColumnX !== null && isOnPhase
+        ? { x: falseColumnX, darkness: falseDarkness }
+        : null,
+    strayColumn:
+      falseColumnX !== null && !isOnPhase
+        ? { x: falseColumnX, darkness: falseDarkness }
+        : null,
+  };
+  const sheet: HeldOutSheetDescription =
+    blot === null || marginLineSide === null
+      ? description
+      : { ...description, blotArea: toBlotArea(blot, description) };
+
+  return {
+    params: sheet,
+    image: createSyntheticSheet(sheet),
+    hasMarginLine: marginLineSide !== null,
+    marginLineSide,
+    innermostX: marginLineSide === null ? null : findInnermostX(sheet, marginLineSide),
+    falseColumnX,
+  };
+};
