@@ -8,9 +8,11 @@ import type { FontMetrics } from '@pages/Generator/lib/measure/measure.types';
 import type { RulingBend, SheetRuling } from '@pages/Generator/lib/paper';
 import {
   buildSheetRuling,
+  lineHeightAt,
   measureBendDeviation,
   measureSheetPhoto,
   mirrorSheetRuling,
+  sampleRulingBend,
 } from '@pages/Generator/lib/paper';
 import { detectRuling } from '@pages/Generator/lib/paper/detectRuling';
 import { describe, expect, it } from 'vitest';
@@ -38,9 +40,12 @@ const ACCEPTANCE_TOLERANCE_SHARE = 0.2;
 
 /**
  * Барьер глубины линии поля — `MARGIN_LINE_DEPTH_RATIO` из
- * `lib/paper/detectRuling.ts`. Исходник его не экспортирует, поэтому число
- * повторено здесь: контракт замера требует, чтобы своя константа не заводилась,
- * и проверки ниже сверяют с ним живые отношения глубин.
+ * `lib/paper/detectRuling.ts` на момент калибровки. Исходник константу не
+ * экспортирует, и литералом она повторена нарочно: записи замера ниже
+ * фиксируют запас живой выборки относительно откалиброванного барьера, а число,
+ * взятое у детектора, переписалось бы вместе с его правкой. Детектор эти
+ * записи не сторожат: сменившийся барьер они не заметят, а поведение барьера
+ * на синтетике проверяет `tests/paper-detect-edges-margin-line.test.ts`.
  */
 const PEER_DEPTH_RATIO = 1.5;
 
@@ -350,6 +355,57 @@ const findMaxBaselineDrift = (sheet: SheetCalibration): number => {
 };
 
 /**
+ * Наибольшее отклонение базовых линий листа с изгибом от его настоящих линий.
+ *
+ * Сравнение идёт с линиями синтетического листа — `phase + k·step` плюс
+ * изгиб калибровки в том же столбце, — а не с гребёнкой из разлиновки:
+ * `deriveGeometry` изгиба не читает, и сверка с прямой гребёнкой была бы
+ * тождеством плоской модели. Базовая линия в столбце ставится так же, как в
+ * отрисовке: строка на прямой наклонной гребёнке плюс смещение по найденной
+ * сетке изгиба. Номер настоящей линии — ближайшая к строке: при допуске в
+ * десятую долю шага округление до половины шага ничего не прощает.
+ *
+ * @param sheet — лист страницы с разлиновкой, найденной на снимке
+ * @param shouldApplyBend — сдвигать ли строки по сетке изгиба; без сдвига
+ *   видно, насколько изгиб листа уводит прямые строки с линий
+ * @returns отклонение в пикселях по всем строкам и столбцам блока
+ */
+const findMaxBentBaselineDrift = (
+  sheet: SheetCalibration,
+  shouldApplyBend: boolean
+): number => {
+  const { bend, skewAngle, margins } = sheet.ruling;
+  const { phase, step } = BENT_MARGIN_LINE_SHEET;
+  const geometry = deriveGeometry(sheet, METRICS);
+  const { leftPadding, blockWidth } = geometry;
+  const projection = { skewAngle, perspective: null };
+  const bottom = sheet.height - margins.bottom;
+  let maxDrift = 0;
+
+  for (
+    let lineIndex = 0;
+    getBaselineY(geometry, METRICS, lineIndex) <= bottom;
+    lineIndex += 1
+  ) {
+    const baseline = getBaselineY(geometry, METRICS, lineIndex);
+    const trueLine = phase + Math.round((baseline - phase) / step) * step;
+
+    for (let x = leftPadding; x <= leftPadding + blockWidth; x += 1) {
+      const lineY = lineHeightAt(projection, x, baseline);
+      const offset =
+        shouldApplyBend && bend ? sampleRulingBend(bend, projection, x, lineY) : 0;
+
+      maxDrift = Math.max(
+        maxDrift,
+        Math.abs(lineY + offset - (trueLine + computeCalibrationBend(x)))
+      );
+    }
+  }
+
+  return maxDrift;
+};
+
+/**
  * Разлиновка листа с изгибом и чертой.
  *
  * @param isLineIgnored — черту не искать: так лист выглядел до полосовой
@@ -422,8 +478,12 @@ describe('приёмка issue #9: линия поля на снимках, гд
     }
   );
 
-  it('сторож фантома `IMG_1596`: барьер выше глубины лучшего кандидата в полтора раза', () => {
+  it('запись замера `IMG_1596`: барьер выше глубины лучшего кандидата в полтора раза', () => {
     /**
+     * Запись калибровки, а не проверка: оба числа — литералы, и упасть она
+     * не может. Держит арифметику запаса, чтобы правка барьера или таблицы
+     * калибровки была видна в этом файле.
+     *
      * Глубина лучшего кандидата `IMG_1596` в долях децили соседних вертикалей
      * (`calibration.md`): барьер на том же снимке — `PEER_DEPTH_RATIO` тех же
      * децилей, поэтому запас считается их отношением, а не разностью
@@ -434,8 +494,11 @@ describe('приёмка issue #9: линия поля на снимках, гд
     expect(PEER_DEPTH_RATIO / candidateDepthShare).toBeGreaterThanOrEqual(1.5);
   });
 
-  it('барьер разделяет классы живой выборки с запасом', () => {
+  it('запись замера: барьер разделяет классы живой выборки с запасом', () => {
     /**
+     * Запись калибровки, а не проверка: все числа — литералы, и упасть она
+     * не может.
+     *
      * Крайние отношения «глубина / дециль соседей» по таблице калибровки 3.4:
      * `IMG_1706` — самый глубокий кандидат среди снимков без черты, `IMG_1807` —
      * самая мелкая настоящая черта.
@@ -605,7 +668,10 @@ describe('приёмка issue #9: впервые найденная черта 
     };
 
     expect(sheet.ruling.bend).not.toBeNull();
-    expect(findMaxBaselineDrift(sheet)).toBeLessThanOrEqual(
+    expect(findMaxBentBaselineDrift(sheet, true)).toBeLessThanOrEqual(
+      BASELINE_DRIFT_SHARE * sheet.ruling.step
+    );
+    expect(findMaxBentBaselineDrift(sheet, false)).toBeGreaterThan(
       BASELINE_DRIFT_SHARE * sheet.ruling.step
     );
   });
