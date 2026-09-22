@@ -336,6 +336,28 @@ export type RulingDetectionOptions = {
    * Предел длинной стороны уменьшенной копии, на которой ищется наклон.
    */
   maxAnalysisSize?: number;
+
+  /**
+   * Сторона, которой ограничен поиск линии поля. Не задана — линия ищется у
+   * обоих краёв. `null` — не ищется вовсе: линии поля на листе нет ни в
+   * результате, ни в области, по которой прослеживается изгиб.
+   *
+   * Ограничение нужно проходу по выпрямленной копии: выпрямление переставляет
+   * строки, а `x` вертикали не трогает, и линия поля, которой ровный проход не
+   * нашёл или нашёл у другого края, новым знанием не станет — повторный поиск
+   * просто бросает ту же монету при другом наклоне. Править результат после
+   * прохода поздно: областью изгиба линия поля режет сетку узлов ещё внутри
+   * детектора, и снятая позже линия оставила бы часть блока за сеткой, где
+   * смещение — константа крайнего узла.
+   *
+   * Цена броска видна на школьной клетке без цветного поля: барьер «полтора
+   * 0,9-квантиля пиков средней трети» обычная вертикаль перешагивает ровно на
+   * одном угле — при 0,38° пик 0,0461 против барьера 0,0613 и при 0,42° —
+   * 0,0577 против 0,0591 (отказ), а при 0,408°, который дала подгонка
+   * перспективы, 0,0556 против 0,0548, запас 1,6 %. Выигранный так фантом
+   * сужал блок с 2277 до 1532 px: текст начинался на трети ширины листа.
+   */
+  marginLineSide?: MarginLineSide | null;
 };
 
 const toMissingDetection = (confidence: number, skewAngle: number): DetectedRuling => {
@@ -563,12 +585,14 @@ type MarginLine = {
  * @param columns — профиль средней яркости по столбцам
  * @param step — шаг разлиновки в пикселях
  * @param width — ширина кадра в пикселях
+ * @param side — край, которым ограничен поиск; не задан — оба
  * @returns линия и сторона, у которой она стоит; `null` — линии поля нет
  */
 const findMarginLine = (
   columns: ShearedProfile,
   step: number,
-  width: number
+  width: number,
+  side?: MarginLineSide
 ): MarginLine | null => {
   const { values, origin } = columns;
   const size = values.length;
@@ -625,10 +649,14 @@ const findMarginLine = (
   );
   const leftDepth = leftIndex < 0 ? 0 : depth[leftIndex] || 0;
   const rightDepth = rightIndex < 0 ? 0 : depth[rightIndex] || 0;
-  const isLeft = leftDepth >= rightDepth;
+  /**
+   * Заданная сторона выбирает кандидата вместо сравнения глубин: кандидат с
+   * другого края не участвует в отборе, а не отсеивается после него.
+   */
+  const isLeft = side === undefined ? leftDepth >= rightDepth : side === 'left';
   const bestIndex = isLeft ? leftIndex : rightIndex;
 
-  if (bestIndex < 0 || Math.max(leftDepth, rightDepth) < threshold) {
+  if (bestIndex < 0 || (isLeft ? leftDepth : rightDepth) < threshold) {
     return null;
   }
 
@@ -1721,7 +1749,10 @@ export const detectRuling = (
     closeProfileGaps(columnResponse.values, Math.round(period.step)),
     RULING_REGION_LEVEL
   );
-  const meanMarginLine = findMarginLine(columns, period.step, image.width);
+  const meanMarginLine =
+    options.marginLineSide === null
+      ? null
+      : findMarginLine(columns, period.step, image.width, options.marginLineSide);
   const marginLine =
     meanMarginLine &&
     refineMarginLine(meanMarginLine, selectTraceStrips(meanMarginLine.x), period.step);

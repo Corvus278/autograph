@@ -782,7 +782,15 @@ const measureRuling = (
   });
   const second =
     rectified.image.height > 0
-      ? detectRuling(rectified.image, { skewAngle: perspective.skewAngle })
+      ? detectRuling(rectified.image, {
+          skewAngle: perspective.skewAngle,
+          /**
+           * Сторону задаёт ровный проход: второй волен уточнить `x` линии поля
+           * или не подтвердить её, но искать её у другого края листа ему
+           * нечем — выпрямление `x` вертикали не меняет.
+           */
+          marginLineSide: flat.marginLineSide,
+        })
       : null;
 
   if (

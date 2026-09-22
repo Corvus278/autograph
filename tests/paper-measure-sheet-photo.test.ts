@@ -5,6 +5,7 @@ import {
   extractTexture,
   lineCoordinateAt,
   lineHeightAt,
+  type MarginLineSide,
   measureSheetPhoto,
   type PaperMargins,
   resolveSheetBounds,
@@ -728,6 +729,29 @@ const GRID_DRIFT_SHEET: SyntheticSheetParams = {
   rulingPerspective: DRIFT_4,
 };
 
+describe('measureSheetPhoto: повторный импорт', () => {
+  it('второе измерение той же фотографии повторяет первое до числа', () => {
+    /**
+     * Фотография одна на оба измерения: пользователь добавляет тот же файл
+     * второй раз, а не пересоздаёт лист. Новый растр на каждый вызов прятал бы
+     * разницу за совпадением синтезатора.
+     */
+    const image = createSyntheticSheet(LINED_DRIFT_SHEET);
+    const first = measureSheetPhoto(image, { kind: 'grid' });
+    const second = measureSheetPhoto(image, { kind: 'grid' });
+
+    expect(second.source.step).toBe(first.source.step);
+    /**
+     * Сверяется всё измерение, а не один шаг: перспектива, изгиб, поля, свет и
+     * текстура выводятся из того же прохода, и случайность в любом из них
+     * даёт пользователю два разных листа из одного файла. Лист с дрейфом —
+     * потому что полосовая ступень, засев и второй проход включаются именно на
+     * нём.
+     */
+    expect(second).toStrictEqual(first);
+  });
+});
+
 describe('measureSheetPhoto: перспектива', () => {
   it('линейка с дрейфом 4 % на столе: верхнее поле на первой линии, у ровного прохода — мимо', () => {
     const result = measure(LINED_DRIFT_SHEET);
@@ -1017,5 +1041,136 @@ describe('measureSheetPhoto: полосовая ступень', () => {
     expect(call?.[1].convergenceSeed).toBe(BANDED_SEED);
     expect(call?.[1].convergenceOrigin).toBe(seen.origin);
     expect(result.source.perspective).not.toBeNull();
+  });
+});
+
+/**
+ * Линия поля, которую подмена отдаёт проходу детектора.
+ */
+type MockedMarginLine = {
+  /**
+   * Отступ линии поля в пикселях вырезки. `null` — линии нет.
+   */
+  marginLineX: number | null;
+
+  /**
+   * Сторона линии поля. `null` — линии нет.
+   */
+  marginLineSide: MarginLineSide | null;
+};
+
+/**
+ * Линия поля ровного прохода: левая, как на тетради с цветным полем.
+ */
+const FLAT_MARGIN_LINE: MockedMarginLine = { marginLineX: 120, marginLineSide: 'left' };
+
+/**
+ * Та же линия, чуть сдвинутая проходом по выпрямленной копии.
+ */
+const RECTIFIED_MARGIN_LINE: MockedMarginLine = {
+  marginLineX: 128,
+  marginLineSide: 'left',
+};
+
+/**
+ * Линии поля нет.
+ */
+const NO_MARGIN_LINE: MockedMarginLine = { marginLineX: null, marginLineSide: null };
+
+/**
+ * Подменяет линию поля в обоих проходах — ровном и по выпрямленной копии — и
+ * записывает настройки, с которыми позвали каждый. Остальные числа проходов
+ * настоящие.
+ *
+ * @param flat — линия поля ровного прохода
+ * @param rectified — линия поля прохода по выпрямленной копии
+ * @returns настройки проходов в порядке вызова
+ */
+const mockMarginLinePasses = async (
+  flat: MockedMarginLine,
+  rectified: MockedMarginLine
+): Promise<(RulingDetectionOptions | undefined)[]> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+  const seen: (RulingDetectionOptions | undefined)[] = [];
+
+  /**
+   * Подмена слушается ограничения по стороне так же, как настоящий детектор:
+   * иначе тест доказывал бы только то, что фантом снимается с результата, а
+   * снимать его нужно до области изгиба.
+   */
+  const toFoundLine = (
+    line: MockedMarginLine,
+    options?: RulingDetectionOptions
+  ): MockedMarginLine => {
+    const side = options?.marginLineSide;
+
+    if (side === undefined || side === line.marginLineSide) {
+      return line;
+    }
+
+    return NO_MARGIN_LINE;
+  };
+
+  const withMarginLine = (line: MockedMarginLine) => {
+    return (image: SheetImageData, options?: RulingDetectionOptions): DetectedRuling => {
+      seen.push(options);
+
+      return { ...actual.detectRuling(image, options), ...toFoundLine(line, options) };
+    };
+  };
+
+  vi.mocked(detectRuling)
+    .mockImplementationOnce(withMarginLine(flat))
+    .mockImplementationOnce(withMarginLine(rectified));
+
+  return seen;
+};
+
+describe('measureSheetPhoto: линия поля второго прохода', () => {
+  it('ровный проход линии не нашёл: второй её не ищет и не заводит', async () => {
+    const seen = await mockMarginLinePasses(NO_MARGIN_LINE, RECTIFIED_MARGIN_LINE);
+
+    const result = measure(LINED_DRIFT_SHEET);
+
+    expect(result.source.perspective).not.toBeNull();
+    /**
+     * Запрет идёт в сам детектор, а не снимается с результата: областью изгиба
+     * линия поля режет сетку узлов, и снятая после прохода она оставила бы
+     * часть блока за сеткой.
+     */
+    expect(seen[1]?.marginLineSide).toBeNull();
+    expect(result.source.marginLineX).toBeNull();
+    expect(result.source.marginLineSide).toBeNull();
+  });
+
+  it('ровный проход линию нашёл: второй уточняет её на той же стороне', async () => {
+    const seen = await mockMarginLinePasses(FLAT_MARGIN_LINE, RECTIFIED_MARGIN_LINE);
+
+    const result = measure(LINED_DRIFT_SHEET);
+    const { crop } = detectInCrop(LINED_DRIFT_SHEET, result.outline);
+
+    expect(result.source.perspective).not.toBeNull();
+    expect(seen[1]?.marginLineSide).toBe(FLAT_MARGIN_LINE.marginLineSide);
+    expect(result.source.marginLineX).toBe(
+      (RECTIFIED_MARGIN_LINE.marginLineX || 0) + crop.left
+    );
+    expect(result.source.marginLineSide).toBe(RECTIFIED_MARGIN_LINE.marginLineSide);
+  });
+
+  it('второй проход линию не подтвердил: линии поля нет', async () => {
+    await mockMarginLinePasses(FLAT_MARGIN_LINE, NO_MARGIN_LINE);
+
+    const result = measure(LINED_DRIFT_SHEET);
+
+    /**
+     * Неподтверждённая линия не возвращается числами ровного прохода: на
+     * выпрямленной копии она мерилась заново и не набрала барьер — так линию
+     * теряют IMG_1705 и IMG_1808, у которых её на листе нет.
+     */
+    expect(result.source.perspective).not.toBeNull();
+    expect(result.source.marginLineX).toBeNull();
+    expect(result.source.marginLineSide).toBeNull();
   });
 });

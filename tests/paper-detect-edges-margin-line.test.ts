@@ -1,3 +1,4 @@
+import type { MarginLineSide } from '@pages/Generator/lib/paper';
 import { detectRuling } from '@pages/Generator/lib/paper/detectRuling';
 import { describe, expect, it } from 'vitest';
 
@@ -132,6 +133,26 @@ const fadeMarginLine = (
   }
 };
 
+/**
+ * Случай проверки поиска, ограниченного краем листа.
+ */
+type ForeignSideCase = {
+  /**
+   * Подпись случая в названии теста.
+   */
+  label: string;
+
+  /**
+   * Положение линии поля на листе в пикселях.
+   */
+  marginLineX: number;
+
+  /**
+   * Край, которым ограничен поиск: не тот, у которого стоит линия.
+   */
+  foreignSide: MarginLineSide;
+};
+
 describe('detectRuling: трассировка линии поля', () => {
   it.each([
     ['слева, самая внутренняя точка у краёв области', LEFT_MARGIN_LINE_X, bendAtEdges(1)],
@@ -163,6 +184,35 @@ describe('detectRuling: трассировка линии поля', () => {
 
       expect(detectedX).toBeLessThanOrEqual(innermost + PIXEL_TOLERANCE);
       expect(detectedX).toBeGreaterThanOrEqual(innermost - MARGIN_SHEET.step / 6);
+    }
+  );
+
+  /**
+   * Сторона приходит проходу по выпрямленной копии от ровного прохода: линия у
+   * другого края — не уточнение той же линии, а другая находка, и её нельзя
+   * ни взять в разлиновку, ни дать ей обрезать сетку изгиба.
+   */
+  it.each([
+    { label: 'слева', marginLineX: LEFT_MARGIN_LINE_X, foreignSide: 'right' },
+    { label: 'справа', marginLineX: RIGHT_MARGIN_LINE_X, foreignSide: 'left' },
+  ] satisfies ForeignSideCase[])(
+    'линия поля $label: поиск, ограниченный другим краем, её не берёт',
+    ({ marginLineX, foreignSide }) => {
+      const image = createSyntheticSheet({ ...MARGIN_SHEET, marginLineX });
+      const free = detectRuling(image, { skewAngle: 0 });
+      const constrained = detectRuling(image, {
+        skewAngle: 0,
+        marginLineSide: foreignSide,
+      });
+      const own = detectRuling(image, {
+        skewAngle: 0,
+        marginLineSide: free.marginLineSide,
+      });
+
+      expect(free.marginLineX).not.toBeNull();
+      expect(constrained.marginLineX).toBeNull();
+      expect(constrained.marginLineSide).toBeNull();
+      expect(own.marginLineX).toBe(free.marginLineX);
     }
   );
 
