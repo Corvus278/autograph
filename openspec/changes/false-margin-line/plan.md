@@ -107,10 +107,12 @@
 
 ### G6 · Диагностика и блок текста · M · волна 6
 
-- Задачи: 5.1, 5.2, 7.2, 7.3
+- Задачи: 5.1, 5.2, 7.2, 7.3, 1.6
 - Зависит от: G4, G4b, G5
 - Файлы: `src/pages/Generator/lib/paper/{detectRuling,measureSheetPhoto,measureSheetPhoto.types}.ts`,
-  `scripts/sheet-photo-report.ts`, `tests/margin-line-*.test.ts`, `tests/fixtures/img-1813-ruling.json`
+  `scripts/sheet-photo-report.ts`, `tests/margin-line-*.test.ts`, `tests/fixtures/img-1813-ruling.json`;
+  1.6 — `scripts/margin-line-ground-truth.ts`, `package.json` (скрипт `measure:margin-color`), строка команды в `CLAUDE.md`.
+  1.6 здесь, потому что G6 владеет общим декодером `scripts/sheet-photo-report.ts`, а цветной канал в него кладёт G4b
 - Требования: `paper-profile` → «Линия поля не ставится у стороны, где её нет» (сценарии 3, 4)
 - Design: решение 7
 - Контракты: вводит K5; потребляет K3, K4, K6
