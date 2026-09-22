@@ -854,18 +854,21 @@ const traceCombDepths = (
 };
 
 /**
- * Профиль полосы вместе с глубинами провалов во всех её бинах.
+ * Профиль полосы вместе с мерой глубины провала в её бинах.
  *
- * Глубины считаются на полосу целиком, а не в каждом опрашиваемом бине заново:
- * окно фона у соседних бинов почти совпадает, и повторный счёт медианы в
- * каждом окне трассы обходился в разы дороже одного прохода по полосе. Числа
- * от этого те же: скользящая медиана в бине — та же медиана того же окна.
+ * Мера спрятана за функцией, потому что её потребителям нужны разные доли
+ * полосы: полосовому опросу — все бины разом, трассе линии — только окна
+ * вокруг предсказаний, сотые доли полосы. Проход по всей полосе ради трассы
+ * стоил бы дороже самой трассы, а счёт медианы заново в каждом бине опроса —
+ * дороже прохода. Числа у обеих мер одни: скользящая медиана в бине — та же
+ * медиана того же окна.
  */
 type StripDepths = {
   /**
-   * Глубина провала в каждом бине полосы.
+   * Глубина провала в бине полосы: насколько бин темнее скользящей медианы
+   * окном в шаг. Бин за пределами полосы — ноль.
    */
-  depths: Float64Array;
+  depthAt: (bin: number) => number;
 
   /**
    * Профиль столбцов полосы.
@@ -874,10 +877,40 @@ type StripDepths = {
 };
 
 /**
- * Глубины провалов во всех бинах полосы: насколько бин темнее скользящей
- * медианы окном в шаг. Медиана, а не среднее: узкий провал линии её не
- * сдвигает, а горизонталь, пересекающая полосу, меняется по столбцам
- * медленнее окна и уходит в фон.
+ * Полоса, у которой глубины всех бинов уже сняты: полосовому опросу нужен
+ * весь ряд разом — и на пики, и на разброс.
+ */
+type MeasuredStrip = StripDepths & {
+  /**
+   * Глубина провала в каждом бине полосы.
+   */
+  depths: Float64Array;
+};
+
+/**
+ * Глубина провала в одном бине: насколько он темнее медианы окна вокруг себя.
+ * Медиана, а не среднее: узкий провал линии её не сдвигает, а горизонталь,
+ * пересекающая полосу, меняется по столбцам медленнее окна и уходит в фон.
+ *
+ * @param values — профиль столбцов одной полосы
+ * @param bin — бин полосы
+ * @param window — ширина окна фона в бинах
+ * @returns глубина провала в бине
+ */
+const measureStripDepth = (values: Float64Array, bin: number, window: number): number => {
+  const half = Math.max(1, Math.floor(window / 2));
+  const to = Math.min(values.length, bin + half + 1);
+  const slice: number[] = [];
+
+  for (let inner = Math.max(0, bin - half); inner < to; inner += 1) {
+    slice.push(values[inner] || 0);
+  }
+
+  return computeMedian(slice) - (values[bin] || 0);
+};
+
+/**
+ * Глубины провалов во всех бинах полосы разом.
  *
  * @param strip — профиль столбцов одной полосы
  * @param window — ширина окна фона в бинах
@@ -896,17 +929,60 @@ const measureStripDepths = (strip: ShearedProfile, window: number): Float64Array
 };
 
 /**
- * Снимает глубины со всех полос разом.
+ * Снимает глубины со всех полос разом — мера для полосового опроса.
  *
  * @param strips — профили столбцов по полосам
  * @param step — шаг разлиновки в пикселях
- * @returns полосы вместе с глубинами своих бинов
+ * @returns полосы вместе с глубинами всех своих бинов
  */
-const toStripDepths = (strips: ShearedProfile[], step: number): StripDepths[] => {
+const toStripDepths = (strips: ShearedProfile[], step: number): MeasuredStrip[] => {
   const window = Math.max(3, Math.round(step));
 
   return strips.map((strip) => {
-    return { depths: measureStripDepths(strip, window), strip };
+    const depths = measureStripDepths(strip, window);
+
+    return {
+      depthAt: (bin: number): number => {
+        return depths[bin] || 0;
+      },
+      depths,
+      strip,
+    };
+  });
+};
+
+/**
+ * Полосы с мерой глубины по требованию: бин считается при первом обращении и
+ * запоминается. Мера для трассы — она опрашивает окна вокруг предсказаний, и
+ * снятая наперёд полоса целиком ушла бы в мусор почти вся.
+ *
+ * @param strips — профили столбцов по полосам
+ * @param step — шаг разлиновки в пикселях
+ * @returns полосы с мерой глубины по требованию
+ */
+const toTracedStripDepths = (strips: ShearedProfile[], step: number): StripDepths[] => {
+  const window = Math.max(3, Math.round(step));
+
+  return strips.map((strip) => {
+    const { values } = strip;
+    const depths = new Float64Array(values.length);
+    const isMeasured = new Uint8Array(values.length);
+
+    return {
+      depthAt: (bin: number): number => {
+        if (bin < 0 || bin >= values.length) {
+          return 0;
+        }
+
+        if (!isMeasured[bin]) {
+          depths[bin] = measureStripDepth(values, bin, window);
+          isMeasured[bin] = 1;
+        }
+
+        return depths[bin] || 0;
+      },
+      strip,
+    };
   });
 };
 
@@ -939,15 +1015,15 @@ const findStripDip = (
   center: number,
   reach: number
 ): TraceNode | null => {
-  const { depths, strip } = band;
-  const { origin } = strip;
+  const { depthAt, strip } = band;
+  const { origin, values } = strip;
   const from = Math.max(1, Math.round(center - reach) - origin);
-  const to = Math.min(depths.length - 2, Math.round(center + reach) - origin);
+  const to = Math.min(values.length - 2, Math.round(center + reach) - origin);
   let peak = -1;
   let depth = 0;
 
   for (let bin = from; bin <= to; bin += 1) {
-    const binDepth = depths[bin] || 0;
+    const binDepth = depthAt(bin);
 
     if (binDepth > depth) {
       peak = bin;
@@ -959,7 +1035,7 @@ const findStripDip = (
     return null;
   }
 
-  const offset = refinePeakOffset(depths[peak - 1] || 0, depth, depths[peak + 1] || 0);
+  const offset = refinePeakOffset(depthAt(peak - 1), depth, depthAt(peak + 1));
 
   return { position: origin + peak + offset, depth };
 };
@@ -1043,9 +1119,12 @@ const traceVerticalLine = (
   step: number,
   minDepth: number
 ): number[] => {
-  return traceVerticalNodes(toStripDepths(strips, step), center, step, minDepth).reduce<
-    number[]
-  >((found, node) => {
+  return traceVerticalNodes(
+    toTracedStripDepths(strips, step),
+    center,
+    step,
+    minDepth
+  ).reduce<number[]>((found, node) => {
     if (node) {
       found.push(node.position);
     }
@@ -1410,7 +1489,7 @@ const toMarginLineBarrier = (peerDepth: number, sigma: number): MarginLineBarrie
  * @returns кандидат и числа, по которым он принят или отвергнут
  */
 const pollMarginLineSide = (
-  bands: StripDepths[],
+  bands: MeasuredStrip[],
   step: number,
   width: number,
   side: MarginLineSide
