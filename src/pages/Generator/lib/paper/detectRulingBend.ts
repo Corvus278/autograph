@@ -1,4 +1,6 @@
+import { cropSheetColumns } from './cropSheetColumns';
 import type { RulingBend, SheetImageData, SheetRuling } from './paper.types';
+import { computeMedian, computeQuantile } from './quantile';
 import {
   buildStripProfiles,
   detrendProfile,
@@ -200,27 +202,6 @@ type NodeGrid = {
 const EMPTY_DETECTION: RulingBendDetection = { bend: null, foundNodeShare: 0 };
 
 /**
- * Вырезает из изображения столбцы области: полосы режутся только по ней, и за
- * областью узлов нет.
- */
-const cropColumns = (
-  image: SheetImageData,
-  from: number,
-  width: number
-): SheetImageData => {
-  const { width: imageWidth, height, luminance } = image;
-  const cropped = new Float32Array(width * height);
-
-  for (let y = 0; y < height; y += 1) {
-    const start = y * imageWidth + from;
-
-    cropped.set(luminance.subarray(start, start + width), y * width);
-  }
-
-  return { width, height, luminance: cropped };
-};
-
-/**
  * Наименьшая разница плеч провала в пикселях — расстояний от вершины до краёв
  * на половине глубины, — с которой положение линии в полосе берётся
  * центроидом, а не вершиной. Линия, прямая внутри полосы, даёт симметричный
@@ -347,14 +328,6 @@ const findLineDip = (
   };
 };
 
-const computeQuantile = (values: number[], quantile: number): number => {
-  const sorted = [...values].sort((first, second) => {
-    return first - second;
-  });
-
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] || 0;
-};
-
 /**
  * Порядок полос для старта: от центральной к краям. Поиск в центре, а не у
  * края: там отход линии от прямой наименьший.
@@ -458,7 +431,7 @@ const replaceOutliers = (grid: NodeGrid, limit: number): number => {
       }, []);
 
       if (isFound[index] && neighbours.length === FILTER_ROWS) {
-        const median = computeQuantile(neighbours, 0.5);
+        const median = computeMedian(neighbours);
 
         if (Math.abs((measured[index] || 0) - median) > limit) {
           offsets[index] = median;
@@ -677,7 +650,7 @@ export const detectRulingBend = (
     Math.max(MIN_STRIPS, Math.round(cropWidth / (STRIP_STEPS * step)))
   );
   const strips = buildStripProfiles(
-    cropColumns(image, cropLeft, cropWidth),
+    cropSheetColumns(image, cropLeft, cropWidth),
     'horizontal',
     skewAngle,
     Math.abs(skewAngle),

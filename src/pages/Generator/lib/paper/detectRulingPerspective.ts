@@ -1,3 +1,4 @@
+import { cropSheetColumns } from './cropSheetColumns';
 import type {
   PerspectiveBaseRuling,
   PerspectiveFrame,
@@ -55,10 +56,15 @@ const MAX_OUTLIER_SHARE = 0.02;
 
 /**
  * Наибольшее изменение шага между крайними найденными линиями. Спека
- * гарантирует точность до восьми процентов, дальше заведомо не тетрадь на
- * столе, а сорванная трасса.
+ * гарантирует точность до двадцати пяти процентов, а порог держит запас над
+ * ней: у тетради, снятой лежащей на столе, шаг по кадру меняется и на четверть.
+ *
+ * Сорванную трассу порог в одиночку не отделяет — это делают доля найденных
+ * узлов, невязка, знаменатель `1 − a·q` в углах кадра и расхождение с прямой
+ * гребёнкой. Он остаётся границей, за которой сама модель перспективы
+ * перестаёт описывать лист, и калибруется на синтетике, а не на фотографиях.
  */
-const MAX_STEP_DRIFT = 0.15;
+const MAX_STEP_DRIFT = 0.35;
 
 /**
  * Наименьший знаменатель `1 − a·q` модели по кадру. Ближе к нулю высота линии
@@ -516,7 +522,8 @@ type NodesFit = {
  * @param nodes — узлы трассы
  * @param originX — начало перспективы по ширине
  * @param originY — начало перспективы по высоте
- * @param fallback — гребёнка ровного прохода на случай вырожденной системы
+ * @param fallback — гребёнка ровного прохода на случай вырожденной системы; её
+ *   `convergenceY` — засев полосовой ступени, начальное приближение схождения
  * @returns обе гребёнки и невязки
  */
 const fitNodes = (
@@ -526,7 +533,16 @@ const fitNodes = (
   fallback: CombFit
 ): NodesFit => {
   const straight = fitStraightComb(nodes, fallback);
-  const fit = fitPerspectiveComb(nodes, originX, originY, straight);
+  /**
+   * Шаг, фазу и наклон подгонка стартует от ровной гребёнки по тем же узлам:
+   * ближе к итогу начального приближения для них нет. Схождения по высоте ни
+   * одна ровная гребёнка не даёт — его приносит засев полосовой ступени, и
+   * только с ним подгонка начинает спуск с нужной стороны от седловины.
+   */
+  const fit = fitPerspectiveComb(nodes, originX, originY, {
+    ...straight,
+    convergenceY: fallback.convergenceY,
+  });
   const rawResiduals = computeResiduals(nodes, originX, originY, fit);
   const stripSums = new Float64Array(STRIP_COUNT);
   const stripCounts = new Float64Array(STRIP_COUNT);
@@ -561,7 +577,8 @@ const fitNodes = (
  * @param nodes — узлы трассы
  * @param originX — начало перспективы по ширине
  * @param originY — начало перспективы по высоте
- * @param fallback — гребёнка ровного прохода на случай вырожденной системы
+ * @param fallback — гребёнка ровного прохода на случай вырожденной системы; её
+ *   `convergenceY` — засев полосовой ступени
  * @param residualLimit — порог невязки в пикселях
  * @returns подгонка по оставшимся узлам
  */
@@ -647,6 +664,40 @@ const measureCombDeviation = (
 };
 
 /**
+ * Переводит засев полосовой ступени в начальное приближение `convergenceY`.
+ *
+ * Засев задан относительным приростом шага на пиксель у своего начала отсчёта,
+ * а модель перспективы растит шаг как `1/(1 − a·q)²` от своего — середины
+ * вырезки. У нуля `a` прирост равен `2·q`, отсюда `q = k/2`; начало отсчёта
+ * едет тем же выражением, что и сам шаг, потому что относительный прирост
+ * `k` у точки `Δ` от начала засева равен `k/(1 + k·Δ)`.
+ *
+ * Знаменатель ушёл в ноль — засева нет: такой засев описывает лист, у которого
+ * шаг у начала подгонки обратился в ноль, и приближением он быть не может.
+ *
+ * @param ruling — разлиновка ровного прохода вместе с засевом
+ * @param originX — начало перспективы по ширине
+ * @param originY — начало перспективы по высоте
+ * @returns начальное схождение по высоте, 1/px
+ */
+const toSeededConvergenceY = (
+  ruling: PerspectiveBaseRuling,
+  originX: number,
+  originY: number
+): number => {
+  const { convergenceSeed, convergenceOrigin, skewAngle } = ruling;
+
+  if (!convergenceSeed) {
+    return 0;
+  }
+
+  const offset = originY - originX * toTangent(skewAngle) - convergenceOrigin;
+  const weight = 1 + convergenceSeed * offset;
+
+  return weight > 0 ? convergenceSeed / (2 * weight) : 0;
+};
+
+/**
  * Меряет перспективу разлиновки: как меняется шаг горизонтальных линий по
  * высоте и как линии сходятся по ширине. Вход — вырезка внутри листа и
  * разлиновка ровного прохода по ней; все величины результата — в пикселях
@@ -669,13 +720,22 @@ export const detectRulingPerspective = (
 ): RulingPerspectiveDetection => {
   const { step, firstLinePhase, skewAngle, margins } = ruling;
   const { width, height } = image;
+  /**
+   * Полосы режутся по области с линиями, а не по всей ширине вырезки: за
+   * полями лежат пружина блокнота, переплёт и стол. Их витки и тени трасса
+   * ведёт как линии, и целая такая полоса уводит невязку подгонки за порог —
+   * бюджет выбросов в единичные узлы её не снимает, а лист при этом описывается
+   * перспективой.
+   */
+  const cropLeft = Math.max(0, Math.ceil(margins.left));
+  const cropWidth = Math.min(width, Math.floor(width - margins.right)) - cropLeft;
 
-  if (step <= 0 || width < STRIP_COUNT) {
+  if (step <= 0 || cropWidth < STRIP_COUNT) {
     return toEmptyDetection(ruling);
   }
 
   const strips = buildStripProfiles(
-    image,
+    cropSheetColumns(image, cropLeft, cropWidth),
     'horizontal',
     skewAngle,
     Math.abs(skewAngle),
@@ -694,9 +754,10 @@ export const detectRulingPerspective = (
   const reach = step * TRACE_SEARCH_SHARE;
   /**
    * Координата линии `line` ровной гребёнки в бинах профиля: бины отсчитаны от
-   * `origin`, а координата вдоль линий — от верха вырезки.
+   * `origin` и от левого края области с линиями, а координата вдоль линий — от
+   * верха и левого края вырезки.
    */
-  const lineOffset = firstLinePhase - origin;
+  const lineOffset = firstLinePhase + cropLeft * toTangent(skewAngle) - origin;
   const firstLine = Math.max(
     Math.ceil((margins.top - firstLinePhase) / step),
     Math.ceil((1 + reach - lineOffset) / step)
@@ -713,15 +774,16 @@ export const detectRulingPerspective = (
 
   const tangent = toTangent(skewAngle);
   const columns = Array.from({ length: STRIP_COUNT }, (_item, strip) => {
-    return ((strip + 0.5) * width) / STRIP_COUNT;
+    return cropLeft + ((strip + 0.5) * cropWidth) / STRIP_COUNT;
   });
 
   /**
    * Строка линии в кадре вырезки: профиль полосы схлопнут вдоль наклона, и его
-   * бин — координата вдоль линий, которую центр полосы возвращает в кадр.
+   * бин — координата вдоль линий, отсчитанная от левого края области с
+   * линиями, которую центр полосы возвращает в кадр.
    */
   const toLineY = (position: number, column: number): number => {
-    return position + origin + column * tangent;
+    return position + origin + (column - cropLeft) * tangent;
   };
 
   const traced = traceRulingLines(detrended, {
@@ -770,7 +832,13 @@ export const detectRulingPerspective = (
     nodes,
     originX,
     originY,
-    { skewAngle, firstLinePhase, step, convergenceX: 0, convergenceY: 0 },
+    {
+      skewAngle,
+      firstLinePhase,
+      step,
+      convergenceX: 0,
+      convergenceY: toSeededConvergenceY(ruling, originX, originY),
+    },
     residualLimit
   );
   const projection = toProjection(fit, originX, originY);

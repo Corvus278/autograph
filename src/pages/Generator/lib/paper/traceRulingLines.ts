@@ -1,3 +1,4 @@
+import { computeQuantile } from './quantile';
 import { refinePeakOffset } from './sheetProfile';
 import type { LineDip, TraceComb, TracedLine } from './traceRulingLines.types';
 
@@ -39,14 +40,6 @@ const LINE_DEPTH_LEVEL = 0.1;
 const MIN_LOCAL_STEP_SHARE = 0.5;
 
 const MAX_LOCAL_STEP_SHARE = 1.5;
-
-const computeQuantile = (values: number[], quantile: number): number => {
-  const sorted = [...values].sort((first, second) => {
-    return first - second;
-  });
-
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] || 0;
-};
 
 /**
  * Самый глубокий провал в окне вокруг предсказанного положения линии, уточнённый

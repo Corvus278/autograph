@@ -9,3 +9,7 @@ storybook-static/
 
 # Снимки упавших скриншотных тестов: actual и diff, пересоздаются прогоном.
 tests/visual/.attachments/
+
+# Симлинк на локальную папку с фотографиями листов (вне репозитория).
+/paper_photos_examples
+text_example.txt

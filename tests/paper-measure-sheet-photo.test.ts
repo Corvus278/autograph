@@ -5,6 +5,7 @@ import {
   extractTexture,
   lineCoordinateAt,
   lineHeightAt,
+  type MarginLineSide,
   measureSheetPhoto,
   type PaperMargins,
   resolveSheetBounds,
@@ -15,10 +16,13 @@ import {
   type SheetPhotoMeasurement,
   type SheetRuling,
 } from '@pages/Generator/lib/paper';
+import type * as DetectRulingModule from '@pages/Generator/lib/paper/detectRuling';
 import type {
   DetectedRuling,
   RulingDetectionOptions,
 } from '@pages/Generator/lib/paper/detectRuling';
+import type * as PerspectiveModule from '@pages/Generator/lib/paper/detectRulingPerspective';
+import { detectRulingPerspective } from '@pages/Generator/lib/paper/detectRulingPerspective';
 import type * as RectifyModule from '@pages/Generator/lib/paper/measureSheetPhotoRectify';
 import { rectifySheetImage } from '@pages/Generator/lib/paper/measureSheetPhotoRectify';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,6 +39,21 @@ vi.mock('@pages/Generator/lib/paper/measureSheetPhotoRectify', async (importOrig
   const actual = await importOriginal<typeof RectifyModule>();
 
   return { ...actual, rectifySheetImage: vi.fn(actual.rectifySheetImage) };
+});
+
+vi.mock('@pages/Generator/lib/paper/detectRuling', async (importOriginal) => {
+  const actual = await importOriginal<typeof DetectRulingModule>();
+
+  return { ...actual, detectRuling: vi.fn(actual.detectRuling) };
+});
+
+vi.mock('@pages/Generator/lib/paper/detectRulingPerspective', async (importOriginal) => {
+  const actual = await importOriginal<typeof PerspectiveModule>();
+
+  return {
+    ...actual,
+    detectRulingPerspective: vi.fn(actual.detectRulingPerspective),
+  };
 });
 
 const WIDTH = 900;
@@ -57,8 +76,9 @@ const TABLE_OUTLINE: SheetOutline = {
 
 /**
  * Стол темнее бумаги и с крупным зерном: по всему кадру его ступени и шум
- * забивают разлиновку, и детектор, которому достался кадр целиком, шага не
- * находит.
+ * сбивают измерение. Шаг полосовая ступень детектора там ещё находит, а вид
+ * разлиновки и боковые поля уже уезжают — мерить лист можно только по вырезке
+ * внутри контура.
  */
 const TABLE_SURFACE = {
   outline: TABLE_OUTLINE,
@@ -417,8 +437,25 @@ const measure = (params: SyntheticSheetParams): SheetPhotoMeasurement => {
 };
 
 describe('measureSheetPhoto: лист на столе', () => {
-  it('по всему кадру детектор шага не находит — отрицательный контроль', () => {
-    expect(detectRuling(createSyntheticSheet(GRID_SHEET)).isDetected).toBe(false);
+  it('по всему кадру числа уезжают от чисел вырезки — отрицательный контроль', () => {
+    const frame = detectRuling(createSyntheticSheet(GRID_SHEET));
+    const { crop, detection } = detectInCrop(
+      GRID_SHEET,
+      computeSyntheticOutline(GRID_SHEET)
+    );
+    const expected = toFrameMargins(detection, crop);
+
+    /**
+     * Шаг по кадру целиком находится — его берёт полосовая ступень детектора,
+     * которой ступени и зерно стола не мешают. Вырезка нужна не ради шага:
+     * столбцы стола не дают опознать клетку, а боковая граница области с
+     * линиями садится на край стола, а не на край бумаги, и поле уезжает
+     * больше чем на треть шага.
+     */
+    expect(frame.isDetected).toBe(true);
+    expect(detection.kind).toBe('grid');
+    expect(frame.kind).not.toBe(detection.kind);
+    expect(Math.abs(frame.margins.left - expected.left)).toBeGreaterThan(GRID_STEP / 3);
   });
 
   it('шаг — как у прогона по вырезке, поля — переведённые поля вырезки', () => {
@@ -692,6 +729,29 @@ const GRID_DRIFT_SHEET: SyntheticSheetParams = {
   rulingPerspective: DRIFT_4,
 };
 
+describe('measureSheetPhoto: повторный импорт', () => {
+  it('второе измерение той же фотографии повторяет первое до числа', () => {
+    /**
+     * Фотография одна на оба измерения: пользователь добавляет тот же файл
+     * второй раз, а не пересоздаёт лист. Новый растр на каждый вызов прятал бы
+     * разницу за совпадением синтезатора.
+     */
+    const image = createSyntheticSheet(LINED_DRIFT_SHEET);
+    const first = measureSheetPhoto(image, { kind: 'grid' });
+    const second = measureSheetPhoto(image, { kind: 'grid' });
+
+    expect(second.source.step).toBe(first.source.step);
+    /**
+     * Сверяется всё измерение, а не один шаг: перспектива, изгиб, поля, свет и
+     * текстура выводятся из того же прохода, и случайность в любом из них
+     * даёт пользователю два разных листа из одного файла. Лист с дрейфом —
+     * потому что полосовая ступень, засев и второй проход включаются именно на
+     * нём.
+     */
+    expect(second).toStrictEqual(first);
+  });
+});
+
 describe('measureSheetPhoto: перспектива', () => {
   it('линейка с дрейфом 4 % на столе: верхнее поле на первой линии, у ровного прохода — мимо', () => {
     const result = measure(LINED_DRIFT_SHEET);
@@ -840,5 +900,294 @@ describe('measureSheetPhoto: перспектива', () => {
     (['top', 'right', 'bottom', 'left'] as const).forEach((side) => {
       expect(margins[side]).toBeCloseTo(expected[side], 9);
     });
+  });
+});
+
+/**
+ * Засев схождения, который полосовая ступень отдаёт вместе с шагом: прирост
+ * шага на пиксель у своего начала отсчёта. У дрейфа листа он равен `2·q`:
+ * местный шаг модели растёт как `1/(1 − a·q)²`, и у начала отсчёта его
+ * производная вдвое больше `q`.
+ */
+const BANDED_SEED = 2 * DRIFT_4.convergenceY;
+
+/**
+ * Шаги полос, которыми подменяется полосовая ступень. Подмена нужна потому,
+ * что на синтетическом листе профиль по всему кадру берёт порог уверенности с
+ * запасом и до полос дело не доходит ни при каком дрейфе: полосы зовёт только
+ * снимок настоящей тетради.
+ */
+const BANDED_STEPS = [23, 24, 25.3];
+
+const BANDED_DRIFT = 25.3 / 23 - 1;
+
+/**
+ * Начало отсчёта засева, которое подмена отдала детектору.
+ */
+type BandedSeedOrigin = {
+  /**
+   * Середина вырезки в её пикселях.
+   */
+  origin: number;
+};
+
+/**
+ * Подменяет первый проход детектора его же числами, к которым добавлены шаги
+ * полос и засев схождения от середины вырезки, — ровно то, что детектор отдаёт
+ * листу, шаг которого нашли полосы.
+ *
+ * @returns начало отсчёта засева в пикселях вырезки, как его увидит замер
+ */
+const mockBandedPass = async (): Promise<BandedSeedOrigin> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+  const seen = { origin: 0 };
+
+  vi.mocked(detectRuling).mockImplementationOnce((image, options) => {
+    seen.origin = image.height / 2;
+
+    return {
+      ...actual.detectRuling(image, options),
+      bandedStage: 'measured',
+      bandSteps: BANDED_STEPS,
+      convergenceSeed: BANDED_SEED,
+      convergenceOrigin: seen.origin,
+    };
+  });
+
+  return seen;
+};
+
+/**
+ * Подменяет первый проход детектора его же числами, у которых полосовая
+ * ступень отмечена отказавшей: шаг ей пришлось искать, и она его не дала.
+ */
+const mockRejectedBandedPass = async (): Promise<void> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+
+  vi.mocked(detectRuling).mockImplementationOnce((image, options) => {
+    return { ...actual.detectRuling(image, options), bandedStage: 'rejected' };
+  });
+};
+
+/**
+ * Подменяет проход по выпрямленной копии проходом, шаг которого нашла
+ * полосовая ступень: первый проход идёт настоящим, у второго к его же числам
+ * добавляются шаги полос. На синтетическом листе профиль по кадру берёт порог
+ * с запасом, и до полос дело не доходит ни при каком дрейфе.
+ */
+const mockRectifiedBandedPass = async (): Promise<void> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+
+  vi.mocked(detectRuling)
+    .mockImplementationOnce(actual.detectRuling)
+    .mockImplementationOnce((image, options) => {
+      return {
+        ...actual.detectRuling(image, options),
+        bandedStage: 'measured',
+        bandSteps: BANDED_STEPS,
+      };
+    });
+};
+
+describe('measureSheetPhoto: полосовой шаг выпрямленной копии', () => {
+  /**
+   * Пару фазы и наклона держит сам детектор: заданный наклон он отдаёт наружу
+   * тем же числом, которым мерил шаг и фазу, а копия выпрямлена только от
+   * схождения и скос в ней сохранён. Отказ от прохода, шаг которого нашли
+   * полосы, стоил бы на живых снимках медианы промаха базовых линий
+   * 0,135…0,215 шага против 0,005…0,040.
+   */
+  it('шаг копии нашли полосы: числа второго прохода взяты', async () => {
+    await mockRectifiedBandedPass();
+
+    const result = measure(LINED_DRIFT_SHEET);
+
+    expect(result.diagnostics.perspective?.isRectifiedRulingMissing).toBe(false);
+    expect(result.source.perspective).not.toBeNull();
+  });
+});
+
+describe('measureSheetPhoto: полосовая ступень', () => {
+  it('шаг взял профиль по кадру: ступень не понадобилась', () => {
+    expect(measure(LINED_DRIFT_SHEET).diagnostics.banded).toStrictEqual({
+      stage: 'skipped',
+      steps: [],
+      drift: 0,
+    });
+    expect(measure(GRID_SHEET).diagnostics.banded?.stage).toBe('skipped');
+  });
+
+  /**
+   * Отказ ступени доезжает до диагностики своим состоянием: шаги у него и у
+   * незапущенной ступени одинаково пусты, а отчёт замера печатает разное.
+   */
+  it('полосы посчитались и шага не дали: отказ виден в диагностике', async () => {
+    await mockRejectedBandedPass();
+
+    expect(measure(LINED_DRIFT_SHEET).diagnostics.banded).toStrictEqual({
+      stage: 'rejected',
+      steps: [],
+      drift: 0,
+    });
+  });
+
+  it('шаг нашли полосы: их шаги и дрейф уходят в диагностику', async () => {
+    await mockBandedPass();
+
+    const { banded } = measure(LINED_DRIFT_SHEET).diagnostics;
+
+    expect(banded?.stage).toBe('measured');
+    expect(banded?.steps).toStrictEqual(BANDED_STEPS);
+    expect(banded?.drift).toBeCloseTo(BANDED_DRIFT, 12);
+  });
+
+  it('засев схождения доезжает до поиска перспективы вместе со своим началом', async () => {
+    const seen = await mockBandedPass();
+
+    vi.mocked(detectRulingPerspective).mockClear();
+
+    const result = measure(LINED_DRIFT_SHEET);
+    const [call] = vi.mocked(detectRulingPerspective).mock.calls;
+
+    expect(call?.[1].convergenceSeed).toBe(BANDED_SEED);
+    expect(call?.[1].convergenceOrigin).toBe(seen.origin);
+    expect(result.source.perspective).not.toBeNull();
+  });
+});
+
+/**
+ * Линия поля, которую подмена отдаёт проходу детектора.
+ */
+type MockedMarginLine = {
+  /**
+   * Отступ линии поля в пикселях вырезки. `null` — линии нет.
+   */
+  marginLineX: number | null;
+
+  /**
+   * Сторона линии поля. `null` — линии нет.
+   */
+  marginLineSide: MarginLineSide | null;
+};
+
+/**
+ * Линия поля ровного прохода: левая, как на тетради с цветным полем.
+ */
+const FLAT_MARGIN_LINE: MockedMarginLine = { marginLineX: 120, marginLineSide: 'left' };
+
+/**
+ * Та же линия, чуть сдвинутая проходом по выпрямленной копии.
+ */
+const RECTIFIED_MARGIN_LINE: MockedMarginLine = {
+  marginLineX: 128,
+  marginLineSide: 'left',
+};
+
+/**
+ * Линии поля нет.
+ */
+const NO_MARGIN_LINE: MockedMarginLine = { marginLineX: null, marginLineSide: null };
+
+/**
+ * Подменяет линию поля в обоих проходах — ровном и по выпрямленной копии — и
+ * записывает настройки, с которыми позвали каждый. Остальные числа проходов
+ * настоящие.
+ *
+ * @param flat — линия поля ровного прохода
+ * @param rectified — линия поля прохода по выпрямленной копии
+ * @returns настройки проходов в порядке вызова
+ */
+const mockMarginLinePasses = async (
+  flat: MockedMarginLine,
+  rectified: MockedMarginLine
+): Promise<(RulingDetectionOptions | undefined)[]> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+  const seen: (RulingDetectionOptions | undefined)[] = [];
+
+  /**
+   * Подмена слушается ограничения по стороне так же, как настоящий детектор:
+   * иначе тест доказывал бы только то, что фантом снимается с результата, а
+   * снимать его нужно до области изгиба.
+   */
+  const toFoundLine = (
+    line: MockedMarginLine,
+    options?: RulingDetectionOptions
+  ): MockedMarginLine => {
+    const side = options?.marginLineSide;
+
+    if (side === undefined || side === line.marginLineSide) {
+      return line;
+    }
+
+    return NO_MARGIN_LINE;
+  };
+
+  const withMarginLine = (line: MockedMarginLine) => {
+    return (image: SheetImageData, options?: RulingDetectionOptions): DetectedRuling => {
+      seen.push(options);
+
+      return { ...actual.detectRuling(image, options), ...toFoundLine(line, options) };
+    };
+  };
+
+  vi.mocked(detectRuling)
+    .mockImplementationOnce(withMarginLine(flat))
+    .mockImplementationOnce(withMarginLine(rectified));
+
+  return seen;
+};
+
+describe('measureSheetPhoto: линия поля второго прохода', () => {
+  it('ровный проход линии не нашёл: второй её не ищет и не заводит', async () => {
+    const seen = await mockMarginLinePasses(NO_MARGIN_LINE, RECTIFIED_MARGIN_LINE);
+
+    const result = measure(LINED_DRIFT_SHEET);
+
+    expect(result.source.perspective).not.toBeNull();
+    /**
+     * Запрет идёт в сам детектор, а не снимается с результата: областью изгиба
+     * линия поля режет сетку узлов, и снятая после прохода она оставила бы
+     * часть блока за сеткой.
+     */
+    expect(seen[1]?.marginLineSide).toBeNull();
+    expect(result.source.marginLineX).toBeNull();
+    expect(result.source.marginLineSide).toBeNull();
+  });
+
+  it('ровный проход линию нашёл: второй уточняет её на той же стороне', async () => {
+    const seen = await mockMarginLinePasses(FLAT_MARGIN_LINE, RECTIFIED_MARGIN_LINE);
+
+    const result = measure(LINED_DRIFT_SHEET);
+    const { crop } = detectInCrop(LINED_DRIFT_SHEET, result.outline);
+
+    expect(result.source.perspective).not.toBeNull();
+    expect(seen[1]?.marginLineSide).toBe(FLAT_MARGIN_LINE.marginLineSide);
+    expect(result.source.marginLineX).toBe(
+      (RECTIFIED_MARGIN_LINE.marginLineX || 0) + crop.left
+    );
+    expect(result.source.marginLineSide).toBe(RECTIFIED_MARGIN_LINE.marginLineSide);
+  });
+
+  it('второй проход линию не подтвердил: линии поля нет', async () => {
+    await mockMarginLinePasses(FLAT_MARGIN_LINE, NO_MARGIN_LINE);
+
+    const result = measure(LINED_DRIFT_SHEET);
+
+    /**
+     * Неподтверждённая линия не возвращается числами ровного прохода: на
+     * выпрямленной копии она мерилась заново и не набрала барьер — так линию
+     * теряют IMG_1705 и IMG_1808, у которых её на листе нет.
+     */
+    expect(result.source.perspective).not.toBeNull();
+    expect(result.source.marginLineX).toBeNull();
+    expect(result.source.marginLineSide).toBeNull();
   });
 });

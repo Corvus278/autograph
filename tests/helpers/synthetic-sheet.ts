@@ -53,6 +53,63 @@ export type SyntheticSpiral = {
 };
 
 /**
+ * Полоса печатного текста поперёк кадра: строки штрихов с заданным шагом.
+ * Нужна как ловушка для поиска периода — текст даёт настоящий период по
+ * высоте, но только внутри своей полосы, и шаг его строк неотличим от
+ * правдоподобного шага разлиновки.
+ */
+export type SyntheticTextBand = {
+  /**
+   * Верхний край полосы, строка кадра.
+   */
+  top: number;
+
+  /**
+   * Нижний край полосы, строка кадра.
+   */
+  bottom: number;
+
+  /**
+   * Левый край полосы, столбец кадра.
+   */
+  left: number;
+
+  /**
+   * Правый край полосы, столбец кадра.
+   */
+  right: number;
+
+  /**
+   * Шаг строк текста по высоте. Первая строка отступает от верха полосы на
+   * полшага: встань она на край, полоса обрезала бы её наполовину, и период у
+   * края сбился бы.
+   */
+  step: number;
+
+  /**
+   * Высота штриха.
+   */
+  strokeHeight: number;
+
+  /**
+   * Шаг штрихов по ширине строки.
+   */
+  pitch: number;
+
+  /**
+   * Ширина штриха.
+   */
+  strokeWidth: number;
+
+  /**
+   * Насколько штрих темнее бумаги, от 0 до 1. Не задана — глубина, которой
+   * хватает, чтобы полосу не отсекла сила сигнала: ловушка должна спорить с
+   * разлиновкой на равных.
+   */
+  darkness?: number;
+};
+
+/**
  * Горизонтальные линии чужого шага — соседняя страница разворота или
  * подложка, видная за линией поля.
  */
@@ -415,6 +472,24 @@ export type SyntheticSheetParams = {
   lowContrastArea?: SyntheticArea;
 
   /**
+   * Прямоугольник кадра, внутри которого различима лишь каждая вторая
+   * горизонтальная линия: у линий с нечётным номером на гребёнке остаётся доля
+   * `contrast` от их глубины. Так снят дальний край тетради в клетку, где
+   * разрешения снимка уже не хватает на каждую линию, и период разлиновки в
+   * этой части кадра вдвое больше шага линий.
+   *
+   * Вертикали клетки прямоугольник не задевает: период меряется по
+   * горизонтальным линиям, а погашенные заодно вертикали сдвинули бы и замер
+   * наклона, к «через одну» отношения не имеющий.
+   */
+  everySecondLineArea?: SyntheticArea | null;
+
+  /**
+   * Полоса печатного текста поверх бумаги. Не задана — текста нет.
+   */
+  textBand?: SyntheticTextBand | null;
+
+  /**
    * Поверхность вокруг листа. Не задана — лист занимает весь кадр.
    */
   surface?: SyntheticSurface | null;
@@ -425,6 +500,26 @@ export type SyntheticSheetParams = {
    * эталона, а здесь у каждой линии есть точное место — `computeSyntheticLineY`.
    */
   rulingPerspective?: SyntheticRulingPerspective | null;
+
+  /**
+   * Доля прироста шага разлиновки по кадру от верхней крайней линии к нижней:
+   * `0.25` — у нижней шаг на четверть больше, чем у верхней. Отрицательная доля
+   * растит шаг кверху. Мера та же, что у детектора перспективы: местный шаг на
+   * крайних линиях, а не расстояние между двумя соседними.
+   *
+   * Доля, а не `convergenceY` в 1/px: гарантия спеки записана в процентах, и
+   * тест, задающий дрейф числом из спеки, не считает перевод в уме.
+   */
+  stepDrift?: number;
+
+  /**
+   * Доля, на которую линии сходятся по ширине кадра: `0.2` — у правого края
+   * кадра промежуток между двумя линиями на пятую часть меньше, чем у левого.
+   * Отрицательная доля сводит линии влево. Промежуток меняется по ширине
+   * одинаково у всех пар линий, поэтому доля не зависит от того, по какой паре
+   * её мерить.
+   */
+  lineConvergence?: number;
 };
 
 const DEFAULT_WIDTH = 420;
@@ -463,6 +558,22 @@ const computeInk = (distance: number, sigma: number): number => {
   return Math.exp(-0.5 * (distance / sigma) ** 2);
 };
 
+/**
+ * Глубина линии по её месту на гребёнке: единица — линия видна целиком.
+ */
+type SyntheticLineDepth = (center: number) => number;
+
+/**
+ * Полная глубина: линия, у которой глубина не задана, видна целиком. Множитель
+ * ровно единица, поэтому растр листа без погашенных линий не меняется ни в
+ * одном пикселе.
+ *
+ * @returns единица
+ */
+const computeFullDepth = (): number => {
+  return 1;
+};
+
 const computeCombInk = (
   coordinate: number,
   step: number,
@@ -471,7 +582,8 @@ const computeCombInk = (
   from: number,
   to: number,
   driftFrom = Number.POSITIVE_INFINITY,
-  drift = 0
+  drift = 0,
+  depthAt: SyntheticLineDepth = computeFullDepth
 ): number => {
   const center = Math.round((coordinate - phase) / step) * step + phase;
 
@@ -481,7 +593,7 @@ const computeCombInk = (
 
   const shift = center >= driftFrom ? drift : 0;
 
-  return computeInk(coordinate - center - shift, sigma);
+  return depthAt(center) * computeInk(coordinate - center - shift, sigma);
 };
 
 /**
@@ -499,6 +611,7 @@ const computeCombInk = (
  * @param driftFrom — место на гребёнке, с которого линии уходят на `drift`
  * @param drift — уход линий от `driftFrom`
  * @param offsetAt — изгиб линии по её месту на прямой гребёнке
+ * @param depthAt — глубина линии по её месту на прямой гребёнке
  * @returns глубина чернил от 0 до 1
  */
 const computeBentCombInk = (
@@ -510,10 +623,12 @@ const computeBentCombInk = (
   to: number,
   driftFrom: number,
   drift: number,
-  offsetAt: (center: number) => number
+  offsetAt: (center: number) => number,
+  depthAt: SyntheticLineDepth = computeFullDepth
 ): number => {
   const nearest = Math.round((coordinate - phase) / step);
   let closest = Number.POSITIVE_INFINITY;
+  let closestCenter = phase;
 
   for (let index = nearest - 1; index <= nearest + 1; index += 1) {
     const center = index * step + phase;
@@ -522,11 +637,14 @@ const computeBentCombInk = (
       const shift = center >= driftFrom ? drift : 0;
       const distance = coordinate - center - shift - offsetAt(center);
 
-      closest = Math.abs(distance) < Math.abs(closest) ? distance : closest;
+      if (Math.abs(distance) < Math.abs(closest)) {
+        closest = distance;
+        closestCenter = center;
+      }
     }
   }
 
-  return computeInk(closest, sigma);
+  return depthAt(closestCenter) * computeInk(closest, sigma);
 };
 
 const DEFAULT_SPIRAL_DARKNESS = 0.7;
@@ -572,6 +690,96 @@ const isInsideArea = (area: SyntheticArea, x: number, y: number): boolean => {
   const { left, top, right, bottom } = area;
 
   return x >= left && x <= right && y >= top && y <= bottom;
+};
+
+/**
+ * Глубина линий внутри прямоугольника «через одну»: у линий с нечётным номером
+ * на гребёнке остаётся доля `contrast`. Номер отсчитывается от фазы, а не от
+ * края прямоугольника, поэтому гаснут те же линии, что и в соседнем кадре с
+ * другими границами прямоугольника, — «через одну» не зависит от того, где
+ * прямоугольник начался.
+ *
+ * @param area — прямоугольник кадра и доля глубины гаснущих линий
+ * @param step — шаг гребёнки
+ * @param phase — фаза гребёнки
+ * @returns глубина линии по её месту на гребёнке
+ */
+const createHalvedDepth = (
+  area: SyntheticArea,
+  step: number,
+  phase: number
+): SyntheticLineDepth => {
+  return (center) => {
+    return Math.abs(Math.round((center - phase) / step)) % 2 === 0 ? 1 : area.contrast;
+  };
+};
+
+const DEFAULT_TEXT_DARKNESS = 0.5;
+
+/**
+ * Пробел между словами: примерно каждый седьмой штрих пропущен. Без пропусков
+ * полоса была бы правильной сеткой, а не текстом. Номер штриха гоняется через
+ * целочисленный хэш, а не через общий поток шума: пропуск обязан зависеть
+ * только от места штриха, иначе растр менялся бы от порядка обхода пикселей.
+ *
+ * @param row — номер строки текста
+ * @param column — номер штриха в строке
+ * @returns `true`, если штриха на этом месте нет
+ */
+const isTextStrokeSkipped = (row: number, column: number): boolean => {
+  const mixed = Math.imul(row, 73_856_093) ^ Math.imul(column, 19_349_663);
+
+  return (Math.imul(mixed, 0x27_d4_eb_2d) >>> 0) % 7 === 0;
+};
+
+/**
+ * Чернила полосы текста в точке кадра: ближайший штрих ближайшей строки с
+ * краями, размытыми той же гауссианой, что у линии разлиновки.
+ *
+ * @param band — полоса текста
+ * @param x — столбец пикселя
+ * @param y — строка пикселя
+ * @param sigma — сигма размытого края
+ * @returns глубина чернил от 0 до 1
+ */
+const computeTextBandInk = (
+  band: SyntheticTextBand,
+  x: number,
+  y: number,
+  sigma: number
+): number => {
+  const {
+    top,
+    bottom,
+    left,
+    right,
+    step,
+    pitch,
+    strokeWidth,
+    strokeHeight,
+    darkness = DEFAULT_TEXT_DARKNESS,
+  } = band;
+
+  if (x < left || x > right || y < top || y > bottom) {
+    return 0;
+  }
+
+  const firstRow = top + step / 2;
+  const row = Math.round((y - firstRow) / step);
+  const column = Math.round((x - left) / pitch);
+
+  if (isTextStrokeSkipped(row, column)) {
+    return 0;
+  }
+
+  const overY = Math.abs(y - (firstRow + row * step)) - strokeHeight / 2;
+  const overX = Math.abs(x - (left + column * pitch)) - strokeWidth / 2;
+
+  return (
+    darkness *
+    computeInk(Math.max(0, overY), sigma) *
+    computeInk(Math.max(0, overX), sigma)
+  );
 };
 
 const DEFAULT_SURFACE_BRIGHTNESS = 0.3;
@@ -677,6 +885,7 @@ const computeLineCenterY = (
  * @param from — наименьшее место линии на гребёнке, которое рисуется
  * @param to — наибольшее место линии на гребёнке, которое рисуется
  * @param lineYAt — строка центра линии по её месту на гребёнке
+ * @param depthAt — глубина линии по её месту на гребёнке
  * @returns глубина чернил от 0 до 1
  */
 const computePerspectiveCombInk = (
@@ -687,10 +896,12 @@ const computePerspectiveCombInk = (
   sigma: number,
   from: number,
   to: number,
-  lineYAt: (center: number) => number
+  lineYAt: (center: number) => number,
+  depthAt: SyntheticLineDepth = computeFullDepth
 ): number => {
   const nearest = Math.round((coordinate - phase) / step);
   let closest = Number.POSITIVE_INFINITY;
+  let closestCenter = phase;
 
   for (let index = nearest - 1; index <= nearest + 1; index += 1) {
     const center = index * step + phase;
@@ -698,11 +909,14 @@ const computePerspectiveCombInk = (
     if (center >= from && center <= to) {
       const distance = y - lineYAt(center);
 
-      closest = Math.abs(distance) < Math.abs(closest) ? distance : closest;
+      if (Math.abs(distance) < Math.abs(closest)) {
+        closest = distance;
+        closestCenter = center;
+      }
     }
   }
 
-  return computeInk(closest, sigma);
+  return depthAt(closestCenter) * computeInk(closest, sigma);
 };
 
 /**
@@ -893,8 +1107,55 @@ export const computeSyntheticOutline = (params: SyntheticSheetParams): SheetOutl
 };
 
 /**
+ * Схождение по высоте из доли прироста шага. Линия с координатой `v` вдоль
+ * линий, отсчитанной от начала отсчёта, стоит на `v / (1 − q·v)`, поэтому
+ * местный шаг по кадру растёт как `1 / (1 − q·v)²`. Приравняв отношение шагов
+ * на концах области с линиями к `1 + d`, получаем `q` в одно действие.
+ *
+ * @param drift — доля прироста шага от верхней крайней линии к нижней
+ * @param top — координата верхней крайней линии от начала отсчёта
+ * @param bottom — координата нижней крайней линии от начала отсчёта
+ * @returns схождение по высоте, 1/px
+ */
+const computeDriftConvergence = (drift: number, top: number, bottom: number): number => {
+  if (drift === 0) {
+    return 0;
+  }
+
+  const ratio = Math.sqrt(1 + drift);
+
+  return (ratio - 1) / (ratio * bottom - top);
+};
+
+/**
+ * Схождение по ширине из доли схождения линий. Промежуток между любыми двумя
+ * линиями в столбце `x` множится на `1 + q·(x − originX)`, поэтому отношение
+ * промежутков у правого и левого краёв кадра равно `1 − c`.
+ *
+ * @param convergence — доля, на которую промежуток у правого края меньше, чем
+ *   у левого
+ * @param width — ширина кадра
+ * @param originX — начало отсчёта по ширине
+ * @returns схождение по ширине, 1/px
+ */
+const computeWidthConvergence = (
+  convergence: number,
+  width: number,
+  originX: number
+): number => {
+  if (convergence === 0) {
+    return 0;
+  }
+
+  return -convergence / (width - convergence * originX);
+};
+
+/**
  * Эталонная перспектива разлиновки в форме модели: начало отсчёта разрешено до
  * чисел, чтобы сравнение с измеренной перспективой шло без домысливания.
+ * Заданная напрямую `rulingPerspective` сильнее долей `stepDrift` и
+ * `lineConvergence`: доли — короткая запись той же модели, а не поправка
+ * поверх неё.
  *
  * @param params — описание листа
  * @returns перспектива; `null` — линии идут через равный шаг
@@ -905,27 +1166,59 @@ export const computeSyntheticPerspective = (
   const {
     width = DEFAULT_WIDTH,
     height = DEFAULT_HEIGHT,
+    step = DEFAULT_STEP,
+    phase = 0,
+    angle = 0,
+    margins = DEFAULT_MARGINS,
+    stepDrift = 0,
+    lineConvergence = 0,
     rulingPerspective = null,
   } = params;
 
-  if (rulingPerspective === null) {
+  if (rulingPerspective !== null) {
+    const {
+      convergenceX,
+      convergenceY,
+      originX = width / 2,
+      originY = height / 2,
+    } = rulingPerspective;
+
+    return { originX, originY, convergenceX, convergenceY };
+  }
+
+  if (stepDrift === 0 && lineConvergence === 0) {
     return null;
   }
 
-  const {
-    convergenceX,
-    convergenceY,
-    originX = width / 2,
-    originY = height / 2,
-  } = rulingPerspective;
+  const originX = width / 2;
+  const originY = height / 2;
+  /**
+   * Координата вдоль линий отсчитывается от начала отсчёта: у линии,
+   * проходящей через него, она равна `originY − originX·tg(angle)`.
+   */
+  const base = originY - originX * Math.tan(angle * DEGREES_TO_RADIANS);
+  /**
+   * Дрейф отсчитывается между крайними нарисованными линиями, а не между
+   * краями области с линиями: детектор перспективы меряет его там же, и
+   * заказанная тестом доля совпадает с измеренной без поправки на отрезанный
+   * фазой хвост области.
+   */
+  const topLine = Math.ceil((margins.top - phase) / step) * step + phase;
+  const bottomLine = Math.floor((height - margins.bottom - phase) / step) * step + phase;
 
-  return { originX, originY, convergenceX, convergenceY };
+  return {
+    originX,
+    originY,
+    convergenceX: computeWidthConvergence(lineConvergence, width, originX),
+    convergenceY: computeDriftConvergence(stepDrift, topLine - base, bottomLine - base),
+  };
 };
 
 /**
  * Рисует полутоновый лист с заданной разлиновкой: шагом, фазой, наклоном,
- * полями, линией поля, изгибом линий и границ, помехами у края, зерном и
- * неравномерным освещением. Нужен затем, чтобы измерения проверялись против
+ * дрейфом шага по высоте и схождением линий по ширине, полями, линией поля,
+ * изгибом линий и границ, помехами у края, зерном и неравномерным
+ * освещением. Нужен затем, чтобы измерения проверялись против
  * известного ответа, а не против глазомера по настоящей фотографии. Вызов без
  * параметров изгиба и помех рисует тот же растр, что и до их появления.
  *
@@ -962,6 +1255,8 @@ export const createSyntheticSheet = (
     spiral = null,
     outerRuling = null,
     lowContrastArea = null,
+    everySecondLineArea = null,
+    textBand = null,
     surface = null,
   } = params;
   const { left: leftEndBend = computeNoShift, right: rightEndBend = computeNoShift } =
@@ -977,6 +1272,10 @@ export const createSyntheticSheet = (
   const isOuterRulingOnLeft = marginLineX !== null && marginLineX < width / 2;
   const perspectiveModel = computeSyntheticPerspective(params);
   const bendField = bend || computeNoShift;
+  const halvedDepth =
+    everySecondLineArea === null
+      ? computeFullDepth
+      : createHalvedDepth(everySecondLineArea, step, phase);
   const surfaceCornerRadius = surface === null ? 0 : surface.cornerRadius || 0;
   const surfaceGrain = surface === null ? 0 : surface.grain || 0;
   const surfaceVignette = surface === null ? 0 : surface.vignette || 0;
@@ -1011,6 +1310,10 @@ export const createSyntheticSheet = (
 
       if (kind !== 'blank' && isOnPaper) {
         const isAcrossInside = acrossLines >= rowLeftEdge && acrossLines <= rowRightEdge;
+        const lineDepthAt =
+          everySecondLineArea !== null && isInsideArea(everySecondLineArea, x, y)
+            ? halvedDepth
+            : computeFullDepth;
 
         if (isAcrossInside) {
           let lineInk = 0;
@@ -1034,7 +1337,8 @@ export const createSyntheticSheet = (
                   drift,
                   bendField
                 );
-              }
+              },
+              lineDepthAt
             );
           } else if (bend === null) {
             lineInk = computeCombInk(
@@ -1045,7 +1349,8 @@ export const createSyntheticSheet = (
               topEdge,
               bottomEdge,
               driftFrom,
-              drift
+              drift,
+              lineDepthAt
             );
           } else {
             lineInk = computeBentCombInk(
@@ -1059,7 +1364,8 @@ export const createSyntheticSheet = (
               drift,
               (center) => {
                 return bend(x, center + x * tangent);
-              }
+              },
+              lineDepthAt
             );
           }
 
@@ -1114,6 +1420,10 @@ export const createSyntheticSheet = (
               bottomEdge
             );
         }
+      }
+
+      if (textBand !== null && isOnPaper) {
+        value -= computeTextBandInk(textBand, x, y, sigma);
       }
 
       if (spiral !== null) {

@@ -7,7 +7,21 @@ import type { RulingPerspective, SheetRuling } from './paper.types';
 export type PerspectiveBaseRuling = Pick<
   SheetRuling,
   'step' | 'firstLinePhase' | 'skewAngle' | 'margins'
->;
+> & {
+  /**
+   * Засев схождения полосовой ступени `k` из `step(u) = step·(1 + k·(u −
+   * convergenceOrigin))`, 1/px. `0` — шаг по кадру не плывёт либо полосы не
+   * считались, и подгонка стартует с ровной гребёнки.
+   */
+  convergenceSeed: number;
+
+  /**
+   * Начало отсчёта координаты вдоль линий, от которого взят `convergenceSeed`,
+   * px. Едет вместе с засевом: у подгонки своё начало — середина вырезки, — и
+   * перенос `step(u)` с чужим началом ошибается на `k·Δ`.
+   */
+  convergenceOrigin: number;
+};
 
 /**
  * Кадр фотографии, в который попала вырезка: отступы её левого верхнего угла от

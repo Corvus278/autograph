@@ -1,9 +1,13 @@
 import {
   buildSheetRuling,
+  type MarginLineSide,
   type RulingBend,
   type SheetRuling,
 } from '@pages/Generator/lib/paper';
-import { detectRuling } from '@pages/Generator/lib/paper/detectRuling';
+import {
+  detectRuling,
+  type RulingDetectionOptions,
+} from '@pages/Generator/lib/paper/detectRuling';
 import type { RulingBendRegion } from '@pages/Generator/lib/paper/detectRulingBend';
 import { sampleRulingBend } from '@pages/Generator/lib/paper/sampleRulingBend';
 import { describe, expect, it } from 'vitest';
@@ -150,10 +154,13 @@ const HALF_SAG_CLUTTERED_SHEET = {
   bend: HALF_REGION_SAG,
 } satisfies SyntheticSheetParams;
 
-const detectSheetRuling = (params: SyntheticSheetParams): SheetRuling => {
+const detectSheetRuling = (
+  params: SyntheticSheetParams,
+  options?: RulingDetectionOptions
+): SheetRuling => {
   const skewAngle = params.angle || 0;
   const image = createSyntheticSheet(params);
-  const detection = detectRuling(image, { skewAngle });
+  const detection = detectRuling(image, { ...options, skewAngle });
 
   return buildSheetRuling({ ...detection, skewAngle }, image);
 };
@@ -273,6 +280,35 @@ describe('detectRuling: изгиб линий', () => {
       REGION_TOLERANCE
     );
   });
+
+  /**
+   * Линия поля у SPIRAL_SHEET стоит справа, поэтому поиск, ограниченный левым
+   * краем, до неё не дотягивается ровно так же, как запрет.
+   */
+  it.each([
+    ['запрещена', null],
+    ['ограничена другим краем', 'left'],
+  ] satisfies [string, MarginLineSide | null][])(
+    'линия поля %s: сетка изгиба идёт за неё, а не обрывается на ней',
+    (_label, marginLineSide) => {
+      const free = detectSheetRuling(SPIRAL_SHEET, { marginLineSide });
+      const clipped = detectSheetRuling(SPIRAL_SHEET);
+      const region = free.bend && toNodeRegion(free.bend);
+      const clippedRegion = clipped.bend && toNodeRegion(clipped.bend);
+
+      /**
+       * Линия поля снимается и с результата, и с области изгиба: иначе блок,
+       * расширенный до края листа, лёг бы за сетку узлов, где смещение —
+       * константа крайнего узла.
+       */
+      expect(free.marginLineSide).not.toBe(clipped.marginLineSide);
+      expect(clipped.marginLineX).not.toBeNull();
+      expect(region?.right || 0).toBeGreaterThan((clippedRegion?.right || 0) + STEP);
+      expect(
+        Math.abs((region?.left || 0) - (clippedRegion?.left || 0))
+      ).toBeLessThanOrEqual(REGION_TOLERANCE);
+    }
+  );
 
   /**
    * По полям и линии поля выкладывается блок текста, и прогиб линий их сдвигать

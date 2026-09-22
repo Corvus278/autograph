@@ -10,6 +10,7 @@ import { detectSheetOutline } from './detectSheetOutline';
 import { extractLighting } from './extractLighting';
 import { extractTexture } from './extractTexture';
 import type {
+  SheetPhotoBandedReport,
   SheetPhotoMeasurement,
   SheetPhotoOptions,
   SheetPhotoPerspectiveReport,
@@ -19,6 +20,7 @@ import type {
   PaperMargins,
   RulingBend,
   RulingProjection,
+  SheetFrame,
   SheetImageData,
   SheetOutline,
   SheetPoint,
@@ -130,6 +132,11 @@ type RulingMeasurement = {
    * Отчёт перспективы; `null` — разлиновка не найдена.
    */
   report: SheetPhotoPerspectiveReport | null;
+
+  /**
+   * Числа полосовой ступени прохода по кадру; `null` — полосы не считались.
+   */
+  banded: SheetPhotoBandedReport | null;
 };
 
 /**
@@ -192,6 +199,11 @@ const cropSheet = (image: SheetImageData, outline: SheetOutline | null): SheetCr
  * Переводит поля, линию поля и изгиб из пикселей анализа в пиксели кадра.
  * Ненайденная сторона остаётся нулём: фолбэк от стороны листа посчитает сборка
  * разлиновки.
+ *
+ * Наклон берётся из перевода, а не из прохода: с ним посчитан сдвиг координаты
+ * вдоль линий, которым сюда приходит фаза, и с ним же измерена перспектива.
+ * Пару фазы и наклона держит сам детектор — заданный наклон он отдаёт наружу
+ * тем же числом, которым мерил шаг и фазу.
  *
  * @param detection — результат детектора разлиновки
  * @param analysisWidth — ширина изображения, ушедшего в детектор
@@ -570,31 +582,65 @@ const withEdgeMargins = (
 };
 
 /**
+ * Середина области с линиями по ширине кадра: там сходятся обе гребёнки листа,
+ * потому что обе подогнаны по одним и тем же линиям, а их узлы лежат внутри
+ * полей. Ненайденное поле оставляет край кадра, и середина съезжает к середине
+ * кадра — ровно туда, где сидит масса узлов и в этом случае.
+ *
+ * @param margins — поля разлиновки в кадре
+ * @param frameWidth — ширина кадра
+ * @returns столбец середины области в пикселях кадра
+ */
+const toRuledMiddle = (margins: PaperMargins, frameWidth: number): number => {
+  return (margins.left + (frameWidth - margins.right)) / 2;
+};
+
+/**
  * Верхнее и нижнее поле второго прохода, упёршегося в край выпрямленной копии,
  * берутся у ровного прохода: копия режется по вырезке, и за её краем второй
  * проход линий не видит, а ровный уже проверил край по снимку. Поле ставится
  * на ближайшую линию перспективной гребёнки: у ровного прохода линия стоит по
  * своей гребёнке, и строка встала бы мимо линий.
  *
+ * Садится оно на линию в середине области с линиями, а не у левого края кадра,
+ * куда поле отсчитано. Обе гребёнки описывают одни и те же линии и сходятся
+ * там, где лежат их узлы, а к краю расходятся на разницу наклонов во всё
+ * плечо: у листа с волной у верха это треть шага, и округление к ближайшей
+ * линии у самого края берёт соседнюю — текст начинается со второй линии листа.
+ * Поэтому поле переносится в середину области по гребёнке ровного прохода, там
+ * садится на линию перспективной и возвращается к левому краю уже по ней.
+ *
  * @param source — разлиновка второго прохода в кадре
  * @param flat — разлиновка ровного прохода в кадре
  * @param projection — наклон и перспектива второго прохода в кадре
- * @param frameHeight — высота кадра
+ * @param frame — кадр фотографии
  * @returns разлиновка с унаследованными полями
  */
 const inheritEdgeMargins = (
   source: SheetRulingSource,
   flat: SheetRulingSource,
   projection: RulingProjection,
-  frameHeight: number
+  frame: SheetFrame
 ): SheetRulingSource => {
   const margins = source.margins || { top: 0, right: 0, bottom: 0, left: 0 };
   const flatTop = flat.margins?.top || 0;
   const flatBottom = flat.margins?.bottom || 0;
   const { step, firstLinePhase } = source;
+  const flatProjection: RulingProjection = {
+    skewAngle: flat.skewAngle,
+    perspective: flat.perspective || null,
+  };
+  const middle = toRuledMiddle(margins, frame.width);
 
   const snapToLine = (y: number): number => {
-    const line = Math.round((lineCoordinateAt(projection, 0, y) - firstLinePhase) / step);
+    const height = lineHeightAt(
+      flatProjection,
+      middle,
+      lineCoordinateAt(flatProjection, 0, y)
+    );
+    const line = Math.round(
+      (lineCoordinateAt(projection, middle, height) - firstLinePhase) / step
+    );
 
     return lineHeightAt(projection, 0, firstLinePhase + line * step);
   };
@@ -606,8 +652,30 @@ const inheritEdgeMargins = (
       top: margins.top || (flatTop && snapToLine(flatTop)),
       bottom:
         margins.bottom ||
-        (flatBottom && frameHeight - snapToLine(frameHeight - flatBottom)),
+        (flatBottom && frame.height - snapToLine(frame.height - flatBottom)),
     },
+  };
+};
+
+/**
+ * Отчёт полосовой ступени: что она сделала, шаги полос и их дрейф. Признак
+ * запуска идёт полем, а не пустотой шагов: у незапущенной ступени и у
+ * отказавшей шаги одинаково пусты, а отчёт замера эти случаи различает.
+ *
+ * @param detection — проход детектора по кадру
+ * @returns отчёт полос
+ */
+const toBandedReport = ({
+  bandedStage,
+  bandSteps,
+}: DetectedRuling): SheetPhotoBandedReport => {
+  const first = bandSteps[0];
+  const last = bandSteps.at(-1);
+
+  return {
+    stage: bandedStage,
+    steps: bandSteps,
+    drift: first && last ? last / first - 1 : 0,
   };
 };
 
@@ -631,12 +699,14 @@ const measureRuling = (
   outline: SheetOutline | null
 ): RulingMeasurement => {
   const detected = detectRuling(crop.image);
+  const banded = toBandedReport(detected);
 
   if (!detected.isDetected || detected.step <= 0) {
     return {
       source: { step: 0, firstLinePhase: 0, skewAngle: detected.skewAngle },
       detection: detected,
       report: MISSING_REPORT,
+      banded,
     };
   }
 
@@ -666,7 +736,7 @@ const measureRuling = (
   };
 
   if (!perspective.perspective) {
-    return { source: flatSource, detection: flat, report };
+    return { source: flatSource, detection: flat, report, banded };
   }
 
   /**
@@ -677,9 +747,32 @@ const measureRuling = (
     skewAngle: perspective.skewAngle,
     perspective: perspective.perspective,
   });
+  /**
+   * Наклон задаётся детектору, и тем же числом он уходит наружу: свип полос
+   * на копии ничего не переопределяет. Пара шага, фазы и наклона от этого не
+   * рвётся, хотя фазу полосовая ступень и меряет своим свипом. Копия
+   * выпрямлена только от схождения, скос в ней сохранён, и линии лежат прямой
+   * гребёнкой под заданным наклоном — искать вдали от него свипу нечего: на
+   * снимках, где ступень сработала на копии, её угол разошёлся с заданным на
+   * 0,002…0,120°, то есть на 0,04…3,2 px фазы у края кадра (0,0005…0,053
+   * шага).
+   *
+   * Строгий отказ от такого прохода не окупается: у `IMG_1705`, `IMG_1809`,
+   * `IMG_1810` и `IMG_1811` он уводит медиану промаха базовых линий с
+   * 0,005…0,040 шага на 0,135…0,215, а максимум — с 0,020…0,155 на 0,500,
+   * тогда как граница приёмки — 0,05 по медиане и 0,25 по максимуму.
+   */
   const second =
     rectified.image.height > 0
-      ? detectRuling(rectified.image, { skewAngle: perspective.skewAngle })
+      ? detectRuling(rectified.image, {
+          skewAngle: perspective.skewAngle,
+          /**
+           * Сторону задаёт ровный проход: второй волен уточнить `x` линии поля
+           * или не подтвердить её, но искать её у другого края листа ему
+           * нечем — выпрямление `x` вертикали не меняет.
+           */
+          marginLineSide: flat.marginLineSide,
+        })
       : null;
 
   if (!second || !second.isDetected || second.step <= 0) {
@@ -687,6 +780,7 @@ const measureRuling = (
       source: flatSource,
       detection: flat,
       report: { ...report, isRectifiedRulingMissing: true },
+      banded,
     };
   }
 
@@ -700,10 +794,11 @@ const measureRuling = (
       toFrameSource(second, rectified.image.width, transfer),
       flatSource,
       transfer.projection,
-      image.height
+      image
     ),
     detection: second,
     report,
+    banded,
   };
 };
 
@@ -744,11 +839,12 @@ export const measureSheetPhoto = (
         kind: 'blank',
         bendFoundNodeShare: 0,
         perspective: MISSING_REPORT,
+        banded: null,
       },
     };
   }
 
-  const { source, detection, report } = measureRuling(image, crop, outline);
+  const { source, detection, report, banded } = measureRuling(image, crop, outline);
 
   return {
     source: { ...source, outline },
@@ -761,6 +857,7 @@ export const measureSheetPhoto = (
       kind: detection.kind,
       bendFoundNodeShare: detection.bendFoundNodeShare,
       perspective: report,
+      banded,
     },
   };
 };
