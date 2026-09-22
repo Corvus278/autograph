@@ -1,5 +1,6 @@
 import { cropSheetColumns } from './cropSheetColumns';
 import type { RulingBend, SheetImageData, SheetRuling } from './paper.types';
+import { computeMedian, computeQuantile } from './quantile';
 import {
   buildStripProfiles,
   detrendProfile,
@@ -327,14 +328,6 @@ const findLineDip = (
   };
 };
 
-const computeQuantile = (values: number[], quantile: number): number => {
-  const sorted = [...values].sort((first, second) => {
-    return first - second;
-  });
-
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] || 0;
-};
-
 /**
  * Порядок полос для старта: от центральной к краям. Поиск в центре, а не у
  * края: там отход линии от прямой наименьший.
@@ -438,7 +431,7 @@ const replaceOutliers = (grid: NodeGrid, limit: number): number => {
       }, []);
 
       if (isFound[index] && neighbours.length === FILTER_ROWS) {
-        const median = computeQuantile(neighbours, 0.5);
+        const median = computeMedian(neighbours);
 
         if (Math.abs((measured[index] || 0) - median) > limit) {
           offsets[index] = median;

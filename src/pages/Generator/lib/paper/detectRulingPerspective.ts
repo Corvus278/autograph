@@ -691,8 +691,7 @@ const toSeededConvergenceY = (
     return 0;
   }
 
-  const offset =
-    originY - originX * Math.tan(skewAngle / DEGREES_IN_RADIAN) - convergenceOrigin;
+  const offset = originY - originX * toTangent(skewAngle) - convergenceOrigin;
   const weight = 1 + convergenceSeed * offset;
 
   return weight > 0 ? convergenceSeed / (2 * weight) : 0;

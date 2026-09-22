@@ -1,5 +1,6 @@
 import { measureBandedPeriod } from '@pages/Generator/lib/paper/measureBandedPeriod';
 import type { SheetImageData } from '@pages/Generator/lib/paper/paper.types';
+import { mulberry32 } from '@shared/lib/random';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -573,6 +574,176 @@ describe('measureBandedPeriod: потолок доли контраста', () =
     expect(Math.abs(step - reference.step)).toBeLessThanOrEqual(
       STEP_TOLERANCE * reference.step
     );
+  });
+});
+
+/**
+ * Кадр листа, у которого шаг разлиновки растёт к обоим краям.
+ */
+const BULGED_SHEET_WIDTH = 420;
+
+const BULGED_SHEET_HEIGHT = 560;
+
+/**
+ * Шаг такого листа в середине кадра — правдоподобная для этого кадра
+ * разлиновка: отсечь лист должен разбор шагов по высоте, а не границы шага.
+ */
+const BULGED_BASE_STEP = 20;
+
+/**
+ * Доля, на которую шаг у краёв кадра больше, чем в середине. Тридцать пять
+ * сотых держат оба края окна сразу: внутри полосы шаг меняется меньше чем на
+ * четверть, и период в ней находится уверенно, а шаги полос уходят от
+ * подогнанной прямой почти на десятую долю шага — втрое дальше
+ * `MAX_FIT_RESIDUAL`.
+ *
+ * Гейт линейности проверка сторожит снизу: с порогом в три десятых лист
+ * проходит замер и отдаёт шаг около 22 px, потому что остальные правила такую
+ * периодичность пропускают — период есть в каждой полосе, полосы смежны, а
+ * гребёнка идёт через весь кадр.
+ */
+const BULGED_STEP_GROWTH = 0.35;
+
+/**
+ * Глубина линии, сигма её гауссианы и размах зерна — те же, с которыми рисует
+ * листы хелпер синтетики: от настоящего листа ловушка отличается только тем,
+ * как расставлены линии.
+ */
+const BULGED_LINE_DARKNESS = 0.45;
+
+const BULGED_LINE_SIGMA = 1.2;
+
+const BULGED_NOISE = 0.02;
+
+const BULGED_SEED = 7;
+
+/**
+ * Рисует кадр, у которого местный шаг разлиновки равен
+ * `BULGED_BASE_STEP · (1 + growth · ((y − середина) / полувысота)²)`: линии
+ * стоят чаще всего в середине кадра и расходятся к обоим его краям.
+ *
+ * Растр собирается прямо в тесте, а не хелпером синтетики: хелпер меняет шаг
+ * по кадру только монотонно — дрейфом или перспективой, — а здесь нужна ровно
+ * та зависимость, которой у перспективы быть не может.
+ *
+ * @param growth — доля прироста шага у краёв кадра; `0` — шаг по кадру
+ *   постоянен
+ * @returns полутоновая выжимка кадра
+ */
+const createBulgedSheet = (growth: number): SheetImageData => {
+  const half = BULGED_SHEET_HEIGHT / 2;
+
+  const computeStep = (y: number): number => {
+    return BULGED_BASE_STEP * (1 + growth * ((y - half) / half) ** 2);
+  };
+
+  const centers: number[] = [];
+
+  for (let y = computeStep(0) / 2; y < BULGED_SHEET_HEIGHT; y += computeStep(y)) {
+    centers.push(y);
+  }
+
+  const luminance = new Float32Array(BULGED_SHEET_WIDTH * BULGED_SHEET_HEIGHT);
+  const random = mulberry32(BULGED_SEED);
+
+  for (let y = 0; y < BULGED_SHEET_HEIGHT; y += 1) {
+    const row = y * BULGED_SHEET_WIDTH;
+    const ink = centers.reduce((sum, center) => {
+      return (
+        sum +
+        BULGED_LINE_DARKNESS * Math.exp(-0.5 * ((y - center) / BULGED_LINE_SIGMA) ** 2)
+      );
+    }, 0);
+
+    for (let x = 0; x < BULGED_SHEET_WIDTH; x += 1) {
+      const value = 1 - ink + (random() - 0.5) * BULGED_NOISE;
+
+      luminance[row + x] = Math.max(0, Math.min(1, value));
+    }
+  }
+
+  return { width: BULGED_SHEET_WIDTH, height: BULGED_SHEET_HEIGHT, luminance };
+};
+
+describe('measureBandedPeriod: шаги полос, не легшие на прямую', () => {
+  it('меряет лист той же сборки, у которого шаг по кадру постоянен', () => {
+    const { step, bandSteps } = measureBandedPeriod(createBulgedSheet(0), PROBE_OPTIONS);
+
+    expect(bandSteps.length).toBeGreaterThan(1);
+    expect(Math.abs(step - BULGED_BASE_STEP)).toBeLessThanOrEqual(
+      STEP_TOLERANCE * BULGED_BASE_STEP
+    );
+  });
+
+  it('отказывает на листе, где шаг растёт к обоим краям кадра', () => {
+    const { step, bandSteps } = measureBandedPeriod(
+      createBulgedSheet(BULGED_STEP_GROWTH),
+      PROBE_OPTIONS
+    );
+
+    expect(step).toBe(0);
+    expect(bandSteps).toEqual([]);
+  });
+});
+
+/**
+ * Лист с настоящей разлиновкой, у которого середину кадра занимает пустая
+ * вставка — наклеенная фотография во всю ширину листа.
+ */
+const INSERT_SHEET_STEP = 20;
+
+const INSERT_SHEET: SyntheticSheetParams = {
+  width: 420,
+  height: 560,
+  step: INSERT_SHEET_STEP,
+  phase: INSERT_SHEET_STEP / 2,
+  noise: 0.02,
+  seed: 9,
+};
+
+/**
+ * Края вставки. Стоит она посреди кадра и заходит в обе средние полосы
+ * разбивки ровно наполовину: в верхней гасит нижнюю половину, в нижней —
+ * верхнюю. Полоса с гребёнкой в одной своей половине период не отдаёт
+ * (`MIN_COMB_SUPPORT_SHARE`), и разлиновка остаётся найденной ровно в двух
+ * крайних полосах — несмежных.
+ *
+ * Отказать на таком листе может только требование двух соседних полос:
+ * половинный контраст средних полос охват гребёнки по кадру считает своим,
+ * прямая же через две точки проходит всегда. Со снятым требованием лист
+ * проходит замер и отдаёт шаг около 20 px.
+ */
+const INSERT_TOP = 210;
+
+const INSERT_BOTTOM = 350;
+
+/**
+ * Доля контраста, оставшаяся во вставке: ноль — ровная бумага без линий и без
+ * зерна.
+ */
+const INSERT_CONTRAST_SHARE = 0;
+
+describe('measureBandedPeriod: разлиновка в несмежных полосах', () => {
+  it('меряет тот же лист без вставки', () => {
+    const { step } = measureBandedPeriod(
+      createSyntheticSheet(INSERT_SHEET),
+      PROBE_OPTIONS
+    );
+
+    expect(Math.abs(step - INSERT_SHEET_STEP)).toBeLessThanOrEqual(
+      STEP_TOLERANCE * INSERT_SHEET_STEP
+    );
+  });
+
+  it('отказывает на листе, у которого середину кадра занимает пустая вставка', () => {
+    const image = createSyntheticSheet(INSERT_SHEET);
+
+    fadeBand(image, INSERT_TOP, INSERT_BOTTOM, INSERT_CONTRAST_SHARE);
+
+    const { step, bandSteps } = measureBandedPeriod(image, PROBE_OPTIONS);
+
+    expect(step).toBe(0);
+    expect(bandSteps).toEqual([]);
   });
 });
 

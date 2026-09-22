@@ -2,6 +2,7 @@ import { detectRowSkewAngle, MAX_SKEW_ANGLE, SKEW_ANGLE_STEP } from './detectSke
 import { ANALYSIS_IMAGE_SIZE } from './downsampleSheetImage';
 import type { SheetImageData } from './paper.types';
 import { measureProfilePeriod } from './profilePeriod';
+import { computeMedian } from './quantile';
 import { buildShearedProfile, detrendProfile, type ShearedProfile } from './sheetProfile';
 
 /**
@@ -653,23 +654,6 @@ const measureBestCombContrast = (profile: ShearedProfile, step: number): number 
 };
 
 /**
- * Медиана ряда.
- *
- * @param values — непустой ряд
- * @returns медиана
- */
-const findMedian = (values: number[]): number => {
-  const sorted = [...values].sort((left, right) => {
-    return left - right;
-  });
-  const middle = Math.floor(sorted.length / 2);
-
-  return sorted.length % 2 === 0
-    ? ((sorted[middle - 1] || 0) + (sorted[middle] || 0)) / 2
-    : sorted[middle] || 0;
-};
-
-/**
  * Охват гребёнки по кадру: доля полос, держащих контраст не ниже
  * `MIN_BAND_CONTRAST_SHARE` от медианного у полос с найденным периодом.
  *
@@ -714,7 +698,7 @@ const measureFrameCoverage = (
     }
   }
 
-  const median = findMedian(foundContrasts);
+  const median = computeMedian(foundContrasts);
 
   if (median <= 0) {
     return 0;

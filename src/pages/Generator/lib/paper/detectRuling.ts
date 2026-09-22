@@ -4,6 +4,7 @@ import { ANALYSIS_IMAGE_SIZE } from './downsampleSheetImage';
 import { measureBandedPeriod } from './measureBandedPeriod';
 import type { PaperMargins, RulingDetection, SheetImageData } from './paper.types';
 import { measureProfilePeriod, type ProfilePeriod } from './profilePeriod';
+import { computeMedian, computeQuantile } from './quantile';
 import {
   buildBandCombResponses,
   buildColumnProfiles,
@@ -498,22 +499,6 @@ type GridColumns = {
    * Последняя вертикальная линия; `null` — линии доходят до правого края профиля.
    */
   right: number | null;
-};
-
-const computeQuantile = (values: number[], quantile: number): number => {
-  if (values.length === 0) {
-    return 0;
-  }
-
-  const sorted = [...values].sort((first, second) => {
-    return first - second;
-  });
-
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] || 0;
-};
-
-const computeMedian = (values: number[]): number => {
-  return computeQuantile(values, 0.5);
 };
 
 /**
@@ -1636,6 +1621,10 @@ const measureRulingPeriod = (
     return { ...flat, bandedStage: 'rejected' };
   }
 
+  /**
+   * Заданный наклон сохраняется: нулевой — валидное измерение, а не «значения
+   * нет», и `||` подменил бы ровный лист наклоном полос.
+   */
   return {
     isDetected: true,
     skewAngle: options.skewAngle ?? banded.skewAngle,
