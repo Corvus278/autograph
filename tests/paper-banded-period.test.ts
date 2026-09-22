@@ -147,17 +147,53 @@ const TEXT_TRAP_SHEET: SyntheticSheetParams = {
 };
 
 /**
+ * Высокий кадр ловушки: на нём полоса текста в те же 30 % высоты приходится на
+ * две полосы разбивки целиком. Разбор по высоте такую ловушку пропускает —
+ * прямая через две точки проходит всегда, — и отсечь её может только охват
+ * гребёнки по кадру.
+ */
+const TALL_TRAP_SHEET_HEIGHT = 1200;
+
+const TALL_TEXT_TRAP_SHEET: SyntheticSheetParams = {
+  ...TEXT_TRAP_SHEET,
+  height: TALL_TRAP_SHEET_HEIGHT,
+  textBand: {
+    top: 420,
+    bottom: 780,
+    left: 60,
+    right: 420,
+    step: TRAP_STEP,
+    strokeHeight: 11,
+    pitch: 9,
+    strokeWidth: 3,
+    darkness: 0.5,
+  },
+};
+
+/**
+ * Шаги, на которых меряется лист с линиями в половине кадра. На крупном шаге
+ * половине кадра не хватает полос, на мелком период в них находится, и лист
+ * держит только охват гребёнки.
+ */
+const HALF_RULED_STEPS = [10, 12, TRAP_STEP];
+
+/**
  * Лист, у которого линии занимают лишь верхнюю половину кадра: нижнее поле во
  * всю вторую половину оставляет там чистую бумагу.
+ *
+ * @param step — шаг разлиновки в пикселях кадра
+ * @returns параметры листа
  */
-const HALF_RULED_SHEET: SyntheticSheetParams = {
-  width: TRAP_SHEET_WIDTH,
-  height: TRAP_SHEET_HEIGHT,
-  step: TRAP_STEP,
-  phase: 10,
-  margins: { top: 0, right: 0, bottom: 200, left: 0 },
-  noise: 0.02,
-  seed: 9,
+const createHalfRuledSheet = (step: number): SyntheticSheetParams => {
+  return {
+    width: TRAP_SHEET_WIDTH,
+    height: TRAP_SHEET_HEIGHT,
+    step,
+    phase: step / 2,
+    margins: { top: 0, right: 0, bottom: 200, left: 0 },
+    noise: 0.02,
+    seed: 9,
+  };
 };
 
 /**
@@ -421,15 +457,28 @@ describe('measureBandedPeriod: ловушки без разлиновки', () =
     expect(bandSteps).toEqual([]);
   });
 
-  it('отказывает на листе, где линии есть лишь в половине кадра', () => {
+  it('отказывает на полосе текста, занявшей полосы разбивки целиком', () => {
     const { step, bandSteps } = measureBandedPeriod(
-      createSyntheticSheet(HALF_RULED_SHEET),
+      createSyntheticSheet(TALL_TEXT_TRAP_SHEET),
       PROBE_OPTIONS
     );
 
     expect(step).toBe(0);
     expect(bandSteps).toEqual([]);
   });
+
+  it.each(HALF_RULED_STEPS)(
+    'отказывает на листе, где линии есть лишь в половине кадра: шаг %d px',
+    (step) => {
+      const result = measureBandedPeriod(
+        createSyntheticSheet(createHalfRuledSheet(step)),
+        PROBE_OPTIONS
+      );
+
+      expect(result.step).toBe(0);
+      expect(result.bandSteps).toEqual([]);
+    }
+  );
 
   it('отказывает на чистом листе', () => {
     const { step, bandSteps } = measureBandedPeriod(

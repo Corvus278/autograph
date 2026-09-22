@@ -481,6 +481,49 @@ const measureCombSupport = (
 };
 
 /**
+ * Полоса кадра вместе с её верхом.
+ */
+type BandSlice = {
+  /**
+   * Верх полосы в пикселях кадра.
+   */
+  top: number;
+
+  /**
+   * Полоса — вид на строки кадра, а не их копия: она во всю ширину, поэтому её
+   * строки лежат в `luminance` подряд.
+   */
+  band: SheetImageData;
+};
+
+/**
+ * Вырезает полосу кадра по её номеру.
+ *
+ * @param image — полутоновая выжимка кадра
+ * @param index — номер полосы сверху вниз
+ * @param bandCount — число полос, на которые режется кадр
+ * @returns полоса и её верх в пикселях кадра
+ */
+const sliceBand = (
+  image: SheetImageData,
+  index: number,
+  bandCount: number
+): BandSlice => {
+  const { width, luminance } = image;
+  const top = Math.round((image.height * index) / bandCount);
+  const bottom = Math.round((image.height * (index + 1)) / bandCount);
+
+  return {
+    top,
+    band: {
+      width,
+      height: bottom - top,
+      luminance: luminance.subarray(top * width, bottom * width),
+    },
+  };
+};
+
+/**
  * Период одной полосы: свой свип наклона, свой профиль, свой период. Полоса
  * меряется как маленький кадр — иначе дрейф шага по высоте размыл бы профиль
  * ровно там, где его и надо измерить.
@@ -497,8 +540,7 @@ const measureBand = (
   bandCount: number,
   options: BandedPeriodOptions
 ): BandMeasurement | null => {
-  const top = Math.round((image.height * index) / bandCount);
-  const bottom = Math.round((image.height * (index + 1)) / bandCount);
+  const { top, band } = sliceBand(image, index, bandCount);
   const {
     minStep,
     maxStep,
@@ -507,16 +549,6 @@ const measureBand = (
     angleStep = SKEW_ANGLE_STEP,
     maxAnalysisSize = ANALYSIS_IMAGE_SIZE,
   } = options;
-  const { width, luminance } = image;
-  /**
-   * Полоса — вид на строки кадра, а не их копия: она во всю ширину, поэтому её
-   * строки лежат в `luminance` подряд.
-   */
-  const band: SheetImageData = {
-    width,
-    height: bottom - top,
-    luminance: luminance.subarray(top * width, bottom * width),
-  };
   const skewAngle = detectRowSkewAngle(band, { maxAngle, angleStep, maxAnalysisSize });
   const profile = buildShearedProfile(band, 'horizontal', skewAngle, Math.abs(skewAngle));
   const period = measureProfilePeriod(profile, minStep, maxStep);
@@ -537,6 +569,152 @@ const measureBand = (
     phase: period.phase,
     skewAngle,
   };
+};
+
+/**
+ * Наименьшая доля контраста, при которой полоса кадра считается держащей
+ * гребёнку. Отсчитывается от медианы полос, в которых период нашёлся: своей
+ * меры у контраста нет — он зависит и от глубины линий, и от яркости бумаги.
+ *
+ * Пятнадцать сотых — середина плато. На всём окне от 0,10 до 0,30 десять
+ * снимков предмета приёмки держат охват от 0,75 до 1,00, а ловушки — полоса
+ * текста в 30 % и 50 % кадра, лист с линиями в половине кадра — не поднимаются
+ * выше 0,60. Порог внутри окна множества не сближает, поэтому взята его
+ * середина.
+ */
+const MIN_BAND_CONTRAST_SHARE = 0.15;
+
+/**
+ * Наименьшая доля полос кадра, обязанных держать гребёнку. Настоящая
+ * разлиновка идёт через весь лист: у всех десяти снимков предмета приёмки и у
+ * синтетики с дрейфом, с линиями через одну и с крупным шагом доля равна 1,00.
+ * Источник периодичности, занявший часть кадра, выше 0,60 не поднимается:
+ * полоса текста даёт 0,25—0,50, лист с линиями в половине кадра — 0,50—0,60.
+ *
+ * Семь десятых стоят между этими множествами так, чтобы снимок мог потерять
+ * почти треть полос — на ушедшем из резкости дальнем краю и на поверхности
+ * вокруг листа, — а ловушка, дотянувшаяся до 0,60, всё равно не прошла.
+ *
+ * Правило продолжает `MIN_COMB_SUPPORT_SHARE`: то смотрит, идёт ли гребёнка
+ * через всю полосу, это — через весь кадр. Разбор по высоте его не заменяет:
+ * полоса текста, занявшая две полосы разбивки целиком, ложится на прямую,
+ * потому что прямая через две точки проходит всегда.
+ */
+const MIN_FRAME_COVERAGE_SHARE = 0.7;
+
+/**
+ * Лучший контраст гребёнки в полосе: фаза перебирается по всему периоду, и
+ * берётся та, на которой гребёнка ложится на тёмные места полосы точнее всего.
+ *
+ * Фаза именно перебирается, а не берётся из итоговой гребёнки: полосу
+ * непринятую замером, никто не привязывал к общей фазе, и чужая занизила бы
+ * контраст там, где линии на самом деле есть.
+ *
+ * @param profile — профиль полосы
+ * @param step — шаг гребёнки в отсчётах профиля
+ * @returns контраст; `0` — шаг в полосу не помещается либо тёмных узлов в ней нет
+ */
+const measureBestCombContrast = (profile: ShearedProfile, step: number): number => {
+  const size = profile.values.length;
+  const period = Math.round(step);
+
+  if (period < 2 || size <= period) {
+    return 0;
+  }
+
+  const detrended = detrendProfile(profile.values, 2 * period + 1);
+  let best = 0;
+
+  for (let offset = 0; offset < period; offset += 1) {
+    const contrast = measureCombContrast(
+      detrended,
+      profile,
+      step,
+      profile.origin + offset,
+      0,
+      size - 1
+    );
+
+    best = Math.max(best, contrast);
+  }
+
+  return best;
+};
+
+/**
+ * Медиана ряда.
+ *
+ * @param values — непустой ряд
+ * @returns медиана
+ */
+const findMedian = (values: number[]): number => {
+  const sorted = [...values].sort((left, right) => {
+    return left - right;
+  });
+  const middle = Math.floor(sorted.length / 2);
+
+  return sorted.length % 2 === 0
+    ? ((sorted[middle - 1] || 0) + (sorted[middle] || 0)) / 2
+    : sorted[middle] || 0;
+};
+
+/**
+ * Охват гребёнки по кадру: доля полос, держащих контраст не ниже
+ * `MIN_BAND_CONTRAST_SHARE` от медианного у полос с найденным периодом.
+ *
+ * Меряются все полосы, включая непринятые: полоса без периода — ещё не полоса
+ * без линий, и наоборот, чистая бумага с найденным шагом по соседству
+ * обязана показать пустоту именно здесь.
+ *
+ * @param image — полутоновая выжимка кадра
+ * @param bandCount — число полос, на которые режется кадр
+ * @param found — номера полос, в которых период нашёлся
+ * @param line — подогнанная прямая шага
+ * @param origin — координата начала отсчёта прямой
+ * @param skewAngle — наклон итоговой гребёнки в градусах
+ * @returns доля полос от нуля до единицы; `0` — гребёнке не на что ложиться
+ */
+const measureFrameCoverage = (
+  image: SheetImageData,
+  bandCount: number,
+  found: Set<number>,
+  { intercept, slope }: StepLine,
+  origin: number,
+  skewAngle: number
+): number => {
+  const contrasts: number[] = [];
+  const foundContrasts: number[] = [];
+
+  for (let index = 0; index < bandCount; index += 1) {
+    const { top, band } = sliceBand(image, index, bandCount);
+    const step = intercept + slope * (top + band.height / 2 - origin);
+    const profile = buildShearedProfile(
+      band,
+      'horizontal',
+      skewAngle,
+      Math.abs(skewAngle)
+    );
+    const contrast = step > 0 ? measureBestCombContrast(profile, step) : 0;
+
+    contrasts.push(contrast);
+
+    if (found.has(index)) {
+      foundContrasts.push(contrast);
+    }
+  }
+
+  const median = findMedian(foundContrasts);
+
+  if (median <= 0) {
+    return 0;
+  }
+
+  const threshold = MIN_BAND_CONTRAST_SHARE * median;
+  const holding = contrasts.reduce((count, contrast) => {
+    return contrast >= threshold ? count + 1 : count;
+  }, 0);
+
+  return holding / bandCount;
 };
 
 /**
@@ -644,6 +822,23 @@ const measureWithBandCount = (
   }
 
   const anchor = findAnchorBand(family, origin);
+  const found = new Set(
+    family.map(({ index }) => {
+      return index;
+    })
+  );
+  const coverage = measureFrameCoverage(
+    image,
+    bandCount,
+    found,
+    line,
+    origin,
+    anchor.skewAngle
+  );
+
+  if (coverage < MIN_FRAME_COVERAGE_SHARE) {
+    return EMPTY_BANDED_PERIOD;
+  }
 
   return {
     step: line.intercept,
