@@ -521,7 +521,8 @@ type NodesFit = {
  * @param nodes — узлы трассы
  * @param originX — начало перспективы по ширине
  * @param originY — начало перспективы по высоте
- * @param fallback — гребёнка ровного прохода на случай вырожденной системы
+ * @param fallback — гребёнка ровного прохода на случай вырожденной системы; её
+ *   `convergenceY` — засев полосовой ступени, начальное приближение схождения
  * @returns обе гребёнки и невязки
  */
 const fitNodes = (
@@ -531,7 +532,16 @@ const fitNodes = (
   fallback: CombFit
 ): NodesFit => {
   const straight = fitStraightComb(nodes, fallback);
-  const fit = fitPerspectiveComb(nodes, originX, originY, straight);
+  /**
+   * Шаг, фазу и наклон подгонка стартует от ровной гребёнки по тем же узлам:
+   * ближе к итогу начального приближения для них нет. Схождения по высоте ни
+   * одна ровная гребёнка не даёт — его приносит засев полосовой ступени, и
+   * только с ним подгонка начинает спуск с нужной стороны от седловины.
+   */
+  const fit = fitPerspectiveComb(nodes, originX, originY, {
+    ...straight,
+    convergenceY: fallback.convergenceY,
+  });
   const rawResiduals = computeResiduals(nodes, originX, originY, fit);
   const stripSums = new Float64Array(STRIP_COUNT);
   const stripCounts = new Float64Array(STRIP_COUNT);
@@ -566,7 +576,8 @@ const fitNodes = (
  * @param nodes — узлы трассы
  * @param originX — начало перспективы по ширине
  * @param originY — начало перспективы по высоте
- * @param fallback — гребёнка ровного прохода на случай вырожденной системы
+ * @param fallback — гребёнка ровного прохода на случай вырожденной системы; её
+ *   `convergenceY` — засев полосовой ступени
  * @param residualLimit — порог невязки в пикселях
  * @returns подгонка по оставшимся узлам
  */
@@ -649,6 +660,41 @@ const measureCombDeviation = (
   }
 
   return deviation;
+};
+
+/**
+ * Переводит засев полосовой ступени в начальное приближение `convergenceY`.
+ *
+ * Засев задан относительным приростом шага на пиксель у своего начала отсчёта,
+ * а модель перспективы растит шаг как `1/(1 − a·q)²` от своего — середины
+ * вырезки. У нуля `a` прирост равен `2·q`, отсюда `q = k/2`; начало отсчёта
+ * едет тем же выражением, что и сам шаг, потому что относительный прирост
+ * `k` у точки `Δ` от начала засева равен `k/(1 + k·Δ)`.
+ *
+ * Знаменатель ушёл в ноль — засева нет: такой засев описывает лист, у которого
+ * шаг у начала подгонки обратился в ноль, и приближением он быть не может.
+ *
+ * @param ruling — разлиновка ровного прохода вместе с засевом
+ * @param originX — начало перспективы по ширине
+ * @param originY — начало перспективы по высоте
+ * @returns начальное схождение по высоте, 1/px
+ */
+const toSeededConvergenceY = (
+  ruling: PerspectiveBaseRuling,
+  originX: number,
+  originY: number
+): number => {
+  const { convergenceSeed, convergenceOrigin, skewAngle } = ruling;
+
+  if (!convergenceSeed) {
+    return 0;
+  }
+
+  const offset =
+    originY - originX * Math.tan(skewAngle / DEGREES_IN_RADIAN) - convergenceOrigin;
+  const weight = 1 + convergenceSeed * offset;
+
+  return weight > 0 ? convergenceSeed / (2 * weight) : 0;
 };
 
 /**
@@ -775,7 +821,13 @@ export const detectRulingPerspective = (
     nodes,
     originX,
     originY,
-    { skewAngle, firstLinePhase, step, convergenceX: 0, convergenceY: 0 },
+    {
+      skewAngle,
+      firstLinePhase,
+      step,
+      convergenceX: 0,
+      convergenceY: toSeededConvergenceY(ruling, originX, originY),
+    },
     residualLimit
   );
   const projection = toProjection(fit, originX, originY);

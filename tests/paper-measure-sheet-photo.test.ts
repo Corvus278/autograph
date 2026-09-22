@@ -15,10 +15,13 @@ import {
   type SheetPhotoMeasurement,
   type SheetRuling,
 } from '@pages/Generator/lib/paper';
+import type * as DetectRulingModule from '@pages/Generator/lib/paper/detectRuling';
 import type {
   DetectedRuling,
   RulingDetectionOptions,
 } from '@pages/Generator/lib/paper/detectRuling';
+import type * as PerspectiveModule from '@pages/Generator/lib/paper/detectRulingPerspective';
+import { detectRulingPerspective } from '@pages/Generator/lib/paper/detectRulingPerspective';
 import type * as RectifyModule from '@pages/Generator/lib/paper/measureSheetPhotoRectify';
 import { rectifySheetImage } from '@pages/Generator/lib/paper/measureSheetPhotoRectify';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,6 +38,21 @@ vi.mock('@pages/Generator/lib/paper/measureSheetPhotoRectify', async (importOrig
   const actual = await importOriginal<typeof RectifyModule>();
 
   return { ...actual, rectifySheetImage: vi.fn(actual.rectifySheetImage) };
+});
+
+vi.mock('@pages/Generator/lib/paper/detectRuling', async (importOriginal) => {
+  const actual = await importOriginal<typeof DetectRulingModule>();
+
+  return { ...actual, detectRuling: vi.fn(actual.detectRuling) };
+});
+
+vi.mock('@pages/Generator/lib/paper/detectRulingPerspective', async (importOriginal) => {
+  const actual = await importOriginal<typeof PerspectiveModule>();
+
+  return {
+    ...actual,
+    detectRulingPerspective: vi.fn(actual.detectRulingPerspective),
+  };
 });
 
 const WIDTH = 900;
@@ -858,5 +876,146 @@ describe('measureSheetPhoto: перспектива', () => {
     (['top', 'right', 'bottom', 'left'] as const).forEach((side) => {
       expect(margins[side]).toBeCloseTo(expected[side], 9);
     });
+  });
+});
+
+/**
+ * Засев схождения, который полосовая ступень отдаёт вместе с шагом: прирост
+ * шага на пиксель у своего начала отсчёта. У дрейфа листа он равен `2·q`:
+ * местный шаг модели растёт как `1/(1 − a·q)²`, и у начала отсчёта его
+ * производная вдвое больше `q`.
+ */
+const BANDED_SEED = 2 * DRIFT_4.convergenceY;
+
+/**
+ * Шаги полос, которыми подменяется полосовая ступень. Подмена нужна потому,
+ * что на синтетическом листе профиль по всему кадру берёт порог уверенности с
+ * запасом и до полос дело не доходит ни при каком дрейфе: полосы зовёт только
+ * снимок настоящей тетради.
+ */
+const BANDED_STEPS = [23, 24, 25.3];
+
+const BANDED_DRIFT = 25.3 / 23 - 1;
+
+/**
+ * Начало отсчёта засева, которое подмена отдала детектору.
+ */
+type BandedSeedOrigin = {
+  /**
+   * Середина вырезки в её пикселях.
+   */
+  origin: number;
+};
+
+/**
+ * Подменяет первый проход детектора его же числами, к которым добавлены шаги
+ * полос и засев схождения от середины вырезки, — ровно то, что детектор отдаёт
+ * листу, шаг которого нашли полосы.
+ *
+ * @returns начало отсчёта засева в пикселях вырезки, как его увидит замер
+ */
+const mockBandedPass = async (): Promise<BandedSeedOrigin> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+  const seen = { origin: 0 };
+
+  vi.mocked(detectRuling).mockImplementationOnce((image, options) => {
+    seen.origin = image.height / 2;
+
+    return {
+      ...actual.detectRuling(image, options),
+      bandSteps: BANDED_STEPS,
+      convergenceSeed: BANDED_SEED,
+      convergenceOrigin: seen.origin,
+    };
+  });
+
+  return seen;
+};
+
+/**
+ * Расхождение наклонов, при котором фаза второго прохода уезжает дальше
+ * двадцатой шага: у вырезки шириной около семисот пикселей и шага 24 допуск —
+ * пятая градуса.
+ */
+const FOREIGN_SKEW_SHIFT = 1;
+
+/**
+ * Расхождение наклонов внутри допуска — такое же, как у снимков тетради, где
+ * полосовая ступень и подгонка перспективы расходятся на сотые градуса.
+ */
+const PAIRED_SKEW_SHIFT = 0.01;
+
+/**
+ * Подменяет наклон второго прохода: первый проход идёт настоящим, у прохода по
+ * выпрямленной копии наклон сдвигается, как если бы его нашла ступень с другим
+ * диапазоном свипа.
+ *
+ * @param shift — сдвиг наклона второго прохода в градусах
+ */
+const mockRectifiedSkew = async (shift: number): Promise<void> => {
+  const actual = await vi.importActual<typeof DetectRulingModule>(
+    '@pages/Generator/lib/paper/detectRuling'
+  );
+
+  vi.mocked(detectRuling)
+    .mockImplementationOnce(actual.detectRuling)
+    .mockImplementationOnce((image, options) => {
+      const detection = actual.detectRuling(image, options);
+
+      return { ...detection, skewAngle: detection.skewAngle + shift };
+    });
+};
+
+describe('measureSheetPhoto: фаза и наклон второго прохода', () => {
+  it('наклон копии внутри допуска: числа второго прохода взяты', async () => {
+    await mockRectifiedSkew(PAIRED_SKEW_SHIFT);
+
+    const result = measure(LINED_DRIFT_SHEET);
+
+    expect(result.diagnostics.perspective?.isRectifiedRulingMissing).toBe(false);
+    expect(result.source.perspective).not.toBeNull();
+  });
+
+  it('наклон копии чужой: числа второго прохода не берутся', async () => {
+    await mockRectifiedSkew(FOREIGN_SKEW_SHIFT);
+
+    const result = measure(LINED_DRIFT_SHEET);
+    const { detection } = detectInCrop(LINED_DRIFT_SHEET, result.outline);
+
+    expect(result.diagnostics.perspective?.isRectifiedRulingMissing).toBe(true);
+    expect(result.source.perspective).toBeNull();
+    expect(result.source.step).toBe(detection.step);
+    expect(result.source.skewAngle).toBe(detection.skewAngle);
+  });
+});
+
+describe('measureSheetPhoto: полосовая ступень', () => {
+  it('шаг взял профиль по кадру: полос в диагностике нет', () => {
+    expect(measure(LINED_DRIFT_SHEET).diagnostics.banded).toBeNull();
+    expect(measure(GRID_SHEET).diagnostics.banded).toBeNull();
+  });
+
+  it('шаг нашли полосы: их шаги и дрейф уходят в диагностику', async () => {
+    await mockBandedPass();
+
+    const { banded } = measure(LINED_DRIFT_SHEET).diagnostics;
+
+    expect(banded?.steps).toStrictEqual(BANDED_STEPS);
+    expect(banded?.drift).toBeCloseTo(BANDED_DRIFT, 12);
+  });
+
+  it('засев схождения доезжает до поиска перспективы вместе со своим началом', async () => {
+    const seen = await mockBandedPass();
+
+    vi.mocked(detectRulingPerspective).mockClear();
+
+    const result = measure(LINED_DRIFT_SHEET);
+    const [call] = vi.mocked(detectRulingPerspective).mock.calls;
+
+    expect(call?.[1].convergenceSeed).toBe(BANDED_SEED);
+    expect(call?.[1].convergenceOrigin).toBe(seen.origin);
+    expect(result.source.perspective).not.toBeNull();
   });
 });

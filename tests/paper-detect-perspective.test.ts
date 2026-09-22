@@ -184,10 +184,16 @@ const detect = (
 
   return detectRulingPerspective(
     createSyntheticSheet(params),
-    { step, firstLinePhase: phase, skewAngle: angle, margins },
+    { step, firstLinePhase: phase, skewAngle: angle, margins, ...WITHOUT_SEED },
     frame
   );
 };
+
+/**
+ * Разлиновка без засева схождения: так детектор видит лист, у которого шаг
+ * взял глобальный профиль, и так он работал до полосовой ступени.
+ */
+const WITHOUT_SEED = { convergenceSeed: 0, convergenceOrigin: 0 };
 
 /**
  * Номера линий, нарисованных внутри полей листа.
@@ -489,7 +495,7 @@ describe('detectRulingPerspective: перспектива найдена', () =>
     const lastLines = toDrawnLines(params).slice(-2);
     const detection = detectRulingPerspective(
       createTornSheet(params, lastLines),
-      { step, firstLinePhase: phase, skewAngle: angle, margins },
+      { step, firstLinePhase: phase, skewAngle: angle, margins, ...WITHOUT_SEED },
       WHOLE_FRAME
     );
 
@@ -511,6 +517,92 @@ describe('detectRulingPerspective: перспектива найдена', () =>
     expect(detection.perspective).not.toBeNull();
     expect(detection.foundNodeShare).toBeGreaterThan(0.6);
     expect(measureRestoreSpread(detection, DRIFT_4_SHEET)).toBeLessThan(LINE_TOLERANCE);
+  });
+});
+
+/**
+ * Засев схождения листа с дрейфом 25 %: прирост шага на пиксель у начала
+ * отсчёта. Местный шаг модели растёт как `1/(1 − a·q)²`, поэтому у начала
+ * отсчёта прирост вдвое больше `q`.
+ */
+const DRIFT_25_SEED = 2 * toConvergenceY(0.25);
+
+/**
+ * Начало отсчёта засева — середина области с линиями, а не середина кадра, от
+ * которой отсчитывает подгонка: полосы меряют шаг там, где стоят линии.
+ */
+const DRIFT_25_SEED_ORIGIN = MARGIN + RULED_HEIGHT / 2;
+
+describe('detectRulingPerspective: засев схождения', () => {
+  /**
+   * Засев двигает старт подгонки, а не её итог: на листе с дрейфом 25 %
+   * перспектива находится и без засева, и с ним, а найденная гребёнка у них
+   * одна и та же до двенадцатого знака. Подгонка сходится к ней с любого
+   * засева вплоть до десятикратного, поэтому равенство и есть проверка:
+   * засев обязан оставаться приближением и не имеет права двигать ни шаг, ни
+   * фазу, ни схождение.
+   */
+  it('дрейф 25 %: гребёнка с засевом и без засева одна и та же', () => {
+    const { step, phase, angle, margins } = DRIFT_25_SHEET;
+    const seeded = detectRulingPerspective(
+      createSyntheticSheet(DRIFT_25_SHEET),
+      {
+        step,
+        firstLinePhase: phase,
+        skewAngle: angle,
+        margins,
+        convergenceSeed: DRIFT_25_SEED,
+        convergenceOrigin: DRIFT_25_SEED_ORIGIN,
+      },
+      WHOLE_FRAME
+    );
+    const bare = detect(DRIFT_25_SHEET);
+
+    expect(bare.perspective).not.toBeNull();
+    expect(seeded.perspective).not.toBeNull();
+    expect(seeded.perspective?.convergenceY).toBeCloseTo(
+      bare.perspective?.convergenceY || 0,
+      12
+    );
+    expect(seeded.perspective?.convergenceX).toBeCloseTo(
+      bare.perspective?.convergenceX || 0,
+      12
+    );
+    expect(seeded.step).toBeCloseTo(bare.step, 9);
+    expect(seeded.firstLinePhase).toBeCloseTo(bare.firstLinePhase, 9);
+    expect(seeded.skewAngle).toBeCloseTo(bare.skewAngle, 9);
+  });
+
+  /**
+   * Засев приходит от середины области с линиями, а подгонка отсчитывает от
+   * середины кадра: у листа с полями это разные точки, и перенос `step(u)`
+   * между ними обязан оставить итог прежним.
+   */
+  it('чужое начало отсчёта засева не сбивает подгонку', () => {
+    const { step, phase, angle, margins } = DRIFT_25_SHEET;
+    const base = {
+      step,
+      firstLinePhase: phase,
+      skewAngle: angle,
+      margins,
+      convergenceSeed: DRIFT_25_SEED,
+    };
+    const image = createSyntheticSheet(DRIFT_25_SHEET);
+    const atRuled = detectRulingPerspective(
+      image,
+      { ...base, convergenceOrigin: DRIFT_25_SEED_ORIGIN },
+      WHOLE_FRAME
+    );
+    const atFrame = detectRulingPerspective(
+      image,
+      { ...base, convergenceOrigin: HEIGHT / 2 },
+      WHOLE_FRAME
+    );
+
+    expect(atRuled.perspective?.convergenceY).toBeCloseTo(
+      atFrame.perspective?.convergenceY || 0,
+      12
+    );
   });
 });
 
@@ -576,7 +668,7 @@ describe('detectRulingPerspective: перспектива отброшена', (
     });
     const detection = detectRulingPerspective(
       createTornSheet(DRIFT_25_SHEET, tornLines, WIDTH / 2),
-      { step, firstLinePhase: phase, skewAngle: angle, margins },
+      { step, firstLinePhase: phase, skewAngle: angle, margins, ...WITHOUT_SEED },
       WHOLE_FRAME
     );
 

@@ -8,6 +8,7 @@ import type {
   SheetFrame,
   SheetImageData,
   SheetOutline,
+  SheetPhotoBandedReport,
   SheetPhotoMeasurement,
   SheetPoint,
   SheetRuling,
@@ -254,6 +255,27 @@ const describeOutline = (outline: SheetOutline | null, frame: SheetFrame): strin
 };
 
 /**
+ * Полосовая ступень замера периода: шаги согласившихся полос сверху вниз и их
+ * дрейф. По ним сверяются пороги согласия полос и порог дрейфа перспективы,
+ * поэтому числа печатаются как есть, а не пересчитываются из засева.
+ * «Полосы не понадобились» — период взял профиль по всему кадру.
+ */
+const describeBanded = (banded: SheetPhotoBandedReport | null): string => {
+  if (!banded) {
+    return 'полосы не понадобились';
+  }
+
+  const { steps, drift } = banded;
+  const stepsText = steps
+    .map((step) => {
+      return step.toFixed(2);
+    })
+    .join('/');
+
+  return `полосы: шаги ${stepsText} px, дрейф ${(drift * 100).toFixed(2)} %`;
+};
+
+/**
  * Перспектива: шаг у крайних линий области и дрейф шага сверху вниз. Без
  * перспективы — расхождение гребёнок в долях шага: по нему видно, насколько
  * лист был далёк от порога.
@@ -332,6 +354,7 @@ export const describeSheetReport = ({
     describeOutline(measurement.outline, frame),
     `вид ${diagnostics.kind}`,
     `шаг ${step.toFixed(2)} px`,
+    describeBanded(diagnostics.banded),
     `фаза ${firstLinePhase.toFixed(1)} px`,
     `угол ${skewAngle.toFixed(2)}°`,
     describePerspective(ruling, measurement),

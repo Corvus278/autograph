@@ -14,6 +14,7 @@ export {
 export { extractTexture } from './extractTexture';
 export { measureSheetPhoto } from './measureSheetPhoto';
 export type {
+  SheetPhotoBandedReport,
   SheetPhotoDiagnostics,
   SheetPhotoMeasurement,
   SheetPhotoOptions,

@@ -10,6 +10,7 @@ import { detectSheetOutline } from './detectSheetOutline';
 import { extractLighting } from './extractLighting';
 import { extractTexture } from './extractTexture';
 import type {
+  SheetPhotoBandedReport,
   SheetPhotoMeasurement,
   SheetPhotoOptions,
   SheetPhotoPerspectiveReport,
@@ -35,6 +36,13 @@ const DEGREES_IN_RADIAN = 180 / Math.PI;
  * Смещения изгиба хранятся кратными сотой пикселя, как их отдаёт детектор.
  */
 const OFFSET_PRECISION = 100;
+
+/**
+ * Наибольший сдвиг фазы, который допускается от расхождения наклонов второго
+ * прохода и выпрямления, в долях шага. Двадцатая — тот же допуск попадания на
+ * линию, которым спека меряет точность восстановления разлиновки.
+ */
+const MAX_PHASE_SHIFT_SHARE = 1 / 20;
 
 /**
  * Вырезка внутри листа и её место в кадре.
@@ -130,6 +138,11 @@ type RulingMeasurement = {
    * Отчёт перспективы; `null` — разлиновка не найдена.
    */
   report: SheetPhotoPerspectiveReport | null;
+
+  /**
+   * Числа полосовой ступени прохода по кадру; `null` — полосы не считались.
+   */
+  banded: SheetPhotoBandedReport | null;
 };
 
 /**
@@ -192,6 +205,11 @@ const cropSheet = (image: SheetImageData, outline: SheetOutline | null): SheetCr
  * Переводит поля, линию поля и изгиб из пикселей анализа в пиксели кадра.
  * Ненайденная сторона остаётся нулём: фолбэк от стороны листа посчитает сборка
  * разлиновки.
+ *
+ * Наклон берётся из перевода, а не из прохода: с ним посчитан сдвиг координаты
+ * вдоль линий, которым сюда приходит фаза, и с ним же измерена перспектива.
+ * Пару фазы и наклона держит вызывающая сторона — проход с чужим наклоном она
+ * не берёт (`isSkewPaired`).
  *
  * @param detection — результат детектора разлиновки
  * @param analysisWidth — ширина изображения, ушедшего в детектор
@@ -612,6 +630,54 @@ const inheritEdgeMargins = (
 };
 
 /**
+ * Идут ли фаза и наклон второго прохода одной парой с выпрямлением.
+ *
+ * Копия выпрямлена наклоном перспективы, и её линии лежат на ровной гребёнке
+ * именно с ним. Найди детектор на копии другой наклон — а свип полосовой
+ * ступени ограничен своим диапазоном и до наклона снимка вроде −2,9° не
+ * дотягивается, — и фаза уехала бы вместе с ним: профиль, схлопнутый вдоль
+ * чужого угла, показывает линию не у столбца `0`, а у середины кадра, то есть
+ * на половине ширины от места, к которому фаза относится.
+ *
+ * Такой проход не берётся вовсе: его шаг и фаза в разлиновке кадра стояли бы
+ * с наклоном, при котором их не мерили, а числа ровного прохода этой пары не
+ * теряют.
+ *
+ * @param detection — проход по выпрямленной копии
+ * @param skewAngle — наклон, которым выпрямлена копия
+ * @param width — ширина вырезки в пикселях
+ * @returns `true`, если сдвиг фазы от расхождения наклонов внутри допуска
+ */
+const isSkewPaired = (
+  detection: DetectedRuling,
+  skewAngle: number,
+  width: number
+): boolean => {
+  const shift =
+    (Math.abs(toTangent(detection.skewAngle) - toTangent(skewAngle)) * width) / 2;
+
+  return shift <= detection.step * MAX_PHASE_SHIFT_SHARE;
+};
+
+/**
+ * Числа полосовой ступени для отчётов: шаги полос и их дрейф. Пустые шаги —
+ * период взял профиль по всему кадру, и печатать нечего.
+ *
+ * @param detection — проход детектора по кадру
+ * @returns отчёт полос; `null` — полосы не считались
+ */
+const toBandedReport = ({ bandSteps }: DetectedRuling): SheetPhotoBandedReport | null => {
+  const first = bandSteps[0];
+  const last = bandSteps.at(-1);
+
+  if (!first || !last) {
+    return null;
+  }
+
+  return { steps: bandSteps, drift: last / first - 1 };
+};
+
+/**
  * Разлиновка вырезки: ровный проход, перспектива и, если она есть, второй
  * проход по выпрямленной копии.
  *
@@ -631,12 +697,14 @@ const measureRuling = (
   outline: SheetOutline | null
 ): RulingMeasurement => {
   const detected = detectRuling(crop.image);
+  const banded = toBandedReport(detected);
 
   if (!detected.isDetected || detected.step <= 0) {
     return {
       source: { step: 0, firstLinePhase: 0, skewAngle: detected.skewAngle },
       detection: detected,
       report: MISSING_REPORT,
+      banded,
     };
   }
 
@@ -666,7 +734,7 @@ const measureRuling = (
   };
 
   if (!perspective.perspective) {
-    return { source: flatSource, detection: flat, report };
+    return { source: flatSource, detection: flat, report, banded };
   }
 
   /**
@@ -682,11 +750,17 @@ const measureRuling = (
       ? detectRuling(rectified.image, { skewAngle: perspective.skewAngle })
       : null;
 
-  if (!second || !second.isDetected || second.step <= 0) {
+  if (
+    !second ||
+    !second.isDetected ||
+    second.step <= 0 ||
+    !isSkewPaired(second, perspective.skewAngle, crop.image.width)
+  ) {
     return {
       source: flatSource,
       detection: flat,
       report: { ...report, isRectifiedRulingMissing: true },
+      banded,
     };
   }
 
@@ -704,6 +778,7 @@ const measureRuling = (
     ),
     detection: second,
     report,
+    banded,
   };
 };
 
@@ -744,11 +819,12 @@ export const measureSheetPhoto = (
         kind: 'blank',
         bendFoundNodeShare: 0,
         perspective: MISSING_REPORT,
+        banded: null,
       },
     };
   }
 
-  const { source, detection, report } = measureRuling(image, crop, outline);
+  const { source, detection, report, banded } = measureRuling(image, crop, outline);
 
   return {
     source: { ...source, outline },
@@ -761,6 +837,7 @@ export const measureSheetPhoto = (
       kind: detection.kind,
       bendFoundNodeShare: detection.bendFoundNodeShare,
       perspective: report,
+      banded,
     },
   };
 };
