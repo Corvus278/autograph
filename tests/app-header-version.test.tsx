@@ -32,12 +32,12 @@ afterEach(() => {
 });
 
 describe('версия в шапке', () => {
-  it('показывает версию рядом с названием', () => {
-    appVersion.value = '1.0.42';
+  it('показывает версию с пометкой beta рядом с названием', () => {
+    appVersion.value = '0.1.42';
 
     renderHeader();
 
-    expect(screen.getByTestId('app-version').textContent).toBe('v1.0.42');
+    expect(screen.getByTestId('app-version').textContent).toBe('v0.1.42 beta');
   });
 
   /**
@@ -45,7 +45,7 @@ describe('версия в шапке', () => {
    * при каждом переходе на генератор, хотя ведёт ссылка не на версию.
    */
   it('не добавляет версию в имя ссылки на генератор', () => {
-    appVersion.value = '1.0.42';
+    appVersion.value = '0.1.42';
 
     renderHeader();
 
