@@ -1,4 +1,9 @@
-export type { RulingDetectionOptions } from './detectRuling';
+export type {
+  MarginLineReport,
+  MarginLineStage,
+  MarginLineThreshold,
+  RulingDetectionOptions,
+} from './detectRuling';
 export { detectRuling } from './detectRuling';
 export { measureBendDeviation } from './detectRulingBend';
 export { detectSheetOutline } from './detectSheetOutline';

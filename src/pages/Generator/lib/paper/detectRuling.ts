@@ -248,6 +248,60 @@ export type MarginLineThreshold = 'peers' | 'sigma' | 'minimum';
 export type RulingBandedStage = 'skipped' | 'rejected' | 'measured';
 
 /**
+ * Ступень, которой найдена линия поля.
+ *
+ * - `profile` — профиль столбцов во всю высоту кадра; до полос дело не дошло;
+ * - `banded` — полосовой опрос: во всю высоту черта размазалась;
+ * - `none` — линии поля в разлиновке нет.
+ */
+export type MarginLineStage = 'profile' | 'banded' | 'none';
+
+/**
+ * Числа, по которым решилась судьба линии поля: ступень и оценки полосового
+ * опроса.
+ *
+ * Отчёт нужен калибровке барьера: она обязана крутить тот множитель, который
+ * на снимке и связал кандидата, а из одного `marginLineX` не видно ни ступени,
+ * ни порога. Запуск полосового опроса несётся именем порога, а не пустотой
+ * чисел: у незапущенного опроса и у опроса, не нашедшего ни одного кандидата,
+ * охват и отношение одинаково нулевые.
+ */
+export type MarginLineReport = {
+  /**
+   * Доля полос, в которых трасса нашла принятого кандидата. `0` — полосовой
+   * опрос не звался или кандидатов не нашлось.
+   */
+  coverage: number;
+
+  /**
+   * Отношение глубины кандидата к глубине соседних вертикалей, снятых той же
+   * полосовой мерой. `0` — опрос не звался либо соседей не нашлось.
+   */
+  ratio: number;
+
+  /**
+   * Ступень, давшая линию поля.
+   */
+  stage: MarginLineStage;
+
+  /**
+   * Порог, связавший кандидата полосового опроса. `null` — опрос не звался:
+   * линию отдал профиль во всю высоту либо её не искали вовсе.
+   */
+  threshold: MarginLineThreshold | null;
+};
+
+/**
+ * Линии поля нет, и полосовой опрос за ней не ходил.
+ */
+export const NO_MARGIN_LINE_REPORT: MarginLineReport = {
+  coverage: 0,
+  ratio: 0,
+  stage: 'none',
+  threshold: null,
+};
+
+/**
  * Разлиновка вместе со стороной, у которой нашлась линия поля.
  *
  * Сторона нужна отдельно от `marginLineX`: одного смещения мало, чтобы понять,
@@ -299,6 +353,15 @@ export type DetectedRuling = RulingDetection & {
    * измерения, а не характеристика листа, и в формат хранения не попадают.
    */
   bandedStage: RulingBandedStage;
+
+  /**
+   * Ступень поиска линии поля и числа полосового опроса.
+   *
+   * Поле живёт в `DetectedRuling`, а не в `RulingDetection`: это отчёт о том,
+   * как измерение пришло к своему числу, а не характеристика листа, и в
+   * формат хранения оно не попадает.
+   */
+  marginLineReport: MarginLineReport;
 
   /**
    * Шаги полос кадра, поперёк линий, сверху вниз, в пикселях изображения.
@@ -444,6 +507,7 @@ const toMissingDetection = (
     coreMargins: NO_MARGINS,
     ruledEdges: NO_RULED_EDGES,
     bandedStage,
+    marginLineReport: NO_MARGIN_LINE_REPORT,
     bandSteps: [],
     convergenceSeed: 0,
     convergenceOrigin: 0,
@@ -1568,6 +1632,25 @@ const pollMarginLineSide = (
 };
 
 /**
+ * Ступень, которой досталась линия поля.
+ *
+ * @param profileLine — кандидат профиля во всю высоту; `null` — профиль черту
+ *   не нашёл
+ * @param marginLine — линия поля разлиновки; `null` — её нет
+ * @returns имя ступени
+ */
+const toMarginLineStage = (
+  profileLine: MarginLine | null,
+  marginLine: MarginLine | null
+): MarginLineStage => {
+  if (marginLine === null) {
+    return 'none';
+  }
+
+  return profileLine === null ? 'banded' : 'profile';
+};
+
+/**
  * Ищет линию поля полосовым опросом — там, где профиль во всю высоту её
  * размазал: на листе, снятом под углом или с изгибом бумаги, черта поля идёт
  * под своим наклоном и в профиле, усреднённом по всей высоте кадра, тонет
@@ -2372,16 +2455,16 @@ export const detectRuling = (
    * Гейт `marginLineSide` держит обе ступени разом: проход по выпрямленной
    * копии не заводит линию, которой не нашёл проход по кадру.
    */
-  const bandedMarginLine =
+  const banded =
     meanMarginLine === null && options.marginLineSide !== null
       ? findBandedMarginLine(
           selectPollStrips(),
           period.step,
           image.width,
           options.marginLineSide
-        ).line
+        )
       : null;
-  const foundMarginLine = meanMarginLine || bandedMarginLine;
+  const foundMarginLine = meanMarginLine || (banded && banded.line);
   const marginLine =
     foundMarginLine &&
     refineMarginLine(foundMarginLine, selectTraceStrips(foundMarginLine.x), period.step);
@@ -2456,6 +2539,12 @@ export const detectRuling = (
     },
     ruledEdges,
     bandedStage,
+    marginLineReport: {
+      coverage: banded?.coverage || 0,
+      ratio: banded?.ratio || 0,
+      stage: toMarginLineStage(meanMarginLine, marginLine),
+      threshold: banded && banded.threshold,
+    },
     bandSteps,
     convergenceSeed,
     convergenceOrigin,

@@ -1191,3 +1191,59 @@ describe('measureSheetPhoto: линия поля второго прохода',
     expect(result.source.marginLineSide).toBeNull();
   });
 });
+
+/**
+ * Отчёт линии поля берётся у того прохода, чья разлиновка ушла наружу: на
+ * снимке с перспективой линию мерил второй проход, и ступень ровного прохода
+ * рассказывала бы про число, которого в разлиновке уже нет.
+ */
+describe('measureSheetPhoto: отчёт линии поля', () => {
+  it('прямую черту нашёл профиль, и опроса полос не было', () => {
+    const result = measure({ ...GRID_SHEET, marginLineX: 300 });
+
+    expect(result.source.marginLineX).not.toBeNull();
+    expect(result.diagnostics.marginLine).toStrictEqual({
+      coverage: 0,
+      ratio: 0,
+      stage: 'profile',
+      threshold: null,
+    });
+  });
+
+  it('на листе без черты диагностика несёт связавший порог', () => {
+    const { diagnostics, source } = measure(GRID_SHEET);
+
+    expect(source.marginLineX).toBeNull();
+    expect(diagnostics.marginLine.stage).toBe('none');
+    expect(diagnostics.marginLine.threshold).not.toBeNull();
+  });
+
+  /**
+   * Снимок, ради которого отчёт и заведён: ровный проход кандидата отверг, и
+   * копия за линией поля уже не идёт — сторона ей не задана. Числа отказа
+   * лежат только у ровного прохода, и без них калибровка барьера фантома
+   * видит «полос не было» вместо отношения глубин.
+   */
+  it('линию отверг ровный проход: его числа доезжают до диагностики', async () => {
+    await mockMarginLinePasses(NO_MARGIN_LINE, NO_MARGIN_LINE);
+
+    const { diagnostics, source } = measure(LINED_DRIFT_SHEET);
+
+    expect(source.marginLineX).toBeNull();
+    expect(diagnostics.marginLine.stage).toBe('none');
+    expect(diagnostics.marginLine.threshold).not.toBeNull();
+  });
+
+  it('у чистого листа разлиновка не мерилась, и опроса не было', () => {
+    const result = measureSheetPhoto(createSyntheticSheet(GRID_SHEET), {
+      kind: 'blank',
+    });
+
+    expect(result.diagnostics.marginLine).toStrictEqual({
+      coverage: 0,
+      ratio: 0,
+      stage: 'none',
+      threshold: null,
+    });
+  });
+});

@@ -1,4 +1,4 @@
-import type { RulingBandedStage } from './detectRuling';
+import type { MarginLineReport, RulingBandedStage } from './detectRuling';
 import type {
   LightingField,
   RulingKind,
@@ -124,6 +124,14 @@ export type SheetPhotoDiagnostics = {
    * почти не плывёт, и её дрейф говорит о качестве выпрямления, а не о листе.
    */
   banded: SheetPhotoBandedReport | null;
+
+  /**
+   * Отчёт поиска линии поля того прохода, чья разлиновка ушла наружу: ступень,
+   * охват полос, отношение глубин и имя связавшего порога. По нему
+   * калибруется барьер и принимается разбор снимка, которого в пресет-паке
+   * нет.
+   */
+  marginLine: MarginLineReport;
 };
 
 /**
