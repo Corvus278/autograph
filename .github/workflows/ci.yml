@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+# Версия Node — та же, что в mise.toml (здесь и в deploy.yml): setup-node
+# mise.toml не читает, поэтому число повторено руками.
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -20,7 +23,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
@@ -39,7 +42,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
@@ -53,7 +56,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
@@ -70,7 +73,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
