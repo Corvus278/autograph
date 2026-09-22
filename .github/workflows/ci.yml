@@ -1,0 +1,80 @@
+name: Checks
+
+# Гейты отгрузки: на каждый PR в master и перед каждым деплоем (deploy.yml
+# вызывает этот workflow и ждёт его). Гейт коммита (.husky/pre-commit) их не
+# заменяет: vitest там идёт только по изменённым файлам, и его можно обойти
+# `--no-verify`.
+on:
+  pull_request:
+    branches: [master]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Без typecheck: он идёт отдельной job, чтобы красный статус сразу
+      # говорил, какой из гейтов упал.
+      - run: npm run lint:es
+      - run: npm run lint:css
+      - run: npm run lint:format
+      - run: npm run lint:fsd
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+      # Сборка идёт внутри теста: он собирает dist сам при обеих базах.
+      - run: npm run test:pwa
+
+  test-stories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run test:stories
