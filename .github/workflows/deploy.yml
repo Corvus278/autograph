@@ -15,7 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Гейты отгрузки: тесты, линтинг и проверка типов. Деплой ждёт их — красный
+  # master на раздачу не уходит.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: checks
     runs-on: ubuntu-latest
     steps:
       # Вся история: версию в шапке даёт счётчик коммитов, а shallow clone
