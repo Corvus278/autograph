@@ -9,7 +9,7 @@
 
 ## Контракты
 
-- **K1 Засев схождения** — `measureBandedPeriod(image, options)` → `{ step, phase, skewAngle, convergence, bandSteps }`,
+- **K1 Засев схождения** — `measureBandedPeriod(image, options)` → `{ step, phase, skewAngle, convergence, origin, bandSteps }`,
   px входа; `step = 0` — отказ. `convergence` — `k` из `step(u) = step₀·(1 + k·u)`, `u` — координата вдоль линий от
   середины области с линиями, 1/px. Перевод в `RulingPerspective.convergenceY` — в `detectRulingPerspective`: шаг по `y`
   в его модели растёт как `(1 + q_y·Δy)²`, отсюда `q_y ≈ k/2`. Владелец G3; потребители G4, G6.

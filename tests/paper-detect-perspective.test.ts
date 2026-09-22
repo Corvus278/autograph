@@ -81,12 +81,6 @@ const DRIFT_5 = { convergenceX: CONVERGENCE_X, convergenceY: toConvergenceY(0.05
 const DRIFT_8 = { convergenceX: CONVERGENCE_X, convergenceY: toConvergenceY(0.08) };
 
 /**
- * Дрейф вдвое выше гарантированных спекой восьми процентов: такой лист снят не
- * со стола, и доверять подгонке на нём нечего.
- */
-const DRIFT_16 = { convergenceX: CONVERGENCE_X, convergenceY: toConvergenceY(0.16) };
-
-/**
  * Дрейф, при котором линии отходят от равномерной гребёнки меньше чем на
  * сороковую шага. Схождения по ширине нет: отход должен считаться одной
  * причиной, иначе порог проверяется не тем числом.
@@ -300,21 +294,27 @@ const measureRestoreSpread = (
 };
 
 /**
- * Срывает трассу у края листа: в крайней правой полосе сдвигает вниз участок
- * растра вокруг каждой из заданных линий, так что провал линии оказывается
- * ниже своего места. Так выглядит узел, взятый трассой не у своей линии.
+ * Срывает трассу у края листа: начиная с заданного столбца сдвигает вниз
+ * участок растра вокруг каждой из заданных линий, так что провал линии
+ * оказывается ниже своего места. Так выглядит узел, взятый трассой не у своей
+ * линии.
  *
  * @param params — описание листа
  * @param lines — номера сдвигаемых линий
+ * @param stripLeft — первый столбец сорванного участка
  * @returns растр листа с сорванным участком
  */
-const createTornSheet = (params: PerspectiveSheet, lines: number[]): SheetImageData => {
+const createTornSheet = (
+  params: PerspectiveSheet,
+  lines: number[],
+  stripLeft: number = TORN_STRIP_LEFT
+): SheetImageData => {
   const image = createSyntheticSheet(params);
   const luminance = Float32Array.from(image.luminance);
   const halfStep = STEP / 2;
 
   lines.forEach((line) => {
-    for (let x = TORN_STRIP_LEFT; x < WIDTH; x += 1) {
+    for (let x = stripLeft; x < WIDTH; x += 1) {
       const center = Math.round(computeSyntheticLineY(params, line, x));
 
       for (let y = center - halfStep + TORN_SHIFT; y <= center + halfStep; y += 1) {
@@ -407,6 +407,27 @@ const DRIFT_4_SHEET: PerspectiveSheet = { ...BASE_SHEET, rulingPerspective: DRIF
 
 const DRIFT_8_SHEET: PerspectiveSheet = { ...BASE_SHEET, rulingPerspective: DRIFT_8 };
 
+/**
+ * Дрейф 25 % — граница гарантии спеки: до неё точность восстановления линий
+ * обещана, и такой лист обязан сохранить перспективу. Дрейф задан долей, а не
+ * `convergenceY`: доля меряется там же, где её меряет детектор, — местным шагом
+ * на крайних нарисованных линиях.
+ */
+const DRIFT_25_SHEET: PerspectiveSheet = { ...BASE_SHEET, stepDrift: 0.25 };
+
+/**
+ * Дрейф 34 % — у самой границы порога надёжности. Без него тест был бы зелёным
+ * при любом пороге от гарантии спеки до отказного дрейфа и не сказал бы, где
+ * порог стоит на самом деле.
+ */
+const DRIFT_34_SHEET: PerspectiveSheet = { ...BASE_SHEET, stepDrift: 0.34 };
+
+/**
+ * Дрейф 60 % — вдвое за порогом надёжности: так шаг по кадру меняется не у
+ * тетради на столе, а у листа, по которому модель перспективы уже не строится.
+ */
+const DRIFT_60_SHEET: PerspectiveSheet = { ...BASE_SHEET, stepDrift: 0.6 };
+
 const PERSPECTIVE_CASES: PerspectiveCase[] = [
   {
     title: 'линейка с дрейфом 4 %',
@@ -417,6 +438,16 @@ const PERSPECTIVE_CASES: PerspectiveCase[] = [
     title: 'линейка с дрейфом 8 %',
     params: DRIFT_8_SHEET,
     reference: DRIFT_8_SHEET,
+  },
+  {
+    title: 'линейка с дрейфом 25 %',
+    params: DRIFT_25_SHEET,
+    reference: DRIFT_25_SHEET,
+  },
+  {
+    title: 'линейка с дрейфом 34 %',
+    params: DRIFT_34_SHEET,
+    reference: DRIFT_34_SHEET,
   },
   {
     title: 'клетка с дрейфом 4 %',
@@ -518,10 +549,53 @@ describe('detectRulingPerspective: перспектива отброшена', (
     expect(detect(params, frame).perspective).toBeNull();
   });
 
-  it('дрейф 16 % не сохраняется', () => {
-    const detection = detect({ ...BASE_SHEET, rulingPerspective: DRIFT_16 });
+  /**
+   * Линии прослежены все до одной, и отбраковывает лист именно дрейф: за
+   * порогом надёжности модель перспективы перестаёт описывать лист, а не
+   * теряет трассу.
+   */
+  it('дрейф 60 % не сохраняется', () => {
+    const detection = detect(DRIFT_60_SHEET);
 
-    expect(detection.bottomStep / detection.topStep - 1).toBeGreaterThan(0.15);
+    expect(detection.bottomStep / detection.topStep - 1).toBeGreaterThan(0.35);
+    expect(detection.foundNodeShare).toBeGreaterThan(0.6);
+    expect(detection.perspective).toBeNull();
+  });
+
+  /**
+   * Трасса сорвана на половине кадра: в правой половине каждая вторая линия
+   * сдвинута вниз на треть шага. Соседние линии расходятся сильнее четверти
+   * шага, и постоянной по столбцу составляющей, которую невязке прощает изгиб,
+   * такой сдвиг не становится. Дрейф самого листа — 25 %, внутри порога
+   * надёжности: отбраковать лист может только невязка.
+   */
+  it('трасса, сорванная на половине кадра, не сохраняется', () => {
+    const { step, phase, angle, margins } = DRIFT_25_SHEET;
+    const tornLines = toDrawnLines(DRIFT_25_SHEET).filter((line) => {
+      return line % 2 === 0;
+    });
+    const detection = detectRulingPerspective(
+      createTornSheet(DRIFT_25_SHEET, tornLines, WIDTH / 2),
+      { step, firstLinePhase: phase, skewAngle: angle, margins },
+      WHOLE_FRAME
+    );
+
+    expect(detection.foundNodeShare).toBeGreaterThan(0.6);
+    expect(detection.bottomStep / detection.topStep - 1).toBeLessThan(0.35);
+    expect(detection.perspective).toBeNull();
+  });
+
+  /**
+   * Прогиб с осью у правого края не ложится на модель ни при каких параметрах,
+   * а дрейф листа — 25 %, внутри порога надёжности. Значит, лист отбраковывает
+   * невязка, и поднятый порог дрейфа этого не меняет.
+   */
+  it('дрейф 25 % с прогибом, не согласным ни с одной перспективой, не сохраняется', () => {
+    const detection = detect({ ...DRIFT_25_SHEET, bend: OFF_CENTRE_SAG });
+
+    expect(detection.foundNodeShare).toBeGreaterThan(0.6);
+    expect(detection.bottomStep / detection.topStep - 1).toBeLessThan(0.35);
+    expect(detection.deviation).toBeGreaterThan(STEP / 20);
     expect(detection.perspective).toBeNull();
   });
 
@@ -551,5 +625,25 @@ describe('detectRulingPerspective: порог хранения', () => {
     expect(deviation).toBeGreaterThan(STEP / 20);
     expect(deviation).toBeLessThan(STEP / 10);
     expect(detect(params).perspective).not.toBeNull();
+  });
+});
+
+describe('detectRulingPerspective: шаг меняется сильнее гарантии', () => {
+  /**
+   * Двукратное изменение шага по высоте — далеко за гарантией спеки в
+   * двадцать пять процентов и за порогом надёжности. Спека разрешает оба
+   * исхода, поэтому спрос один: перспектива, которая уводит линии дальше
+   * двадцатой шага, храниться не должна. Отказ — не ошибка: детектор отдаёт
+   * числа ровного прохода, и лист остаётся пригодным для раскладки.
+   */
+  it('двукратный дрейф: лист без перспективы либо линии в допуске', () => {
+    const params: PerspectiveSheet = { ...BASE_SHEET, stepDrift: 1 };
+    const detection = detect(params);
+    const restoreError =
+      detection.perspective === null ? 0 : measureRestoreError(detection, params);
+
+    expect(detection.bottomStep / detection.topStep - 1).toBeGreaterThan(0.35);
+    expect(restoreError).toBeLessThan(LINE_TOLERANCE);
+    expect(detection.step).toBeGreaterThan(0);
   });
 });
