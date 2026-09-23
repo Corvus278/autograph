@@ -103,38 +103,6 @@ export type RednessNode = {
 };
 
 /**
- * Медиана скользящим окном: фон, от которого отсчитываются провалы линий.
- * Медиана, а не среднее: узкий провал её не сдвигает, поэтому глубина линии
- * достаётся целиком, а не наполовину.
- *
- * @param values — профиль
- * @param window — ширина окна в бинах
- * @returns фон каждого бина
- */
-export const computeMovingMedian = (
-  values: Float64Array,
-  window: number
-): Float64Array => {
-  const size = values.length;
-  const median = new Float64Array(size);
-  const half = Math.max(1, Math.floor(window / 2));
-
-  for (let index = 0; index < size; index += 1) {
-    const from = Math.max(0, index - half);
-    const to = Math.min(size, index + half + 1);
-    const slice: number[] = [];
-
-    for (let inner = from; inner < to; inner += 1) {
-      slice.push(values[inner] || 0);
-    }
-
-    median[index] = computeMedian(slice);
-  }
-
-  return median;
-};
-
-/**
  * 99-й процентиль `|R − G|` по всем пикселям изображения — мера того, есть ли
  * на снимке цвет. Процентиль — член ряда, как у `computeQuantile`, и считается
  * гистограммой уровней, а не сортировкой: на кадре телефона это десяток

@@ -3,7 +3,6 @@ import { detectSkewAngle, MAX_SKEW_ANGLE, SKEW_ANGLE_STEP } from './detectSkewAn
 import { ANALYSIS_IMAGE_SIZE } from './downsampleSheetImage';
 import {
   buildRednessStrips,
-  computeMovingMedian,
   isColourVetoEnabled,
   MARGIN_LINE_MIN_REDNESS,
   measureCandidateRedness,
@@ -15,7 +14,7 @@ import {
 import { measureBandedPeriod } from './measureBandedPeriod';
 import type { PaperMargins, RulingDetection, SheetImageData } from './paper.types';
 import { measureProfilePeriod, type ProfilePeriod } from './profilePeriod';
-import { computeMedian, computeQuantile } from './quantile';
+import { computeMedian, computeMovingMedian, computeQuantile } from './quantile';
 import {
   buildBandCombResponses,
   buildColumnProfiles,

@@ -2,7 +2,6 @@ import type { SheetImageData } from '@pages/Generator/lib/paper';
 import { MARGIN_LINE_BAND_STEPS } from '@pages/Generator/lib/paper/detectRuling';
 import {
   buildRednessStrips,
-  computeMovingMedian,
   isColourVetoEnabled,
   MARGIN_LINE_COLOUR_GATE,
   MARGIN_LINE_MIN_REDNESS,
@@ -11,7 +10,10 @@ import {
   type RednessNode,
   sliceRednessStrips,
 } from '@pages/Generator/lib/paper/marginLineRedness';
-import { computeQuantile } from '@pages/Generator/lib/paper/quantile';
+import {
+  computeMovingMedian,
+  computeQuantile,
+} from '@pages/Generator/lib/paper/quantile';
 import { buildStripProfiles } from '@pages/Generator/lib/paper/sheetProfile';
 import { mulberry32 } from '@shared/lib/random';
 import { describe, expect, it } from 'vitest';
