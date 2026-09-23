@@ -118,6 +118,7 @@ public/           копируется в dist/ как есть: fonts/*.ttf, pa
 tests/            юнит- и компонентные тесты, helpers/; pwa-precache.test.ts — отдельный проект vitest
 openspec/         specs/ — действующие требования по областям; changes/ — proposal, design, tasks, journal задачи,
                   changes/archive/ — закрытые
+docs/notes/       отложенные направления и исследования (читать только по теме задачи, индекс — README.md)
 ```
 
 В `widgets` две единицы: шапка (три потребителя-экрана) и плашка service worker. Слои `features` и `entities` пустые:
