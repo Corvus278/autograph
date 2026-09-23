@@ -31,7 +31,9 @@ const loadImage = (src: string): Promise<HTMLImageElement | null> => {
 };
 
 /**
- * Снимает с фотографии полутоновую выжимку — вход всех измерений листа.
+ * Снимает с фотографии полутоновую выжимку — вход всех измерений листа — и
+ * разность красного и зелёного каналов, по которой измерение отличает красную
+ * черту поля от нейтральной вертикали.
  *
  * Пустой результат — обычный рабочий случай, а не сбой: фотография может не
  * разобраться, а канвы для съёма пикселей может не быть вовсе. Экземпляр в
@@ -68,16 +70,18 @@ export const decodeSheetImage = async (src: string): Promise<SheetImageData | nu
 
   const { data } = context.getImageData(0, 0, width, height);
   const luminance = new Float32Array(width * height);
+  const redMinusGreen = new Int16Array(width * height);
 
   for (let index = 0; index < luminance.length; index += 1) {
     const offset = index * 4;
+    const red = data[offset] || 0;
+    const green = data[offset + 1] || 0;
 
     luminance[index] =
-      ((data[offset] || 0) * RED_WEIGHT +
-        (data[offset + 1] || 0) * GREEN_WEIGHT +
-        (data[offset + 2] || 0) * BLUE_WEIGHT) /
+      (red * RED_WEIGHT + green * GREEN_WEIGHT + (data[offset + 2] || 0) * BLUE_WEIGHT) /
       255;
+    redMinusGreen[index] = red - green;
   }
 
-  return { width, height, luminance };
+  return { width, height, luminance, redMinusGreen };
 };

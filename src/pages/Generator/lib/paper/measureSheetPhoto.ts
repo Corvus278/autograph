@@ -11,8 +11,10 @@ import type { RulingPerspectiveDetection } from './detectRulingPerspective.types
 import { detectSheetOutline } from './detectSheetOutline';
 import { extractLighting } from './extractLighting';
 import { extractTexture } from './extractTexture';
+import { measureRedGreenP99 } from './marginLineRedness';
 import type {
   SheetPhotoBandedReport,
+  SheetPhotoMarginLineProfileReport,
   SheetPhotoMeasurement,
   SheetPhotoOptions,
   SheetPhotoPerspectiveReport,
@@ -144,6 +146,11 @@ type RulingMeasurement = {
    * Отчёт поиска линии поля того прохода, который за ней ходил.
    */
   marginLine: MarginLineReport;
+
+  /**
+   * Вердикт первой ступени на обоих проходах и гейт серого снимка.
+   */
+  marginLineProfile: SheetPhotoMarginLineProfileReport;
 };
 
 /**
@@ -152,6 +159,15 @@ type RulingMeasurement = {
 type RuledEdgeSide = keyof RuledEdges;
 
 const MISSING_REPORT: SheetPhotoPerspectiveReport | null = null;
+
+/**
+ * Разлиновку не мерили: ни одна ступень не звалась, гейт не понадобился.
+ */
+const NO_MARGIN_LINE_PROFILE_REPORT: SheetPhotoMarginLineProfileReport = {
+  flat: NO_MARGIN_LINE_REPORT.profileVeto,
+  rectified: null,
+  colourGate: null,
+};
 
 /**
  * Координата вдоль линий по модулю шага, в `[0, step)`.
@@ -169,12 +185,19 @@ const wrapPhase = (value: number, step: number): number => {
  * отдаётся без копии: обрезанная фотография разбирается так же, как без
  * поиска контура, и не платит за лишний проход по пикселям.
  *
+ * Разность красного и зелёного каналов вырезается тем же прямоугольником, что
+ * и яркость: вето по цвету берёт красноту из того же столбца, где яркостная
+ * мера нашла кандидата. Нет её в кадре — нет и в вырезке.
+ *
  * @param image — полутоновая выжимка кадра
  * @param outline — контур листа
  * @returns вырезка и её отступы в кадре
  */
-const cropSheet = (image: SheetImageData, outline: SheetOutline | null): SheetCrop => {
-  const { width, height, luminance } = image;
+export const cropSheet = (
+  image: SheetImageData,
+  outline: SheetOutline | null
+): SheetCrop => {
+  const { width, height, luminance, redMinusGreen } = image;
   const bounds = resolveSheetBounds(outline, width, height);
   const left = Math.min(width, Math.max(0, Math.ceil(bounds.left)));
   const top = Math.min(height, Math.max(0, Math.ceil(bounds.top)));
@@ -188,15 +211,22 @@ const cropSheet = (image: SheetImageData, outline: SheetOutline | null): SheetCr
   }
 
   const values = new Float32Array(cropWidth * cropHeight);
+  const colour = redMinusGreen ? new Int16Array(cropWidth * cropHeight) : null;
 
   for (let row = 0; row < cropHeight; row += 1) {
     const from = (top + row) * width + left;
 
     values.set(luminance.subarray(from, from + cropWidth), row * cropWidth);
+
+    if (redMinusGreen && colour) {
+      colour.set(redMinusGreen.subarray(from, from + cropWidth), row * cropWidth);
+    }
   }
 
   return {
-    image: { width: cropWidth, height: cropHeight, luminance: values },
+    image: colour
+      ? { width: cropWidth, height: cropHeight, luminance: values, redMinusGreen: colour }
+      : { width: cropWidth, height: cropHeight, luminance: values },
     left,
     top,
   };
@@ -713,6 +743,26 @@ const toMarginLineReport = (
 };
 
 /**
+ * Вердикт первой ступени обоих проходов. Гейт у проходов общий — мера кадра
+ * считается один раз, — поэтому берётся у того, которому он понадобился.
+ *
+ * @param flat — отчёт ровного прохода по кадру
+ * @param rectified — отчёт прохода по выпрямленной копии; `null` — второго
+ *   прохода не было
+ * @returns вердикты обоих проходов и гейт
+ */
+const toMarginLineProfileReport = (
+  flat: MarginLineReport,
+  rectified: MarginLineReport | null
+): SheetPhotoMarginLineProfileReport => {
+  return {
+    flat: flat.profileVeto,
+    rectified: rectified && rectified.profileVeto,
+    colourGate: flat.colourGate || (rectified && rectified.colourGate),
+  };
+};
+
+/**
  * Разлиновка вырезки: ровный проход, перспектива и, если она есть, второй
  * проход по выпрямленной копии.
  *
@@ -731,7 +781,25 @@ const measureRuling = (
   crop: SheetCrop,
   outline: SheetOutline | null
 ): RulingMeasurement => {
-  const detected = detectRuling(crop.image);
+  /**
+   * Гейт серого снимка — один на оба прохода и по всему кадру, до вырезки:
+   * вырезка и копия теряют стол и обложку, и их мера цветности у бледной
+   * бумаги ложится на самый порог. Мера считается один раз и только если
+   * детектору понадобилась.
+   */
+  let frameRedGreenP99: number | null = null;
+  let isFrameColourMeasured = false;
+
+  const measureFrameRedGreenP99 = (): number | null => {
+    if (!isFrameColourMeasured) {
+      frameRedGreenP99 = measureRedGreenP99(image);
+      isFrameColourMeasured = true;
+    }
+
+    return frameRedGreenP99;
+  };
+
+  const detected = detectRuling(crop.image, { measureFrameRedGreenP99 });
   const banded = toBandedReport(detected);
 
   if (!detected.isDetected || detected.step <= 0) {
@@ -741,6 +809,7 @@ const measureRuling = (
       report: MISSING_REPORT,
       banded,
       marginLine: detected.marginLineReport,
+      marginLineProfile: toMarginLineProfileReport(detected.marginLineReport, null),
     };
   }
 
@@ -776,6 +845,7 @@ const measureRuling = (
       report,
       banded,
       marginLine: flat.marginLineReport,
+      marginLineProfile: toMarginLineProfileReport(flat.marginLineReport, null),
     };
   }
 
@@ -812,6 +882,7 @@ const measureRuling = (
            * нечем — выпрямление `x` вертикали не меняет.
            */
           marginLineSide: flat.marginLineSide,
+          measureFrameRedGreenP99,
         })
       : null;
 
@@ -822,6 +893,10 @@ const measureRuling = (
       report: { ...report, isRectifiedRulingMissing: true },
       banded,
       marginLine: flat.marginLineReport,
+      marginLineProfile: toMarginLineProfileReport(
+        flat.marginLineReport,
+        second && second.marginLineReport
+      ),
     };
   }
 
@@ -841,6 +916,10 @@ const measureRuling = (
     report,
     banded,
     marginLine: toMarginLineReport(second.marginLineReport, flat.marginLineReport),
+    marginLineProfile: toMarginLineProfileReport(
+      flat.marginLineReport,
+      second.marginLineReport
+    ),
   };
 };
 
@@ -883,15 +962,13 @@ export const measureSheetPhoto = (
         perspective: MISSING_REPORT,
         banded: null,
         marginLine: NO_MARGIN_LINE_REPORT,
+        marginLineProfile: NO_MARGIN_LINE_PROFILE_REPORT,
       },
     };
   }
 
-  const { source, detection, report, banded, marginLine } = measureRuling(
-    image,
-    crop,
-    outline
-  );
+  const { source, detection, report, banded, marginLine, marginLineProfile } =
+    measureRuling(image, crop, outline);
 
   return {
     source: { ...source, outline },
@@ -906,6 +983,7 @@ export const measureSheetPhoto = (
       perspective: report,
       banded,
       marginLine,
+      marginLineProfile,
     },
   };
 };

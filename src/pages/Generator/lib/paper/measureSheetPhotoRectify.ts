@@ -28,6 +28,11 @@ export type RectifiedSheetImage = {
  * копии — диапазон `v`, при котором высота выборки лежит внутри вырезки во всех
  * столбцах: края не заполняются выдуманной бумагой.
  *
+ * Разность красного и зелёного каналов выбирается в тех же точках и с теми же
+ * долями, что и яркость, и округляется до уровня: иначе на проходе по копии
+ * краснота кандидата бралась бы не из того столбца. Нет её в вырезке — нет и в
+ * копии.
+ *
  * @param image — полутоновая выжимка вырезки
  * @param projection — наклон и перспектива в пикселях вырезки
  * @returns копия; без перспективы или без диапазона — копия нулевой высоты
@@ -36,12 +41,22 @@ export const rectifySheetImage = (
   image: SheetImageData,
   projection: RulingProjection
 ): RectifiedSheetImage => {
-  const { width, height, luminance } = image;
+  const { width, height, luminance, redMinusGreen } = image;
   const { perspective } = projection;
   const tangent = Math.tan(projection.skewAngle / DEGREES_IN_RADIAN);
 
   if (!perspective || width < 1 || height < 2) {
-    return { image: { width, height: 0, luminance: new Float32Array(0) }, top: 0 };
+    return {
+      image: redMinusGreen
+        ? {
+            width,
+            height: 0,
+            luminance: new Float32Array(0),
+            redMinusGreen: new Int16Array(0),
+          }
+        : { width, height: 0, luminance: new Float32Array(0) },
+      top: 0,
+    };
   }
 
   let top = Number.NEGATIVE_INFINITY;
@@ -56,6 +71,7 @@ export const rectifySheetImage = (
 
   const rows = Math.max(0, Math.floor(bottom - top) + 1);
   const values = new Float32Array(width * rows);
+  const colour = redMinusGreen ? new Int16Array(width * rows) : null;
   const { originX, originY, convergenceX, convergenceY } = perspective;
   /**
    * `Y(x, U)` записана здесь развёрнуто, а не вызовом `lineHeightAt`: на кадре
@@ -80,8 +96,22 @@ export const rectifySheetImage = (
       const below = luminance[(upper + 1) * width + x] || 0;
 
       values[row * width + x] = above + (below - above) * share;
+
+      if (redMinusGreen && colour) {
+        const colourAbove = redMinusGreen[upper * width + x] || 0;
+        const colourBelow = redMinusGreen[(upper + 1) * width + x] || 0;
+
+        colour[row * width + x] = Math.round(
+          colourAbove + (colourBelow - colourAbove) * share
+        );
+      }
     }
   }
 
-  return { image: { width, height: rows, luminance: values }, top };
+  return {
+    image: colour
+      ? { width, height: rows, luminance: values, redMinusGreen: colour }
+      : { width, height: rows, luminance: values },
+    top,
+  };
 };

@@ -11,6 +11,7 @@ import type {
   SheetImageData,
   SheetOutline,
   SheetPhotoBandedReport,
+  SheetPhotoDiagnostics,
   SheetPhotoMeasurement,
   SheetPoint,
   SheetRuling,
@@ -42,6 +43,19 @@ type DecodedGray = {
    * Яркости пикселей, по байту на пиксель, в base64.
    */
   gray: string;
+
+  /**
+   * Разность красного и зелёного каналов, `Int16Array` в порядке байтов
+   * машины, в base64: вкладка и node живут на одной машине.
+   */
+  redMinusGreen: string;
+
+  /**
+   * Красный канал, по байту на пиксель, в base64. Пустая строка — канал не
+   * просили: сборке профилей и замеру листа он не нужен, а через мост он
+   * гонит ещё байт на пиксель.
+   */
+  red: string;
 };
 
 /**
@@ -57,6 +71,27 @@ type EncodedPhoto = {
    * MIME-тип файла.
    */
   mimeType: string;
+
+  /**
+   * Нужен ли красный канал.
+   */
+  shouldKeepRed: boolean;
+};
+
+/**
+ * Фотография с красным и зелёным каналами рядом с яркостью: по ним
+ * размечается цвет линии поля в `scripts/margin-line-ground-truth.ts`.
+ */
+export type SheetPhotoChannels = SheetImageData & {
+  /**
+   * Красный канал пикселя, от 0 до 255, построчно.
+   */
+  red: Uint8Array;
+
+  /**
+   * Зелёный канал пикселя, от 0 до 255, построчно.
+   */
+  green: Uint8Array;
 };
 
 /**
@@ -121,66 +156,96 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 /**
- * Снимает полутоновую выжимку с фотографии: декодировать изображение в node
- * нечем, а Chromium уже стоит для скриншотных тестов.
+ * Декодирует фотографию во вкладке: декодировать изображение в node нечем, а
+ * Chromium уже стоит для скриншотных тестов.
  *
  * @param page — открытая вкладка Chromium
  * @param path — путь к файлу фотографии
- * @returns яркости по Rec.709 от 0 до 1
+ * @param shouldKeepRed — вернуть ли красный канал
+ * @returns выжимка в base64
  */
-export const decodeSheetPhoto = async (
+const decodeInPage = async (
   page: Page,
-  path: string
-): Promise<SheetImageData> => {
+  path: string,
+  shouldKeepRed: boolean
+): Promise<DecodedGray> => {
   const input: EncodedPhoto = {
     data: readFileSync(path).toString('base64'),
     mimeType: MIME_TYPES[extname(path).toLowerCase()] || 'image/jpeg',
+    shouldKeepRed,
   };
-  const decoded = await page.evaluate(async ({ data, mimeType }: EncodedPhoto) => {
-    const image = new Image();
 
-    image.src = `data:${mimeType};base64,${data}`;
-    await image.decode();
+  return await page.evaluate(
+    async ({ data, mimeType, shouldKeepRed: isRedKept }: EncodedPhoto) => {
+      const image = new Image();
 
-    const canvas = document.createElement('canvas');
+      image.src = `data:${mimeType};base64,${data}`;
+      await image.decode();
 
-    canvas.width = image.width;
-    canvas.height = image.height;
+      const canvas = document.createElement('canvas');
 
-    const context = canvas.getContext('2d');
+      canvas.width = image.width;
+      canvas.height = image.height;
 
-    if (!context) {
-      throw new Error('Канва для декодирования фотографии недоступна');
-    }
+      const context = canvas.getContext('2d');
 
-    context.drawImage(image, 0, 0);
+      if (!context) {
+        throw new Error('Канва для декодирования фотографии недоступна');
+      }
 
-    const frame = context.getImageData(0, 0, canvas.width, canvas.height);
-    const gray = new Uint8Array(canvas.width * canvas.height);
+      context.drawImage(image, 0, 0);
 
-    for (let index = 0; index < gray.length; index += 1) {
-      gray[index] = Math.round(
-        0.2126 * (frame.data[index * 4] || 0) +
-          0.7152 * (frame.data[index * 4 + 1] || 0) +
-          0.0722 * (frame.data[index * 4 + 2] || 0)
-      );
-    }
+      const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+      const gray = new Uint8Array(canvas.width * canvas.height);
+      const redMinusGreen = new Int16Array(gray.length);
+      const reds = new Uint8Array(isRedKept ? gray.length : 0);
 
-    let binary = '';
-    const chunkSize = 0x80_00;
+      for (let index = 0; index < gray.length; index += 1) {
+        const red = frame.data[index * 4] || 0;
+        const green = frame.data[index * 4 + 1] || 0;
 
-    for (let index = 0; index < gray.length; index += chunkSize) {
-      binary += String.fromCharCode(...gray.subarray(index, index + chunkSize));
-    }
+        gray[index] = Math.round(
+          0.2126 * red + 0.7152 * green + 0.0722 * (frame.data[index * 4 + 2] || 0)
+        );
+        redMinusGreen[index] = red - green;
 
-    const result: DecodedGray = {
-      width: canvas.width,
-      height: canvas.height,
-      gray: btoa(binary),
-    };
+        if (isRedKept) {
+          reds[index] = red;
+        }
+      }
 
-    return result;
-  }, input);
+      const toBase64 = (bytes: Uint8Array): string => {
+        let binary = '';
+        const chunkSize = 0x80_00;
+
+        for (let index = 0; index < bytes.length; index += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+        }
+
+        return btoa(binary);
+      };
+
+      const result: DecodedGray = {
+        width: canvas.width,
+        height: canvas.height,
+        gray: toBase64(gray),
+        redMinusGreen: toBase64(new Uint8Array(redMinusGreen.buffer)),
+        red: toBase64(reds),
+      };
+
+      return result;
+    },
+    input
+  );
+};
+
+/**
+ * Переводит выжимку из вкладки в изображение для измерения.
+ *
+ * @param decoded — выжимка в base64
+ * @returns яркости по Rec.709 от 0 до 1 и разность красного и зелёного каналов
+ */
+const toSheetImageData = (decoded: DecodedGray): SheetImageData => {
   const bytes = Buffer.from(decoded.gray, 'base64');
   const luminance = new Float32Array(bytes.length);
 
@@ -188,7 +253,56 @@ export const decodeSheetPhoto = async (
     luminance[index] = (bytes[index] || 0) / 255;
   }
 
-  return { width: decoded.width, height: decoded.height, luminance };
+  /**
+   * Байты копируются в свой буфер: буфер `Buffer` бывает общим пулом со
+   * смещением, не кратным двум, и `Int16Array` поверх него не встаёт.
+   */
+  const redMinusGreen = new Int16Array(
+    Uint8Array.from(Buffer.from(decoded.redMinusGreen, 'base64')).buffer
+  );
+
+  return { width: decoded.width, height: decoded.height, luminance, redMinusGreen };
+};
+
+/**
+ * Снимает полутоновую выжимку с фотографии.
+ *
+ * @param page — открытая вкладка Chromium
+ * @param path — путь к файлу фотографии
+ * @returns яркости по Rec.709 от 0 до 1 и разность красного и зелёного каналов
+ */
+export const decodeSheetPhoto = async (
+  page: Page,
+  path: string
+): Promise<SheetImageData> => {
+  return toSheetImageData(await decodeInPage(page, path, false));
+};
+
+/**
+ * Снимает с фотографии выжимку вместе с красным и зелёным каналами. Зелёный
+ * выводится из красного и разности каналов, а не везётся через мост: так
+ * через него идёт на байт на пиксель больше, чем у `decodeSheetPhoto`, а не
+ * на два.
+ *
+ * @param page — открытая вкладка Chromium
+ * @param path — путь к файлу фотографии
+ * @returns то же, что у `decodeSheetPhoto`, плюс красный и зелёный каналы
+ */
+export const decodeSheetPhotoChannels = async (
+  page: Page,
+  path: string
+): Promise<SheetPhotoChannels> => {
+  const decoded = await decodeInPage(page, path, true);
+  const image = toSheetImageData(decoded);
+  const red = Uint8Array.from(Buffer.from(decoded.red, 'base64'));
+  const green = new Uint8Array(red.length);
+  const redMinusGreen = image.redMinusGreen || new Int16Array(red.length);
+
+  for (let index = 0; index < red.length; index += 1) {
+    green[index] = (red[index] || 0) - (redMinusGreen[index] || 0);
+  }
+
+  return { ...image, red, green };
 };
 
 /**
@@ -367,6 +481,98 @@ const describeMarginLineStage = ({
 };
 
 /**
+ * Отчёт первой ступени линии поля на обоих проходах вместе с гейтом серого
+ * снимка.
+ */
+type MarginLineProfileReport = SheetPhotoDiagnostics['marginLineProfile'];
+
+/**
+ * Вердикт первой ступени одного прохода.
+ */
+type MarginLineProfileVeto = MarginLineProfileReport['flat'];
+
+/**
+ * Вердикт вето о кандидате первой ступени одного прохода: сторона кандидата и
+ * числа полосовой меры, по которым вето его пропустило или отвергло. Краснота
+ * печатается, только если мерилась: у отвергнутого стороной и на сером снимке
+ * её нет.
+ *
+ * @param veto — вердикт первой ступени прохода
+ * @returns вердикт для строки отчёта
+ */
+const describeMarginLineProfileVeto = (veto: MarginLineProfileVeto): string => {
+  if (!veto.isCalled) {
+    return 'вето не звалось';
+  }
+
+  const { verdict, side, coverage, ratio, threshold, redness } = veto;
+  const rednessText = redness === null ? '' : `, краснота ${redness.toFixed(1)}`;
+  const numbers = `охват ${(coverage * 100).toFixed(0)} %, отношение ${ratio.toFixed(2)}, барьер ${describeMarginLineThreshold(threshold)}${rednessText}`;
+
+  switch (verdict) {
+    case 'accepted': {
+      return `принят ${side} (${numbers})`;
+    }
+
+    case 'side': {
+      return `отвергнут стороной ${side} (${numbers})`;
+    }
+
+    case 'colour': {
+      return `отвергнут цветом ${side} (${numbers})`;
+    }
+
+    default: {
+      throw new Error(`Unknown margin line verdict: ${verdict}`);
+    }
+  }
+};
+
+/**
+ * Гейт серого снимка: включено ли вето по цвету и мера кадра, по которой это
+ * решено. Выключенное вето печатается с причиной — канала нет или снимок
+ * серый: по одному «выключено» не видно, на что смотреть.
+ *
+ * @param colourGate — гейт; `null` — ни один кандидат до цвета не дошёл
+ * @returns часть строки линии поля о цвете
+ */
+const describeColourGate = (
+  colourGate: MarginLineProfileReport['colourGate']
+): string => {
+  if (colourGate === null) {
+    return 'цвет не понадобился';
+  }
+
+  const { isEnabled, redGreenP99 } = colourGate;
+
+  if (redGreenP99 === null) {
+    return 'цвет: канала нет';
+  }
+
+  return `цвет: вето ${isEnabled ? 'включено' : 'выключено'}, P99 |R − G| ${redGreenP99}`;
+};
+
+/**
+ * Что решила первая ступень на каждом проходе и что решил гейт серого снимка.
+ * Копия печатается, только если второй проход был: её первая ступень ищет у
+ * стороны, выбранной на кадре, и фантом, отвергнутый на кадре, виден только в
+ * вердикте кадра.
+ *
+ * @param report — вердикты первой ступени и гейт
+ * @returns часть строки линии поля о первой ступени
+ */
+const describeMarginLineProfile = ({
+  flat,
+  rectified,
+  colourGate,
+}: MarginLineProfileReport): string => {
+  const rectifiedText =
+    rectified === null ? '' : `, копия — ${describeMarginLineProfileVeto(rectified)}`;
+
+  return `первая ступень: кадр — ${describeMarginLineProfileVeto(flat)}${rectifiedText}; ${describeColourGate(colourGate)}`;
+};
+
+/**
  * Перспектива: шаг у крайних линий области и дрейф шага сверху вниз. Без
  * перспективы — расхождение гребёнок в долях шага: по нему видно, насколько
  * лист был далёк от порога.
@@ -450,7 +656,7 @@ export const describeSheetReport = ({
     `угол ${skewAngle.toFixed(2)}°`,
     describePerspective(ruling, measurement),
     `поля сверху/справа/снизу/слева ${marginsText}`,
-    `линия поля ${marginLineText} (${describeMarginLineStage(diagnostics.marginLine)})`,
+    `линия поля ${marginLineText} (${describeMarginLineStage(diagnostics.marginLine)}; ${describeMarginLineProfile(diagnostics.marginLineProfile)})`,
     describeBend(ruling, diagnostics.bendFoundNodeShare),
     `свет ${lighting.isUsable ? 'пригоден' : 'непригоден'} (контраст ${lighting.contrast.toFixed(3)})`,
     `время ${Math.round(elapsedMs)} мс`,

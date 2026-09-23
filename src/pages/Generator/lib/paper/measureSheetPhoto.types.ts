@@ -1,4 +1,9 @@
-import type { MarginLineReport, RulingBandedStage } from './detectRuling';
+import type {
+  ColourGate,
+  MarginLineProfileVeto,
+  MarginLineReport,
+  RulingBandedStage,
+} from './detectRuling';
 import type {
   LightingField,
   RulingKind,
@@ -132,6 +137,39 @@ export type SheetPhotoDiagnostics = {
    * нет.
    */
   marginLine: MarginLineReport;
+
+  /**
+   * Вердикт первой ступени поиска линии поля на обоих проходах и гейт серого
+   * снимка.
+   */
+  marginLineProfile: SheetPhotoMarginLineProfileReport;
+};
+
+/**
+ * Вердикт первой ступени поиска линии поля — профиля во всю высоту — на каждом
+ * проходе.
+ *
+ * Отчёт `marginLine` рассказывает об одном проходе, а первая ступень решает на
+ * обоих по-своему: ровный проход ищет у обоих краёв и выбирает сторону, копия
+ * ищет только у выбранной. Фантом, отвергнутый на кадре, в отчёте копии не
+ * виден вовсе, а тень у края, отвергнутая на копии, — в отчёте кадра.
+ */
+export type SheetPhotoMarginLineProfileReport = {
+  /**
+   * Вердикт ровного прохода по кадру.
+   */
+  flat: MarginLineProfileVeto;
+
+  /**
+   * Вердикт прохода по выпрямленной копии. `null` — второго прохода не было.
+   */
+  rectified: MarginLineProfileVeto | null;
+
+  /**
+   * Гейт серого снимка — один на оба прохода, по всему кадру. `null` — ни на
+   * одном проходе не понадобился: ни один кандидат не дошёл до вето по цвету.
+   */
+  colourGate: ColourGate | null;
 };
 
 /**
