@@ -1,6 +1,6 @@
 {
   "name": "autograph",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "генератор рукописного текста",
   "license": "MIT",
@@ -11,6 +11,7 @@
     "build:icons": "esbuild scripts/build-app-icons.ts --bundle --platform=node --format=esm --external:playwright --outfile=node_modules/.cache/build-app-icons.mjs --log-level=error && node node_modules/.cache/build-app-icons.mjs",
     "build:paper": "esbuild scripts/build-paper-profiles.ts --bundle --platform=node --format=esm --external:playwright --define:import.meta.env.BASE_URL='\"/\"' --outfile=node_modules/.cache/build-paper-profiles.mjs --log-level=error && node node_modules/.cache/build-paper-profiles.mjs",
     "measure:sheet": "esbuild scripts/measure-sheet.ts --bundle --platform=node --format=esm --external:playwright --define:import.meta.env.BASE_URL='\"/\"' --outfile=node_modules/.cache/measure-sheet.mjs --log-level=error && node node_modules/.cache/measure-sheet.mjs",
+    "measure:margin-color": "esbuild scripts/margin-line-ground-truth.ts --bundle --platform=node --format=esm --external:playwright --define:import.meta.env.BASE_URL='\"/\"' --outfile=node_modules/.cache/margin-line-ground-truth.mjs --log-level=error && node node_modules/.cache/margin-line-ground-truth.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project=unit",

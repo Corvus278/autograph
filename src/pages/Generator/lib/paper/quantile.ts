@@ -33,3 +33,35 @@ export const computeQuantile = (values: number[], quantile: number): number => {
 export const computeMedian = (values: number[]): number => {
   return computeQuantile(values, 0.5);
 };
+
+/**
+ * Медиана скользящим окном: фон, от которого отсчитываются провалы линий.
+ * Медиана, а не среднее: узкий провал её не сдвигает, поэтому глубина линии
+ * достаётся целиком, а не наполовину.
+ *
+ * @param values — профиль
+ * @param window — ширина окна в бинах
+ * @returns фон каждого бина
+ */
+export const computeMovingMedian = (
+  values: Float64Array,
+  window: number
+): Float64Array => {
+  const size = values.length;
+  const median = new Float64Array(size);
+  const half = Math.max(1, Math.floor(window / 2));
+
+  for (let index = 0; index < size; index += 1) {
+    const from = Math.max(0, index - half);
+    const to = Math.min(size, index + half + 1);
+    const slice: number[] = [];
+
+    for (let inner = from; inner < to; inner += 1) {
+      slice.push(values[inner] || 0);
+    }
+
+    median[index] = computeMedian(slice);
+  }
+
+  return median;
+};
