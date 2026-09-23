@@ -53,6 +53,11 @@ npm run storybook          # Storybook на http://localhost:6006
 только в CSS и `index.html`. Приложение — SPA, а Pages не отдаёт `index.html` на неизвестные пути, поэтому workflow
 кладёт его копию в `404.html`, иначе прямой заход на `/create-font` вернул бы 404.
 
+Гейты отгрузки — `.github/workflows/ci.yml`: линтинг, проверка типов, `npm test` двумя шардами, `npm run test:pwa`
+и `npm run test:stories` отдельными job; Chromium для stories кешируется по версии Playwright. Идут на каждый PR в `master`, и тот же workflow вызывает `deploy.yml` перед
+сборкой: без зелёных проверок на Pages ничего не уходит. Скриншотные тесты в гейт не входят — эталоны живут только в
+docker-образе Playwright.
+
 ## Структура
 
 ```
