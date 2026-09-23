@@ -1248,6 +1248,8 @@ const findStripDip = (
  * @param center — положение линии по профилю во всю высоту
  * @param step — шаг разлиновки в пикселях
  * @param minDepth — наименьшая глубина стартового узла
+ * @param startCap — стартовый узел строго мельче этой глубины; без неё старт —
+ *   самый глубокий провал
  * @returns узел линии в каждой полосе сверху вниз; `null` на месте полосы, где
  *   линия не нашлась, и во всех полосах — когда нет стартового узла
  */
@@ -1255,14 +1257,17 @@ const traceVerticalNodes = (
   bands: StripDepths[],
   center: number,
   step: number,
-  minDepth: number
+  minDepth: number,
+  startCap = Number.POSITIVE_INFINITY
 ): (TraceNode | null)[] => {
   const starts = bands.map((band) => {
     return findStripDip(band, center, step * TRACE_START_SHARE);
   });
   const startIndex = starts.reduce((best, node, index) => {
-    return node && node.depth > (starts[best]?.depth || 0) ? index : best;
-  }, 0);
+    return node && node.depth < startCap && node.depth > (starts[best]?.depth || 0)
+      ? index
+      : best;
+  }, -1);
   const start = starts[startIndex];
   const nodes = bands.map((): TraceNode | null => {
     return null;
@@ -1619,15 +1624,17 @@ type TracedNodes = {
  * @param center — положение кандидата в своей полосе
  * @param step — шаг разлиновки в пикселях
  * @param isLeftBorder — кандидат стоит слева от области письма
+ * @param startCap — стартовый узел трассы строго мельче этой глубины
  * @returns оценка кандидата; `null` — трасса его не нашла ни в одной полосе
  */
 const traceBandedCandidate = (
   bands: StripDepths[],
   center: number,
   step: number,
-  isLeftBorder: boolean
+  isLeftBorder: boolean,
+  startCap = Number.POSITIVE_INFINITY
 ): BandedCandidate | null => {
-  const nodes = traceVerticalNodes(bands, center, step, MARGIN_LINE_MIN_DEPTH);
+  const nodes = traceVerticalNodes(bands, center, step, MARGIN_LINE_MIN_DEPTH, startCap);
   const { depths, positions } = nodes.reduce<TracedNodes>(
     (found, node) => {
       if (node) {
@@ -1651,6 +1658,61 @@ const traceBandedCandidate = (
     x: innermost,
     nodes,
   };
+};
+
+/**
+ * Ведёт кандидата в линию поля трассой и, если охвата `MARGIN_LINE_BAND_COVERAGE`
+ * она не взяла, ведёт заново со старта мельче `TRACE_DEPTH_SHARE` прежнего —
+ * пока охват не набран или старт не опустился ниже `MARGIN_LINE_MIN_DEPTH`.
+ *
+ * На сходящейся клетке черта пересекает вертикаль клетки, и на перекрёстке
+ * глубины складываются: старт с него поднимает порог трассы выше собственной
+ * глубины черты, и черта, идущая через все полосы, набирает один-два узла.
+ * Повтор только для не взявшего охват: годный кандидат и соседи, из которых
+ * складывается барьер, меряются одной трассой, как и без повтора. Порог
+ * трассы от квантиля стартовых узлов снял бы перекрёсток и без повтора, но
+ * сдвинул бы глубины соседей, а с ними барьер.
+ *
+ * @param bands — полосы с глубинами своих бинов, сверху вниз
+ * @param center — положение кандидата в своей полосе
+ * @param step — шаг разлиновки в пикселях
+ * @param isLeftBorder — кандидат стоит слева от области письма
+ * @returns оценка по последней трассе; `null` — первая трасса не нашла
+ *   кандидата ни в одной полосе
+ */
+const traceMarginLineCandidate = (
+  bands: StripDepths[],
+  center: number,
+  step: number,
+  isLeftBorder: boolean
+): BandedCandidate | null => {
+  const startDepths = bands.map((band) => {
+    return findStripDip(band, center, step * TRACE_START_SHARE)?.depth || 0;
+  });
+  let scored = traceBandedCandidate(bands, center, step, isLeftBorder);
+  let startCap = Number.POSITIVE_INFINITY;
+
+  while (scored !== null && scored.coverage < MARGIN_LINE_BAND_COVERAGE) {
+    const cap = startCap;
+    const startDepth = startDepths.reduce((deepest, depth) => {
+      return depth < cap && depth > deepest ? depth : deepest;
+    }, 0);
+
+    startCap = startDepth * TRACE_DEPTH_SHARE;
+
+    const retraced =
+      startCap < MARGIN_LINE_MIN_DEPTH
+        ? null
+        : traceBandedCandidate(bands, center, step, isLeftBorder, startCap);
+
+    if (retraced === null) {
+      break;
+    }
+
+    scored = retraced;
+  }
+
+  return scored;
 };
 
 /**
@@ -1766,7 +1828,7 @@ const pollMarginLineSide = (
    */
   const eligible = candidates
     .reduce<BandedCandidate[]>((kept, candidate) => {
-      const scored = traceBandedCandidate(bands, candidate.position, step, isLeft);
+      const scored = traceMarginLineCandidate(bands, candidate.position, step, isLeft);
 
       if (
         scored !== null &&

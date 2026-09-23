@@ -75,16 +75,18 @@ describe('отчёт первой ступени: вердикт вето', () =
   /**
    * Лист «причина `IMG_1813`»: резкую вертикаль у границы правой трети
    * профиль берёт за черту, а вдоль линии она не глубже соседей. Отчёт
-   * обязан назвать и отказ, и числа, по которым он принят.
+   * обязан назвать и отказ, и числа, по которым он принят. Линия после отказа
+   * — черта слева от полосового опроса или никакой: требование допускает оба
+   * ответа, и их точность держит `synthetic-sheet-converging-grid.test.ts`.
    */
   it('фантом у границы трети — «отвергнут стороной» с отношением и порогом', () => {
-    const { marginLineX, marginLineReport } = detectRuling(
+    const { marginLineSide, marginLineReport } = detectRuling(
       createSyntheticSheet(CONVERGING_GRID_SHEET),
       { skewAngle: 0 }
     );
     const { profileVeto } = marginLineReport;
 
-    expect(marginLineX).toBeNull();
+    expect(marginLineSide).not.toBe('right');
     expect(profileVeto.isCalled).toBe(true);
     expect(profileVeto).toMatchObject({
       verdict: 'side',
