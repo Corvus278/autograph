@@ -571,7 +571,11 @@ describe('detectRuling: полосовая ступень стоит второ�
     vi.mocked(buildStripProfiles).mockClear();
   });
 
-  it('оставляет прямую черту нетронутой и полос опроса не строит', () => {
+  /**
+   * Полосы опроса строятся ровно раз — на вето кандидата профиля; вторая
+   * ступень у подтверждённой черты не зовётся и числа не трогает.
+   */
+  it('оставляет прямую черту нетронутой и строит полосы опроса один раз', () => {
     const detection = detectRuling(
       createSyntheticSheet({ ...MARGIN_SHEET, marginLineX: LEFT_MARGIN_LINE_X }),
       { skewAngle: 0 }
@@ -579,7 +583,7 @@ describe('detectRuling: полосовая ступень стоит второ�
 
     expect(detection.marginLineX).toBe(STRAIGHT_LEFT_EXACT_X);
     expect(detection.marginLineSide).toBe('left');
-    expect(countPollBuilds(MARGIN_SHEET.height, MARGIN_SHEET.step)).toBe(0);
+    expect(countPollBuilds(MARGIN_SHEET.height, MARGIN_SHEET.step)).toBe(1);
   });
 
   it('так же оставляет наклонный лист с чертой справа', () => {
@@ -594,7 +598,7 @@ describe('detectRuling: полосовая ступень стоит второ�
 
     expect(detection.marginLineX).toBe(STRAIGHT_RIGHT_TILTED_EXACT_X);
     expect(detection.marginLineSide).toBe('right');
-    expect(countPollBuilds(MARGIN_SHEET.height, MARGIN_SHEET.step)).toBe(0);
+    expect(countPollBuilds(MARGIN_SHEET.height, MARGIN_SHEET.step)).toBe(1);
   });
 
   it('находит снесённую черту второй ступенью', () => {

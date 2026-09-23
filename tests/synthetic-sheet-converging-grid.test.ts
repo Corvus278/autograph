@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   computeSyntheticColumnX,
+  computeSyntheticMarginLineX,
   CONVERGING_GRID_SHEET,
   createSyntheticSheet,
 } from './helpers/synthetic-sheet';
@@ -19,6 +20,11 @@ const COLUMN_REACH_SHARE = 1 / 6;
  * порог ниже живого, чтобы тест держал причину, а не число снимка.
  */
 const MIN_DEPTH_SPREAD = 2.5;
+
+/**
+ * Допуск положения линии поля — пятая часть шага, как в требовании.
+ */
+const MARGIN_LINE_TOLERANCE_STEPS = 0.2;
 
 /**
  * Профиль средней яркости столбцов по высоте области с линиями — своя мера
@@ -107,17 +113,23 @@ describe('CONVERGING_GRID_SHEET: причина фантома IMG_1813', () => 
   });
 
   /**
-   * Тест фиксирует дефект базы: первая ступень отдаёт линию стороне с ровной
-   * клеткой, хотя черта стоит слева. Вето переворачивает это утверждение.
+   * Первая ступень берёт вертикаль клетки у правой стороны, а вето полосовой
+   * меры её отвергает: вдоль линии она не глубже соседей. Требование допускает
+   * два ответа — линии нет или она у черты слева в пределах пятой части шага
+   * от самого внутреннего положения; снос вправо, поэтому оно внизу области.
    */
-  it('нынешний детектор отдаёт линию поля у правой стороны', () => {
-    const { width } = CONVERGING_GRID_SHEET;
+  it('линия поля не встаёт у стороны с ровной клеткой', () => {
+    const { height, margins, step } = CONVERGING_GRID_SHEET;
     const detection = detectRuling(createSyntheticSheet(CONVERGING_GRID_SHEET), {
       skewAngle: 0,
     });
+    const innermost =
+      computeSyntheticMarginLineX(CONVERGING_GRID_SHEET, height - margins.bottom) || 0;
+    const miss =
+      detection.marginLineX === null ? 0 : Math.abs(detection.marginLineX - innermost);
 
-    expect(detection.marginLineSide).toBe('right');
-    expect(detection.marginLineX).toBeGreaterThan((2 * width) / 3);
+    expect([null, 'left']).toContain(detection.marginLineSide);
+    expect(miss).toBeLessThanOrEqual(MARGIN_LINE_TOLERANCE_STEPS * step);
   });
 
   /**

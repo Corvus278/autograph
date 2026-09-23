@@ -1704,12 +1704,28 @@ export const findBandedMarginLine = (
   width: number,
   side?: MarginLineSide
 ): BandedMarginLine => {
-  /**
-   * Глубины снимаются один раз на обе стороны: полоса у них общая, а
-   * скользящая медиана по ней — самая дорогая часть опроса.
-   */
-  const bands = toStripDepths(strips, step);
+  return pollMarginLine(toStripDepths(strips, step), step, width, side);
+};
 
+/**
+ * Полосовой опрос по полосам с уже снятыми глубинами — одна мера на вторую
+ * ступень и на вето первой.
+ *
+ * Глубины снимаются снаружи, а не здесь: полоса у сторон и у вето общая, а
+ * скользящая медиана по ней — самая дорогая часть опроса.
+ *
+ * @param bands — полосы опроса вместе с глубинами своих бинов
+ * @param step — шаг разлиновки в пикселях
+ * @param width — ширина кадра в пикселях
+ * @param side — край, которым ограничен поиск; не задан — оба
+ * @returns кандидат и числа, по которым он принят или отвергнут
+ */
+const pollMarginLine = (
+  bands: MeasuredStrip[],
+  step: number,
+  width: number,
+  side?: MarginLineSide
+): BandedMarginLine => {
   if (side !== undefined) {
     return pollMarginLineSide(bands, step, width, side);
   }
@@ -1717,7 +1733,96 @@ export const findBandedMarginLine = (
   const left = pollMarginLineSide(bands, step, width, 'left');
   const right = pollMarginLineSide(bands, step, width, 'right');
 
+  /**
+   * Глубины сравниваются только между сторонами, у которых кандидат взял
+   * барьер: барьер у каждой стороны свой — соседи и разброс берутся у её самой
+   * глубокой полосы, — и более глубокий кандидат под своим барьером закрыл бы
+   * линию, принятую у другой стороны.
+   *
+   * Не взяла барьер ни одна — отдаются числа более глубокой: линии нет, а
+   * диагностике нужен кандидат, ближе всех подошедший к барьеру.
+   */
+  if ((left.line === null) !== (right.line === null)) {
+    return left.line === null ? right : left;
+  }
+
   return left.depth >= right.depth ? left : right;
+};
+
+/**
+ * Решение полосовой меры по кандидату профиля во всю высоту вместе с числами,
+ * по которым оно принято.
+ */
+type MarginLineVeto = {
+  /**
+   * Доля полос, в которых трасса нашла самого глубокого кандидата своей
+   * стороны.
+   */
+  coverage: number;
+
+  /**
+   * Кандидат подтверждён: полосовая мера у его стороны взяла барьер, а сам он
+   * стоит там, где глубина мерится полным окном.
+   */
+  isAccepted: boolean;
+
+  /**
+   * Отношение глубины кандидата стороны к глубине соседей той же меры. `0` —
+   * соседей не нашлось.
+   */
+  ratio: number;
+
+  /**
+   * Порог, связавший кандидата стороны.
+   */
+  threshold: MarginLineThreshold;
+};
+
+/**
+ * Проверяет кандидата профиля во всю высоту той же полосовой мерой, что ищет
+ * вторая ступень, — трассой, медианой, охватом и барьером у его стороны.
+ *
+ * Профиль во всю высоту сравнивает кандидата с децилью средней трети, а не с
+ * соседями вдоль линии: на листе со схождением клетки вертикали одной глубины
+ * размываются в профиле по-разному, и резкая вертикаль у границы трети берёт
+ * барьер по размытым. Вдоль линии она мельче соседей, настоящая черта — глубже.
+ *
+ * Подтверждается сторона, а не положение: у черты, идущей не параллельно
+ * разлиновке, пик профиля — её среднее положение, и полосы находят её в трети
+ * шага и дальше от него. Поэтому `x` принятого кандидата остаётся от профиля
+ * до бита, а сверки положения, кроме правила края полосы, нет. Правило края
+ * берётся на самом кандидате: у края вырезки провал в профиле даёт обрыв
+ * бумаги или тень, и сторона, подтверждённая настоящей чертой дальше от края,
+ * не делает его линией поля.
+ *
+ * @param candidate — линия поля по профилю во всю высоту
+ * @param bands — полосы опроса вместе с глубинами своих бинов
+ * @param step — шаг разлиновки в пикселях
+ * @param width — ширина кадра в пикселях
+ * @returns решение и числа полосовой меры у стороны кандидата
+ */
+const vetoMarginLine = (
+  candidate: MarginLine,
+  bands: MeasuredStrip[],
+  step: number,
+  width: number
+): MarginLineVeto => {
+  const first = bands[0]?.strip;
+  const polled = pollMarginLineSide(bands, step, width, candidate.side);
+  const isMeasured =
+    first !== undefined &&
+    isInsideMeasuredBins(
+      candidate.x - first.origin,
+      first.values.length,
+      toBackgroundWindow(step) / 2
+    );
+
+  return {
+    coverage: polled.coverage,
+    isAccepted: polled.line !== null && isMeasured,
+    ratio: polled.ratio,
+    threshold: polled.threshold,
+  };
 };
 
 /**
@@ -2442,8 +2547,8 @@ export const detectRuling = (
   );
 
   /**
-   * Полосы опроса строятся лишь тогда, когда профиль во всю высоту линию не
-   * нашёл: на листе с прямой чертой и на листе без черты вовсе лишнего прохода
+   * Полосы опроса строятся лишь тогда, когда линию поля вообще ищут, и один
+   * раз на вето и на вторую ступень: при `marginLineSide: null` лишнего прохода
    * по пикселям не случается.
    *
    * Область с линиями режется у середины кадра, а не у самого кандидата:
@@ -2474,20 +2579,40 @@ export const detectRuling = (
     return strips.slice(from, to);
   };
 
-  const meanMarginLine =
+  let pollBands: MeasuredStrip[] | null = null;
+
+  const selectPollBands = (): MeasuredStrip[] => {
+    pollBands = pollBands || toStripDepths(selectPollStrips(), period.step);
+
+    return pollBands;
+  };
+
+  const profileCandidate =
     options.marginLineSide === null
       ? null
       : findMarginLine(columns, period.step, image.width, options.marginLineSide);
   /**
-   * Полосовая ступень — вторая и только вторая: профиль во всю высоту отдаёт
-   * своё число сам, и на листе, где он линию нашёл, полосы ничего не решают.
-   * Гейт `marginLineSide` держит обе ступени разом: проход по выпрямленной
-   * копии не заводит линию, которой не нашёл проход по кадру.
+   * Кандидат профиля во всю высоту становится линией поля, только пройдя вето
+   * полосовой меры, — на обоих проходах: гейт копии задаёт сторону, но не
+   * отменяет проверку. Вето стоит до уточнения трассой и до области изгиба:
+   * отвергнутая линия не успевает ни сдвинуться, ни обрезать сетку.
+   */
+  const veto =
+    profileCandidate &&
+    vetoMarginLine(profileCandidate, selectPollBands(), period.step, image.width);
+  const meanMarginLine = veto && veto.isAccepted ? profileCandidate : null;
+  /**
+   * Полосовая ступень — вторая и только вторая: подтверждённый кандидат
+   * профиля отдаёт своё число сам, и на листе, где он есть, полосы положение
+   * не решают. Отвергнутый вето кандидат линии не даёт, и полосы ищут у тех
+   * же краёв, что и профиль. Гейт `marginLineSide` держит обе ступени разом:
+   * проход по выпрямленной копии не заводит линию, которой не нашёл проход по
+   * кадру.
    */
   const banded =
     meanMarginLine === null && options.marginLineSide !== null
-      ? findBandedMarginLine(
-          selectPollStrips(),
+      ? pollMarginLine(
+          selectPollBands(),
           period.step,
           image.width,
           options.marginLineSide
