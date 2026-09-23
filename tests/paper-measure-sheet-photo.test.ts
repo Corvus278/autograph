@@ -1207,6 +1207,8 @@ describe('measureSheetPhoto: отчёт линии поля', () => {
       ratio: 0,
       stage: 'profile',
       threshold: null,
+      profileVeto: expect.objectContaining({ isCalled: true, verdict: 'accepted' }),
+      colourGate: { isEnabled: false, redGreenP99: null },
     });
   });
 
@@ -1244,6 +1246,8 @@ describe('measureSheetPhoto: отчёт линии поля', () => {
       ratio: 0,
       stage: 'none',
       threshold: null,
+      profileVeto: { isCalled: false },
+      colourGate: null,
     });
   });
 });

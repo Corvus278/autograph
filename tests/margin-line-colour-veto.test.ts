@@ -1,6 +1,9 @@
 import type { SheetImageData, SheetOutline } from '@pages/Generator/lib/paper';
 import { measureSheetPhoto } from '@pages/Generator/lib/paper';
-import { detectRuling } from '@pages/Generator/lib/paper/detectRuling';
+import {
+  type DetectedRuling,
+  detectRuling,
+} from '@pages/Generator/lib/paper/detectRuling';
 import {
   isColourVetoEnabled,
   measureRedGreenP99,
@@ -134,15 +137,34 @@ describe('вето по цвету: красная черта проходит',
   });
 });
 
+/**
+ * Результат детектора без отчёта гейта. Серый снимок и снимок без канала
+ * решают одинаково, а мера гейта у них разная: у серого в отчёте P99 кадра,
+ * у снимка без канала меры нет.
+ *
+ * @param detection — результат детектора
+ * @returns тот же результат с пустым гейтом в отчёте линии поля
+ */
+const withoutColourGate = (detection: DetectedRuling): DetectedRuling => {
+  return {
+    ...detection,
+    marginLineReport: { ...detection.marginLineReport, colourGate: null },
+  };
+};
+
 describe('вето по цвету: серый снимок и снимок без канала', () => {
   it.each([
     ['черта со сносом', { ...COLOUR_DRIFTING_MARGIN_LINE_SHEET, colour: GRAY_COLOUR }],
     ['глубокая вертикаль на фазе', { ...COLOUR_DEEP_COLUMN_SHEET, colour: GRAY_COLOUR }],
   ])('%s: результат равен яркостному пути', (_name, sheet) => {
     const image = createSyntheticSheet(sheet);
+    const grey = detectRuling(image);
 
     expect(isColourVetoEnabled(measureRedGreenP99(image))).toBe(false);
-    expect(detectRuling(image)).toStrictEqual(detectRuling(toLuminanceOnly(image)));
+    expect(grey.marginLineReport.colourGate?.isEnabled).toBe(false);
+    expect(withoutColourGate(grey)).toStrictEqual(
+      withoutColourGate(detectRuling(toLuminanceOnly(image)))
+    );
   });
 
   it('без канала результат не зависит от цвета, который мог бы быть', () => {

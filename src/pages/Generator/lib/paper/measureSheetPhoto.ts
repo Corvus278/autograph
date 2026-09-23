@@ -14,6 +14,7 @@ import { extractTexture } from './extractTexture';
 import { measureRedGreenP99 } from './marginLineRedness';
 import type {
   SheetPhotoBandedReport,
+  SheetPhotoMarginLineProfileReport,
   SheetPhotoMeasurement,
   SheetPhotoOptions,
   SheetPhotoPerspectiveReport,
@@ -145,6 +146,11 @@ type RulingMeasurement = {
    * Отчёт поиска линии поля того прохода, который за ней ходил.
    */
   marginLine: MarginLineReport;
+
+  /**
+   * Вердикт первой ступени на обоих проходах и гейт серого снимка.
+   */
+  marginLineProfile: SheetPhotoMarginLineProfileReport;
 };
 
 /**
@@ -153,6 +159,15 @@ type RulingMeasurement = {
 type RuledEdgeSide = keyof RuledEdges;
 
 const MISSING_REPORT: SheetPhotoPerspectiveReport | null = null;
+
+/**
+ * Разлиновку не мерили: ни одна ступень не звалась, гейт не понадобился.
+ */
+const NO_MARGIN_LINE_PROFILE_REPORT: SheetPhotoMarginLineProfileReport = {
+  flat: NO_MARGIN_LINE_REPORT.profileVeto,
+  rectified: null,
+  colourGate: null,
+};
 
 /**
  * Координата вдоль линий по модулю шага, в `[0, step)`.
@@ -728,6 +743,26 @@ const toMarginLineReport = (
 };
 
 /**
+ * Вердикт первой ступени обоих проходов. Гейт у проходов общий — мера кадра
+ * считается один раз, — поэтому берётся у того, которому он понадобился.
+ *
+ * @param flat — отчёт ровного прохода по кадру
+ * @param rectified — отчёт прохода по выпрямленной копии; `null` — второго
+ *   прохода не было
+ * @returns вердикты обоих проходов и гейт
+ */
+const toMarginLineProfileReport = (
+  flat: MarginLineReport,
+  rectified: MarginLineReport | null
+): SheetPhotoMarginLineProfileReport => {
+  return {
+    flat: flat.profileVeto,
+    rectified: rectified && rectified.profileVeto,
+    colourGate: flat.colourGate || (rectified && rectified.colourGate),
+  };
+};
+
+/**
  * Разлиновка вырезки: ровный проход, перспектива и, если она есть, второй
  * проход по выпрямленной копии.
  *
@@ -774,6 +809,7 @@ const measureRuling = (
       report: MISSING_REPORT,
       banded,
       marginLine: detected.marginLineReport,
+      marginLineProfile: toMarginLineProfileReport(detected.marginLineReport, null),
     };
   }
 
@@ -809,6 +845,7 @@ const measureRuling = (
       report,
       banded,
       marginLine: flat.marginLineReport,
+      marginLineProfile: toMarginLineProfileReport(flat.marginLineReport, null),
     };
   }
 
@@ -856,6 +893,10 @@ const measureRuling = (
       report: { ...report, isRectifiedRulingMissing: true },
       banded,
       marginLine: flat.marginLineReport,
+      marginLineProfile: toMarginLineProfileReport(
+        flat.marginLineReport,
+        second && second.marginLineReport
+      ),
     };
   }
 
@@ -875,6 +916,10 @@ const measureRuling = (
     report,
     banded,
     marginLine: toMarginLineReport(second.marginLineReport, flat.marginLineReport),
+    marginLineProfile: toMarginLineProfileReport(
+      flat.marginLineReport,
+      second.marginLineReport
+    ),
   };
 };
 
@@ -917,15 +962,13 @@ export const measureSheetPhoto = (
         perspective: MISSING_REPORT,
         banded: null,
         marginLine: NO_MARGIN_LINE_REPORT,
+        marginLineProfile: NO_MARGIN_LINE_PROFILE_REPORT,
       },
     };
   }
 
-  const { source, detection, report, banded, marginLine } = measureRuling(
-    image,
-    crop,
-    outline
-  );
+  const { source, detection, report, banded, marginLine, marginLineProfile } =
+    measureRuling(image, crop, outline);
 
   return {
     source: { ...source, outline },
@@ -940,6 +983,7 @@ export const measureSheetPhoto = (
       perspective: report,
       banded,
       marginLine,
+      marginLineProfile,
     },
   };
 };

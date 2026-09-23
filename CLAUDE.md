@@ -22,6 +22,7 @@ npm run build              # tsc --noEmit && vite build -> dist/
 npm run build:paper        # пересчёт профилей пресет-пака -> public/paper/profiles.json
 npm run build:icons        # пересборка иконок приложения из favicon.svg -> public/icon-*.png
 npm run measure:sheet -- <фото> [grid|lined|blank]   # отчёт по одной фотографии, артефакт не трогает
+npm run measure:margin-color -- <фото> [grid|lined|blank] [u,…]  # эталон черты поля по цвету, вне детектора
 npm run preview            # раздача dist/, http://localhost:4173
 npm run typecheck          # только проверка типов
 npm run lint               # eslint + tsc + stylelint + prettier + steiger параллельно
@@ -62,6 +63,7 @@ eslint.config.mjs stylelint.config.mjs .prettierrc .editorconfig    # линте
                                                                      # (версия витрины — фиксированная)
 scripts/build-paper-profiles.ts measure-sheet.ts sheet-photo-report.ts  # профили пресет-пака, замер одного листа
 scripts/build-app-icons.ts                                           # иконки приложения из favicon.svg
+scripts/margin-line-ground-truth.ts                                  # эталон черты поля по цвету
 src/
   app/            main.tsx (точка входа, здесь же старт регистрации service worker под PROD),
                   App.tsx (маршруты и плашка service worker), styles/app.css (Tailwind-тема и @font-face),

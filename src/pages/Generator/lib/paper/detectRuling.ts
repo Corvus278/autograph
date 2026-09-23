@@ -268,6 +268,95 @@ export type RulingBandedStage = 'skipped' | 'rejected' | 'measured';
 export type MarginLineStage = 'profile' | 'banded' | 'none';
 
 /**
+ * Решение вето о кандидате профиля во всю высоту.
+ *
+ * - `accepted` — полосовая мера подтвердила его сторону, а вето по цвету —
+ *   самого кандидата либо было выключено;
+ * - `side` — отвергла полосовая мера его стороны: барьер не взят или кандидат
+ *   стоит у края полосы, где глубина не мерится полным окном;
+ * - `colour` — сторону мера подтвердила, а сам кандидат не красный.
+ */
+export type MarginLineVerdict = 'accepted' | 'side' | 'colour';
+
+/**
+ * Решение вето о кандидате профиля во всю высоту вместе с числами, по которым
+ * оно принято.
+ */
+export type MarginLineVeto = {
+  /**
+   * Решение вето.
+   */
+  verdict: MarginLineVerdict;
+
+  /**
+   * Край, у которого профиль нашёл кандидата. Смещения нет: оно отсчитано от
+   * изображения прохода — вырезки или выпрямленной копии, — а не от кадра, и
+   * рядом с `marginLineX` снимка читалось бы как другое число.
+   */
+  side: MarginLineSide;
+
+  /**
+   * Доля полос, в которых трасса нашла самого глубокого кандидата его
+   * стороны.
+   */
+  coverage: number;
+
+  /**
+   * Отношение глубины кандидата стороны к глубине соседей той же меры. `0` —
+   * соседей не нашлось.
+   */
+  ratio: number;
+
+  /**
+   * Порог, связавший кандидата стороны.
+   */
+  threshold: MarginLineThreshold;
+
+  /**
+   * Краснота самого кандидата вдоль его трассы в уровнях. `null` — не мерилась:
+   * вето по цвету выключено или кандидата уже отвергла мера его стороны.
+   */
+  redness: number | null;
+};
+
+/**
+ * Что решило вето о кандидате первой ступени — профиля во всю высоту.
+ *
+ * Вызов вето несётся отдельным полем, а не пустотой чисел: без кандидата
+ * профиля вето не звалось, и нулевые охват и отношение сказали бы «отвергнут»
+ * о кандидате, которого не было.
+ */
+export type MarginLineProfileVeto =
+  | {
+      /**
+       * Вето не звалось: профиль кандидата не нашёл или линию поля на этом
+       * проходе не искали.
+       */
+      isCalled: false;
+    }
+  | ({
+      /**
+       * Вето звалось, его решение и числа — в остальных полях.
+       */
+      isCalled: true;
+    } & MarginLineVeto);
+
+/**
+ * Решение гейта серого снимка вместе с мерой, по которой оно принято.
+ */
+export type ColourGate = {
+  /**
+   * Включено ли вето по цвету.
+   */
+  isEnabled: boolean;
+
+  /**
+   * 99-й процентиль `|R − G|` в уровнях. `null` — канала нет.
+   */
+  redGreenP99: number | null;
+};
+
+/**
  * Числа, по которым решилась судьба линии поля: ступень и оценки полосового
  * опроса.
  *
@@ -301,6 +390,17 @@ export type MarginLineReport = {
    * линию отдал профиль во всю высоту либо её не искали вовсе.
    */
   threshold: MarginLineThreshold | null;
+
+  /**
+   * Вердикт первой ступени: решение вето о кандидате профиля во всю высоту.
+   */
+  profileVeto: MarginLineProfileVeto;
+
+  /**
+   * Гейт серого снимка. `null` — не понадобился: ни один кандидат не дошёл до
+   * вето по цвету.
+   */
+  colourGate: ColourGate | null;
 };
 
 /**
@@ -311,6 +411,8 @@ export const NO_MARGIN_LINE_REPORT: MarginLineReport = {
   ratio: 0,
   stage: 'none',
   threshold: null,
+  profileVeto: { isCalled: false },
+  colourGate: null,
 };
 
 /**
@@ -1602,14 +1704,14 @@ const toMarginLineBarrier = (peerDepth: number, sigma: number): MarginLineBarrie
  * трети тех же полос: барьер и кандидат обязаны меряться одной мерой, иначе их
  * отношение сравнивает полосу с профилем во всю высоту и ничего не отделяет.
  *
- * @param bands — полосы в `MARGIN_LINE_BAND_STEPS` шага внутри области с
- *   линиями вместе с глубинами своих бинов
- * @param step — шаг разлиновки в пикселях
  * Линией становится самый глубокий кандидат среди взявших барьер и вето по
  * цвету, а не самый глубокий вообще: нейтральная вертикаль глубже красной
  * черты не закрывает черту. Без цвета это тот же самый глубокий кандидат —
  * у более мелкого барьер ниже взять нельзя.
  *
+ * @param bands — полосы в `MARGIN_LINE_BAND_STEPS` шага внутри области с
+ *   линиями вместе с глубинами своих бинов
+ * @param step — шаг разлиновки в пикселях
  * @param width — ширина кадра в пикселях
  * @param side — край, у которого идёт опрос
  * @param measureRedness — краснота кандидата по узлам трассы
@@ -1809,63 +1911,23 @@ const pollMarginLine = (
 };
 
 /**
- * Решение полосовой меры по кандидату профиля во всю высоту вместе с числами,
- * по которым оно принято.
+ * Решение вето по его двум мерам. Краснота решает только о кандидате, чью
+ * сторону подтвердила яркость: у отвергнутого стороной она не мерится.
+ *
+ * @param isSideAccepted — полосовая мера подтвердила сторону кандидата
+ * @param redness — краснота кандидата; `null` — вето по цвету выключено или
+ *   краснота не мерилась
+ * @returns решение вето
  */
-type MarginLineVeto = {
-  /**
-   * Доля полос, в которых трасса нашла самого глубокого кандидата своей
-   * стороны.
-   */
-  coverage: number;
+const toMarginLineVerdict = (
+  isSideAccepted: boolean,
+  redness: number | null
+): MarginLineVerdict => {
+  if (!isSideAccepted) {
+    return 'side';
+  }
 
-  /**
-   * Кандидат подтверждён: полосовая мера у его стороны взяла барьер, а сам он
-   * стоит там, где глубина мерится полным окном.
-   */
-  isAccepted: boolean;
-
-  /**
-   * Отношение глубины кандидата стороны к глубине соседей той же меры. `0` —
-   * соседей не нашлось.
-   */
-  ratio: number;
-
-  /**
-   * Порог, связавший кандидата стороны.
-   */
-  threshold: MarginLineThreshold;
-
-  /**
-   * Краснота самого кандидата вдоль его трассы в уровнях. `null` — не мерилась:
-   * вето по цвету выключено или кандидата уже отверг опрос его стороны.
-   */
-  redness: number | null;
-
-  /**
-   * Включено ли вето по цвету на этом изображении.
-   */
-  isColourVetoEnabled: boolean;
-
-  /**
-   * 99-й процентиль `|R − G|` изображения в уровнях. `null` — канала нет.
-   */
-  redGreenP99: number | null;
-};
-
-/**
- * Решение гейта серого снимка вместе с мерой, по которой оно принято.
- */
-type ColourGate = {
-  /**
-   * Включено ли вето по цвету.
-   */
-  isEnabled: boolean;
-
-  /**
-   * 99-й процентиль `|R − G|` в уровнях. `null` — канала нет.
-   */
-  redGreenP99: number | null;
+  return isRedEnough(redness) ? 'accepted' : 'colour';
 };
 
 /**
@@ -1895,7 +1957,6 @@ type ColourGate = {
  * @param step — шаг разлиновки в пикселях
  * @param width — ширина кадра в пикселях
  * @param measureRedness — краснота по узлам трассы
- * @param gate — решение гейта серого снимка
  * @returns решение и числа полосовой меры у стороны кандидата
  */
 const vetoMarginLine = (
@@ -1903,8 +1964,7 @@ const vetoMarginLine = (
   bands: MeasuredStrip[],
   step: number,
   width: number,
-  measureRedness: RednessMeasure,
-  gate: ColourGate
+  measureRedness: RednessMeasure
 ): MarginLineVeto => {
   const first = bands[0]?.strip;
   const polled = pollMarginLineSide(bands, step, width, candidate.side);
@@ -1921,13 +1981,12 @@ const vetoMarginLine = (
     : null;
 
   return {
+    verdict: toMarginLineVerdict(isSideAccepted, redness),
+    side: candidate.side,
     coverage: polled.coverage,
-    isAccepted: isSideAccepted && isRedEnough(redness),
     ratio: polled.ratio,
     threshold: polled.threshold,
     redness,
-    isColourVetoEnabled: gate.isEnabled,
-    redGreenP99: gate.redGreenP99,
   };
 };
 
@@ -2701,9 +2760,10 @@ export const detectRuling = (
 
   /**
    * Гейт и полосы красноты считаются лишь тогда, когда цвет что-то решает:
-   * гейт — как только есть кандидат, полосы — только на цветном снимке, только
-   * для кандидата, взявшего яркостные меры, и только в бинах у его узлов.
-   * Серый снимок и изображение без канала полос красноты не строят.
+   * гейт — как только кандидат взял яркостные меры, полосы — вдобавок только
+   * на цветном снимке и только в бинах у узлов кандидата. Серый снимок и
+   * изображение без канала полос красноты не строят. Гейт, так и не
+   * понадобившийся, уходит в отчёт пустым.
    */
   let colourGate: ColourGate | null = null;
 
@@ -2771,10 +2831,9 @@ export const detectRuling = (
       selectPollBands(),
       period.step,
       image.width,
-      measureRedness,
-      selectColourGate()
+      measureRedness
     );
-  const meanMarginLine = veto && veto.isAccepted ? profileCandidate : null;
+  const meanMarginLine = veto && veto.verdict === 'accepted' ? profileCandidate : null;
   /**
    * Полосовая ступень — вторая и только вторая: подтверждённый кандидат
    * профиля отдаёт своё число сам, и на листе, где он есть, полосы положение
@@ -2873,6 +2932,8 @@ export const detectRuling = (
       ratio: banded?.ratio || 0,
       stage: toMarginLineStage(meanMarginLine, marginLine),
       threshold: banded && banded.threshold,
+      profileVeto: veto ? { isCalled: true, ...veto } : { isCalled: false },
+      colourGate,
     },
     bandSteps,
     convergenceSeed,
