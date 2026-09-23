@@ -123,21 +123,32 @@ const measureFalseColumnRatio = (sheet: HeldOutSheet, isOnPhase: boolean): numbe
   return measureColumnDepth(sheet, index) / peers;
 };
 
-describe('createHeldOutSheet: повторяемость', () => {
-  it('при тех же параметрах растр совпадает бит в бит', () => {
-    const first = createHeldOutSheet(BASE_PARAMS);
-    const second = createHeldOutSheet(BASE_PARAMS);
+/**
+ * Потолок времени на тест повторяемости: два полных растра и поэлементное
+ * сравнение миллиона пикселей на раннере CI идут дольше пяти секунд по
+ * умолчанию, хотя локально укладываются в них.
+ */
+const REPEATABILITY_TIMEOUT_MS = 30_000;
 
-    expect(second.image.luminance).toStrictEqual(first.image.luminance);
-  });
+describe(
+  'createHeldOutSheet: повторяемость',
+  { timeout: REPEATABILITY_TIMEOUT_MS },
+  () => {
+    it('при тех же параметрах растр совпадает бит в бит', () => {
+      const first = createHeldOutSheet(BASE_PARAMS);
+      const second = createHeldOutSheet(BASE_PARAMS);
 
-  it('другой seed даёт другой растр', () => {
-    const first = createHeldOutSheet(BASE_PARAMS);
-    const second = createHeldOutSheet({ ...BASE_PARAMS, seed: BASE_PARAMS.seed + 1 });
+      expect(second.image.luminance).toStrictEqual(first.image.luminance);
+    });
 
-    expect(second.image.luminance).not.toStrictEqual(first.image.luminance);
-  });
-});
+    it('другой seed даёт другой растр', () => {
+      const first = createHeldOutSheet(BASE_PARAMS);
+      const second = createHeldOutSheet({ ...BASE_PARAMS, seed: BASE_PARAMS.seed + 1 });
+
+      expect(second.image.luminance).not.toStrictEqual(first.image.luminance);
+    });
+  }
+);
 
 describe('createHeldOutSheet: вставная вертикаль', () => {
   it.each([
