@@ -12,15 +12,18 @@ on:
 permissions:
   contents: read
 
+# Версия Node — та же, что в mise.toml (здесь и в deploy.yml): setup-node
+# mise.toml не читает, поэтому число повторено руками.
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
@@ -35,46 +38,80 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
 
       - run: npm run typecheck
 
+  # Юнит-тесты — самый долгий гейт: разбиты на два шарда, иначе они одни
+  # задавали бы время всего прогона.
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
 
-      - run: npm test
+      - run: npm test -- --shard=${{ matrix.shard }}/2
 
-      # Сборка идёт внутри теста: он собирает dist сам при обеих базах.
+  # Сборка идёт внутри теста: он собирает dist сам при обеих базах.
+  test-pwa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+          cache: npm
+
+      - run: npm ci
+
       - run: npm run test:pwa
 
   test-stories:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24.21.0
           cache: npm
 
       - run: npm ci
 
-      - run: npx playwright install --with-deps chromium
+      # Браузер кешируется по версии Playwright из lock-файла: другая версия
+      # ждёт другую сборку Chromium.
+      - id: playwright
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - id: playwright-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      # Системные библиотеки в кеш не попадают — их ставит apt на каждом прогоне.
+      - if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - run: npm run test:stories
