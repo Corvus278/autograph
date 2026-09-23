@@ -179,6 +179,63 @@ export type SyntheticDeepColumn = {
 };
 
 /**
+ * Цвет листа — канал `R − G` рядом с яркостью. Избыток элемента — его `R − G`
+ * над бумагой на середине линии; дальше от середины он спадает той же
+ * гауссианой, что и чернила элемента, и гаснет под пятном вместе с ними.
+ * Элемент без избытка — нейтральный: по яркости он виден, по цвету нет.
+ */
+export type SyntheticColour = {
+  /**
+   * `R − G` бумаги в уровнях: тёплая бумага и баланс белого камеры.
+   */
+  paperTint: number;
+
+  /**
+   * Размах равномерного хроматического шума в уровнях: шум ложится в
+   * `±noise / 2`.
+   */
+  noise: number;
+
+  /**
+   * Избыток черты поля. Ноль — серая черта.
+   */
+  marginLineExcess: number;
+
+  /**
+   * Избыток глубокой вертикали клетки. Не задан — она нейтральная. Цвет идёт по
+   * прямой вертикали, без `columnBend`.
+   */
+  deepColumnExcess?: number;
+
+  /**
+   * Избыток вертикали вне гребёнки. Не задан — она нейтральная. Цвет идёт по
+   * прямой вертикали, без `columnBend`.
+   */
+  strayColumnExcess?: number;
+};
+
+/**
+ * Тень вдоль листа — мягкая тёмная полоса поперёк разлиновки: от переплёта,
+ * от соседнего листа или от руки. По цвету всегда нейтральная.
+ */
+export type SyntheticShadow = {
+  /**
+   * Середина тени поперёк разлиновки.
+   */
+  x: number;
+
+  /**
+   * Ширина тени: удвоенная сигма гауссианы, как у линии.
+   */
+  width: number;
+
+  /**
+   * Насколько середина тени темнее бумаги, от 0 до 1.
+   */
+  darkness: number;
+};
+
+/**
  * Вертикаль вне гребёнки клетки: сгиб, край печати или след линейки между
  * линиями клетки. Лежит на бумаге и потому сходится вместе с клеткой.
  */
@@ -621,6 +678,17 @@ export type SyntheticSheetParams = {
    * градиент света по ширине. Отрицательная — темнеет левый край.
    */
   widthLighting?: number;
+
+  /**
+   * Цвет листа. Не задан — у растра только яркость, канала `R − G` нет.
+   * Яркость от цвета не зависит до бита: шум цвета берётся из своего потока.
+   */
+  colour?: SyntheticColour | null;
+
+  /**
+   * Нейтральная тень поперёк разлиновки. Не задана — тени нет.
+   */
+  shadow?: SyntheticShadow | null;
 };
 
 const DEFAULT_WIDTH = 420;
@@ -806,6 +874,17 @@ const createDeepColumnDepth = (
 };
 
 const DEFAULT_SPIRAL_DARKNESS = 0.7;
+
+/**
+ * Соль seed хроматического шума: поток цвета отдельный от потока зерна
+ * яркости, иначе заданный цвет сдвинул бы зерно и растр яркости.
+ */
+const CHROMA_SEED_SALT = 0x5e_ed;
+
+/**
+ * Наибольшая разность каналов по модулю, в уровнях.
+ */
+const MAX_CHANNEL_LEVEL = 255;
 
 /**
  * Чернила пятен спирали. Ближайшее пятно ищется только по высоте: пятна стоят
@@ -1458,12 +1537,18 @@ export const createSyntheticSheet = (
     columnConvergence = null,
     strayColumn = null,
     widthLighting = 0,
+    colour = null,
+    shadow = null,
   } = params;
   const { left: leftEndBend = computeNoShift, right: rightEndBend = computeNoShift } =
     lineEndsBend;
   const tangent = Math.tan(angle * DEGREES_TO_RADIANS);
   const random = mulberry32(seed);
   const luminance = new Float32Array(width * height);
+  const redMinusGreen = colour === null ? null : new Int16Array(width * height);
+  const chromaRandom = mulberry32(seed ^ CHROMA_SEED_SALT);
+  const deepColumnCenter =
+    deepColumn === null ? 0 : phase + Math.round((deepColumn.x - phase) / step) * step;
   const sigma = lineWidth / 2;
   const topEdge = margins.top;
   const bottomEdge = height - margins.bottom;
@@ -1535,6 +1620,7 @@ export const createSyntheticSheet = (
           ? 1 - lighting * shade
           : 1 - lighting * shade - computeWidthLightingLoss(widthLighting, x, width);
       let value = surfaceValue === null ? paper : surfaceValue;
+      let redExcess = 0;
 
       if (kind !== 'blank' && isOnPaper) {
         const isAcrossInside = acrossLines >= rowLeftEdge && acrossLines <= rowRightEdge;
@@ -1646,11 +1732,27 @@ export const createSyntheticSheet = (
               contrast *
               computeInk(columnCoordinate - strayColumn.x, columnSigma);
           }
+
+          if (colour !== null) {
+            redExcess +=
+              contrast *
+              ((colour.deepColumnExcess || 0) *
+                (deepColumn === null
+                  ? 0
+                  : computeInk(columnCoordinate - deepColumnCenter, columnSigma)) +
+                (colour.strayColumnExcess || 0) *
+                  (strayColumn === null
+                    ? 0
+                    : computeInk(columnCoordinate - strayColumn.x, columnSigma)));
+          }
         }
       }
 
       if (rowMarginLineX !== null && isAlongInside && isOnPaper) {
-        value -= marginLineDarkness * computeInk(acrossLines - rowMarginLineX, sigma);
+        const marginLineInk = computeInk(acrossLines - rowMarginLineX, sigma);
+
+        value -= marginLineDarkness * marginLineInk;
+        redExcess += colour === null ? 0 : colour.marginLineExcess * marginLineInk;
 
         const isBeyondMarginLine = isOuterRulingOnLeft
           ? acrossLines < rowMarginLineX
@@ -1678,8 +1780,25 @@ export const createSyntheticSheet = (
         value -= computeSpiralInk(spiral, x, y, sigma);
       }
 
+      if (shadow !== null && isOnPaper) {
+        value -= shadow.darkness * computeInk(acrossLines - shadow.x, shadow.width / 2);
+      }
+
       if (blotArea !== null && isOnPaper && isInsideArea(blotArea, x, y)) {
         value = paper - (paper - value) * blotArea.contrast;
+        redExcess *= blotArea.contrast;
+      }
+
+      if (redMinusGreen !== null && colour !== null) {
+        const tint = isOnPaper ? colour.paperTint : 0;
+        const level = Math.round(
+          tint + redExcess + (chromaRandom() - 0.5) * colour.noise
+        );
+
+        redMinusGreen[row + x] = Math.max(
+          -MAX_CHANNEL_LEVEL,
+          Math.min(MAX_CHANNEL_LEVEL, level)
+        );
       }
 
       if (surfaceVignette !== 0) {
@@ -1691,7 +1810,9 @@ export const createSyntheticSheet = (
     }
   }
 
-  return { width, height, luminance };
+  return redMinusGreen === null
+    ? { width, height, luminance }
+    : { width, height, luminance, redMinusGreen };
 };
 
 /**
@@ -2145,6 +2266,33 @@ export type HeldOutBlot = {
 };
 
 /**
+ * Цвет листа удержанной выборки: избытки `R − G` черты и вставной вертикали над
+ * бумагой. Класс листа по построению от цвета не зависит — его задаёт только
+ * черта: красная вставная вертикаль остаётся ложной.
+ */
+export type HeldOutColour = {
+  /**
+   * `R − G` бумаги в уровнях.
+   */
+  paperTint: number;
+
+  /**
+   * Размах хроматического шума в уровнях.
+   */
+  noise: number;
+
+  /**
+   * Избыток черты поля. Ноль — серая черта.
+   */
+  marginLineExcess: number;
+
+  /**
+   * Избыток вставной вертикали. Ноль — нейтральная.
+   */
+  falseColumnExcess: number;
+};
+
+/**
  * Параметры листа удержанной выборки «черта у одной стороны, ровная клетка у
  * другой» по решению 5 `false-margin-line`. Все длины — в шагах и долях, чтобы
  * параметры разыгрывались из seed без знания размеров кадра.
@@ -2193,6 +2341,11 @@ export type HeldOutSheetParams = {
    * Seed зерна бумаги.
    */
   seed: number;
+
+  /**
+   * Цвет листа. Не задан — у растра только яркость.
+   */
+  colour?: HeldOutColour;
 };
 
 /**
@@ -2335,6 +2488,7 @@ export const createHeldOutSheet = (params: HeldOutSheetParams): HeldOutSheet => 
     widthLighting,
     blot,
     seed,
+    colour,
   } = params;
   const base = CONVERGING_SHEET_BASE;
   const falseColumnX =
@@ -2360,6 +2514,17 @@ export const createHeldOutSheet = (params: HeldOutSheetParams): HeldOutSheet => 
       falseColumnX !== null && !isOnPhase
         ? { x: falseColumnX, darkness: falseDarkness }
         : null,
+    ...(colour === undefined
+      ? {}
+      : {
+          colour: {
+            paperTint: colour.paperTint,
+            noise: colour.noise,
+            marginLineExcess: colour.marginLineExcess,
+            deepColumnExcess: colour.falseColumnExcess,
+            strayColumnExcess: colour.falseColumnExcess,
+          },
+        }),
   };
   const sheet: HeldOutSheetDescription =
     blot === null || marginLineSide === null
@@ -2374,4 +2539,119 @@ export const createHeldOutSheet = (params: HeldOutSheetParams): HeldOutSheet => 
     innermostX: marginLineSide === null ? null : findInnermostX(sheet, marginLineSide),
     falseColumnX,
   };
+};
+
+/**
+ * Цвет листа с красной чертой: избыток черты 30 уровней — середина живого
+ * разброса настоящих черт (краснота от 26,5 и выше), тон бумаги и шум — как у
+ * тёплой бумаги под камерой телефона.
+ */
+export const RED_MARGIN_LINE_COLOUR: SyntheticColour = {
+  paperTint: 8,
+  noise: 8,
+  marginLineExcess: 30,
+};
+
+/**
+ * Бледная красная черта: избыток 20 уровней — ниже живого разброса настоящих
+ * черт, но выше порога вето.
+ */
+export const PALE_RED_MARGIN_LINE_COLOUR: SyntheticColour = {
+  ...RED_MARGIN_LINE_COLOUR,
+  marginLineExcess: 20,
+};
+
+/**
+ * Цветной снимок без красного: та же бумага, всё нарисованное нейтрально.
+ */
+export const NEUTRAL_COLOUR: SyntheticColour = {
+  ...RED_MARGIN_LINE_COLOUR,
+  marginLineExcess: 0,
+};
+
+/**
+ * Серый снимок: ни тона, ни заметного хроматического шума — 99-й процентиль
+ * `|R − G|` ниже гейта.
+ */
+export const GRAY_COLOUR: SyntheticColour = {
+  paperTint: 0,
+  noise: 4,
+  marginLineExcess: 0,
+};
+
+/**
+ * Лист со сносом черты, черта красная.
+ */
+export const COLOUR_DRIFTING_MARGIN_LINE_SHEET: SyntheticMarginLineSheet = {
+  ...DRIFTING_MARGIN_LINE_SHEET,
+  colour: RED_MARGIN_LINE_COLOUR,
+};
+
+/**
+ * Лист с прямой красной чертой: её находит уже профиль во всю высоту.
+ */
+export const COLOUR_STRAIGHT_MARGIN_LINE_SHEET: SyntheticMarginLineSheet = {
+  ...COLOUR_DRIFTING_MARGIN_LINE_SHEET,
+  marginLineDrift: 0,
+};
+
+/**
+ * Лист со сносом черты, черта бледно-красная.
+ */
+export const PALE_COLOUR_MARGIN_LINE_SHEET: SyntheticMarginLineSheet = {
+  ...DRIFTING_MARGIN_LINE_SHEET,
+  colour: PALE_RED_MARGIN_LINE_COLOUR,
+};
+
+/**
+ * Цветной вариант `DEEP_COLUMN_SHEET`: нейтральная вертикаль на фазе, по
+ * яркости неотличимая от прямой черты.
+ */
+export const COLOUR_DEEP_COLUMN_SHEET: SyntheticDeepColumnSheet = {
+  ...DEEP_COLUMN_SHEET,
+  colour: NEUTRAL_COLOUR,
+};
+
+/**
+ * Красная черта со сносом у левой стороны и нейтральная вертикаль клетки у
+ * правой, глубже черты: по яркости выигрывает вертикаль — её берёт уже профиль
+ * во всю высоту, а у полос она глубже черты.
+ */
+export const COLOUR_LINE_AND_DEEP_COLUMN_SHEET: SyntheticMarginLineSheet &
+  SyntheticDeepColumnSheet = {
+  ...COLOUR_DRIFTING_MARGIN_LINE_SHEET,
+  deepColumn: { x: 500, darkness: 0.9 },
+};
+
+/**
+ * Лист в линейку без черты, у правого края — столбец витков спирали, как у
+ * `IMG_1705`. Правое поле уже остальных: спираль стоит внутри области с
+ * линиями, где её и видит поиск линии поля.
+ */
+export const COLOUR_SPIRAL_SHEET: SyntheticCalibrationSheet = {
+  ...ABSENT_MARGIN_LINE_SHEET,
+  kind: 'lined',
+  margins: { top: 60, right: 20, bottom: 60, left: 60 },
+  spiral: { x: 545, period: 20, radius: 4 },
+  colour: NEUTRAL_COLOUR,
+};
+
+/**
+ * Тот же лист в линейку со спиралью справа и красной чертой со сносом слева.
+ */
+export const COLOUR_SPIRAL_MARGIN_LINE_SHEET: SyntheticMarginLineSheet = {
+  ...COLOUR_SPIRAL_SHEET,
+  marginLineX: DRIFTING_MARGIN_LINE_SHEET.marginLineX,
+  marginLineDrift: DRIFTING_MARGIN_LINE_SHEET.marginLineDrift,
+  colour: RED_MARGIN_LINE_COLOUR,
+};
+
+/**
+ * Лист в линейку без черты с нейтральной тенью у правой стороны.
+ */
+export const COLOUR_SHADOW_SHEET: SyntheticCalibrationSheet = {
+  ...ABSENT_MARGIN_LINE_SHEET,
+  kind: 'lined',
+  shadow: { x: 520, width: 5, darkness: 0.4 },
+  colour: NEUTRAL_COLOUR,
 };

@@ -42,6 +42,12 @@ type DecodedGray = {
    * Яркости пикселей, по байту на пиксель, в base64.
    */
   gray: string;
+
+  /**
+   * Разность красного и зелёного каналов, `Int16Array` в порядке байтов
+   * машины, в base64: вкладка и node живут на одной машине.
+   */
+  redMinusGreen: string;
 };
 
 /**
@@ -126,7 +132,7 @@ const MIME_TYPES: Record<string, string> = {
  *
  * @param page — открытая вкладка Chromium
  * @param path — путь к файлу фотографии
- * @returns яркости по Rec.709 от 0 до 1
+ * @returns яркости по Rec.709 от 0 до 1 и разность красного и зелёного каналов
  */
 export const decodeSheetPhoto = async (
   page: Page,
@@ -157,26 +163,34 @@ export const decodeSheetPhoto = async (
 
     const frame = context.getImageData(0, 0, canvas.width, canvas.height);
     const gray = new Uint8Array(canvas.width * canvas.height);
+    const redMinusGreen = new Int16Array(gray.length);
 
     for (let index = 0; index < gray.length; index += 1) {
+      const red = frame.data[index * 4] || 0;
+      const green = frame.data[index * 4 + 1] || 0;
+
       gray[index] = Math.round(
-        0.2126 * (frame.data[index * 4] || 0) +
-          0.7152 * (frame.data[index * 4 + 1] || 0) +
-          0.0722 * (frame.data[index * 4 + 2] || 0)
+        0.2126 * red + 0.7152 * green + 0.0722 * (frame.data[index * 4 + 2] || 0)
       );
+      redMinusGreen[index] = red - green;
     }
 
-    let binary = '';
-    const chunkSize = 0x80_00;
+    const toBase64 = (bytes: Uint8Array): string => {
+      let binary = '';
+      const chunkSize = 0x80_00;
 
-    for (let index = 0; index < gray.length; index += chunkSize) {
-      binary += String.fromCharCode(...gray.subarray(index, index + chunkSize));
-    }
+      for (let index = 0; index < bytes.length; index += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+      }
+
+      return btoa(binary);
+    };
 
     const result: DecodedGray = {
       width: canvas.width,
       height: canvas.height,
-      gray: btoa(binary),
+      gray: toBase64(gray),
+      redMinusGreen: toBase64(new Uint8Array(redMinusGreen.buffer)),
     };
 
     return result;
@@ -188,7 +202,15 @@ export const decodeSheetPhoto = async (
     luminance[index] = (bytes[index] || 0) / 255;
   }
 
-  return { width: decoded.width, height: decoded.height, luminance };
+  /**
+   * Байты копируются в свой буфер: буфер `Buffer` бывает общим пулом со
+   * смещением, не кратным двум, и `Int16Array` поверх него не встаёт.
+   */
+  const redMinusGreen = new Int16Array(
+    Uint8Array.from(Buffer.from(decoded.redMinusGreen, 'base64')).buffer
+  );
+
+  return { width: decoded.width, height: decoded.height, luminance, redMinusGreen };
 };
 
 /**

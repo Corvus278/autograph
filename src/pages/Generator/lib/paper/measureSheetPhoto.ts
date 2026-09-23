@@ -11,6 +11,7 @@ import type { RulingPerspectiveDetection } from './detectRulingPerspective.types
 import { detectSheetOutline } from './detectSheetOutline';
 import { extractLighting } from './extractLighting';
 import { extractTexture } from './extractTexture';
+import { measureRedGreenP99 } from './marginLineRedness';
 import type {
   SheetPhotoBandedReport,
   SheetPhotoMeasurement,
@@ -169,12 +170,19 @@ const wrapPhase = (value: number, step: number): number => {
  * отдаётся без копии: обрезанная фотография разбирается так же, как без
  * поиска контура, и не платит за лишний проход по пикселям.
  *
+ * Разность красного и зелёного каналов вырезается тем же прямоугольником, что
+ * и яркость: вето по цвету берёт красноту из того же столбца, где яркостная
+ * мера нашла кандидата. Нет её в кадре — нет и в вырезке.
+ *
  * @param image — полутоновая выжимка кадра
  * @param outline — контур листа
  * @returns вырезка и её отступы в кадре
  */
-const cropSheet = (image: SheetImageData, outline: SheetOutline | null): SheetCrop => {
-  const { width, height, luminance } = image;
+export const cropSheet = (
+  image: SheetImageData,
+  outline: SheetOutline | null
+): SheetCrop => {
+  const { width, height, luminance, redMinusGreen } = image;
   const bounds = resolveSheetBounds(outline, width, height);
   const left = Math.min(width, Math.max(0, Math.ceil(bounds.left)));
   const top = Math.min(height, Math.max(0, Math.ceil(bounds.top)));
@@ -188,15 +196,22 @@ const cropSheet = (image: SheetImageData, outline: SheetOutline | null): SheetCr
   }
 
   const values = new Float32Array(cropWidth * cropHeight);
+  const colour = redMinusGreen ? new Int16Array(cropWidth * cropHeight) : null;
 
   for (let row = 0; row < cropHeight; row += 1) {
     const from = (top + row) * width + left;
 
     values.set(luminance.subarray(from, from + cropWidth), row * cropWidth);
+
+    if (redMinusGreen && colour) {
+      colour.set(redMinusGreen.subarray(from, from + cropWidth), row * cropWidth);
+    }
   }
 
   return {
-    image: { width: cropWidth, height: cropHeight, luminance: values },
+    image: colour
+      ? { width: cropWidth, height: cropHeight, luminance: values, redMinusGreen: colour }
+      : { width: cropWidth, height: cropHeight, luminance: values },
     left,
     top,
   };
@@ -731,7 +746,25 @@ const measureRuling = (
   crop: SheetCrop,
   outline: SheetOutline | null
 ): RulingMeasurement => {
-  const detected = detectRuling(crop.image);
+  /**
+   * Гейт серого снимка — один на оба прохода и по всему кадру, до вырезки:
+   * вырезка и копия теряют стол и обложку, и их мера цветности у бледной
+   * бумаги ложится на самый порог. Мера считается один раз и только если
+   * детектору понадобилась.
+   */
+  let frameRedGreenP99: number | null = null;
+  let isFrameColourMeasured = false;
+
+  const measureFrameRedGreenP99 = (): number | null => {
+    if (!isFrameColourMeasured) {
+      frameRedGreenP99 = measureRedGreenP99(image);
+      isFrameColourMeasured = true;
+    }
+
+    return frameRedGreenP99;
+  };
+
+  const detected = detectRuling(crop.image, { measureFrameRedGreenP99 });
   const banded = toBandedReport(detected);
 
   if (!detected.isDetected || detected.step <= 0) {
@@ -812,6 +845,7 @@ const measureRuling = (
            * нечем — выпрямление `x` вертикали не меняет.
            */
           marginLineSide: flat.marginLineSide,
+          measureFrameRedGreenP99,
         })
       : null;
 
